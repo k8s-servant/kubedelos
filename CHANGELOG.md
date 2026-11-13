@@ -9,6 +9,7 @@
 - `kubedelos scan` inventories a kube-context and scans every unique image with Trivy.
 - Output formats: table, JSON, CSV (formula-safe) and SARIF, with `--fail-on` exit codes and `--allow-partial`.
 - Digest cache so unchanged images are not rescanned.
+- `kubedelos registry test <image>` checks that an image is readable with your current registry login, and scans print a login hint for registries that refuse access.
 - Parallel scans and concurrent `kubedelos scan` runs share one Trivy DB cache safely; no local Trivy server or port is used.
 - Owner attribution from the `kubedelos.io/owner-email` namespace annotation, shown on every finding.
 - RBAC-aware inventory: namespaces you may not list are skipped with a warning, and `--fail-on` fails closed on partial inventory.

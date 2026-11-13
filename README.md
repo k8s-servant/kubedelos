@@ -68,6 +68,27 @@ kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per im
 and checks it against an embedded SHA-256. It never resolves "latest". Use `--trivy-path` to bring your own binary. Results from your own binary are
 not cached and the run records its Trivy version as `custom`.
 
+## Private registries
+
+kubedelos uses the Docker credentials you already have: `DOCKER_CONFIG`, or `~/.docker/config.json`,
+including credential helpers. Log in to a private registry the way you normally would, and scans can read it:
+
+- any registry: `docker login registry.example`
+- Azure Container Registry: `az acr login --name myregistry`
+- Google Artifact Registry: `gcloud auth configure-docker europe-docker.pkg.dev`
+- Amazon ECR: the [ECR credential helper](https://github.com/awslabs/amazon-ecr-credential-helper), or
+  `aws ecr get-login-password | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com`
+
+Check access to one image with:
+
+```bash
+kubedelos registry test registry.example/team/app:1.2.3
+```
+
+It exits 0 when the image is readable, 1 when the registry refuses access or the image is not found, and 2 for
+other errors. When images fail registry auth during `kubedelos scan`, a `hint:` line names each registry to log in
+to. Registry auth for the in-cluster mode (workload identity, pull secrets) comes with the Helm chart.
+
 ## Coming soon
 
 `kubedelos ui`, a local web UI on top of the same scan data, is not available yet.

@@ -1,6 +1,7 @@
 import pytest
 
-from kubedelos.models import Finding, ImageRef, Severity, is_digest, is_valid_ref
+from kubedelos.kube.inventory import parse_image_id
+from kubedelos.models import Finding, ImageRef, Severity, is_digest, is_valid_ref, registry_host
 
 D = "sha256:" + "a" * 64
 
@@ -61,3 +62,12 @@ def test_is_valid_ref_rejects(ref):
 def test_is_digest_rejects_trailing_newline():
     assert is_digest(D)
     assert not is_digest(D + "\n")
+
+
+@pytest.mark.parametrize("image", ["nginx", "library/nginx:1.19", "docker.io/library/nginx"])
+def test_registry_host_of_short_names(image):
+    assert registry_host(parse_image_id(image, "")) == "docker.io"
+
+
+def test_registry_host_keeps_port():
+    assert registry_host(parse_image_id("registry.example:5000/team/app:1", "")) == "registry.example:5000"
