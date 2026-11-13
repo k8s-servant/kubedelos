@@ -28,7 +28,7 @@ def namespace(name: str, annotations: dict | None = None, labels: dict | None = 
     return V1Namespace(metadata=V1ObjectMeta(name=name, annotations=annotations, labels=labels))
 
 
-def node(name: str, arch: str = "amd64") -> V1Node:
+def node(name: str, arch: str = "amd64", os: str = "linux") -> V1Node:
     return V1Node(
         metadata=V1ObjectMeta(name=name),
         status=V1NodeStatus(
@@ -40,7 +40,7 @@ def node(name: str, arch: str = "amd64") -> V1Node:
                 kube_proxy_version="p",
                 kubelet_version="v",
                 machine_id="m",
-                operating_system="linux",
+                operating_system=os,
                 os_image="o",
                 system_uuid="u",
             )

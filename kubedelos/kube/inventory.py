@@ -144,18 +144,19 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
     warnings: list[InventoryWarning] = []
     namespaces = _select_namespaces(api, settings, warnings)
 
-    node_arch: dict[str, str] = {}
+    node_platform: dict[str, str] = {}
     try:
         for node in api.list_nodes():
             info = node.status.node_info if node.status else None
             if info and info.architecture:
-                node_arch[node.metadata.name] = info.architecture
+                # windows/<arch> nodes are kept: their images are scanned for their own platform
+                node_platform[node.metadata.name] = f"{info.operating_system or 'linux'}/{info.architecture}"
     except ApiException as exc:
         warnings.append(
             InventoryWarning(f"cannot list nodes: HTTP {exc.status}; assuming a default platform", coverage=False)
         )
-    common = Counter(node_arch.values()).most_common(1)
-    fallback = f"linux/{common[0][0]}" if common else DEFAULT_PLATFORM
+    common = Counter(node_platform.values()).most_common(1)
+    fallback = common[0][0] if common else DEFAULT_PLATFORM
 
     items: dict[tuple[str, str], InventoryItem] = {}
 
@@ -181,8 +182,7 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
         for pod in pods:
             ids = _status_ids(pod)
             kind, workload_name = _pod_owner(pod)
-            arch = node_arch.get(pod.spec.node_name) if pod.spec else None
-            platform = f"linux/{arch}" if arch else fallback
+            platform = (node_platform.get(pod.spec.node_name) if pod.spec else None) or fallback
             for c in _spec_containers(pod.spec):
                 image = parse_image_id(c.image, ids.get(c.name, ""))
                 add(

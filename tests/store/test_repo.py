@@ -124,23 +124,33 @@ def test_cache_hit_and_expiry(tmp_path):
     now = [datetime(2026, 1, 1, tzinfo=UTC)]
     repo = _repo(tmp_path, clock=lambda: now[0])
     item = _item()
-    report = _result(item, findings=[_finding()]).model_dump(mode="json")
+    report = _result(item, findings=[_finding()])
     repo.put_cache(DIGEST, "linux/amd64", report)
     assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) == report
     assert repo.get_cached(DIGEST, "linux/arm64", timedelta(hours=1)) is None
     now[0] += timedelta(hours=2)
     assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) is None
     # upsert refreshes the entry
-    repo.put_cache(DIGEST, "linux/amd64", {"v": 2})
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) == {"v": 2}
+    newer = _result(item, os_family="debian")
+    repo.put_cache(DIGEST, "linux/amd64", newer)
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) == newer
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 1
-    assert json.loads(repo._conn.execute("SELECT report_json FROM image_cache").fetchone()[0]) == {"v": 2}
-    assert repo._conn.execute("SELECT trivy_db_version FROM image_cache").fetchone()[0] == "0.76.1"
+    assert json.loads(repo._conn.execute("SELECT report_json FROM image_cache").fetchone()[0])["os_family"] == "debian"
+    assert repo._conn.execute("SELECT trivy_db_version FROM image_cache").fetchone()[0] == "0.76.1+c1"
+
+
+@pytest.mark.parametrize("blob", ["{not json", '{"image": 1}', '{"status": "ok"}', "[]"])
+def test_invalid_cache_row_is_a_miss_and_deleted(tmp_path, blob):
+    repo = _repo(tmp_path)
+    repo.put_cache(DIGEST, "linux/amd64", _result(_item()))
+    repo._conn.execute("UPDATE image_cache SET report_json = ?", (blob,))
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
+    assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
 
 
 def test_tag_refs_not_cached(tmp_path):
     repo = _repo(tmp_path)
-    repo.put_cache("reg.io/app:latest", "linux/amd64", {"a": 1})
+    repo.put_cache("reg.io/app:latest", "linux/amd64", _result(_item()))
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
     assert repo.get_cached("reg.io/app:latest", "linux/amd64", timedelta(days=1)) is None
 
@@ -161,7 +171,7 @@ def test_finish_run_rejects_bad_status(tmp_path, status):
 )  # fmt: skip
 def test_non_digest_keys_not_cached(tmp_path, key):
     repo = _repo(tmp_path)
-    repo.put_cache(key, "linux/amd64", {"a": 1})
+    repo.put_cache(key, "linux/amd64", _result(_item()))
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
     assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) is None
 
@@ -169,14 +179,15 @@ def test_non_digest_keys_not_cached(tmp_path, key):
 @pytest.mark.parametrize("key", [DIGEST, "reg.io/app@" + DIGEST])
 def test_valid_digest_keys_cached(tmp_path, key):
     repo = _repo(tmp_path)
-    repo.put_cache(key, "linux/amd64", {"a": 1})
-    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) == {"a": 1}
+    report = _result(_item())
+    repo.put_cache(key, "linux/amd64", report)
+    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) == report
 
 
 def test_cache_miss_on_other_trivy_version(tmp_path):
     repo = _repo(tmp_path)
-    repo.put_cache(DIGEST, "linux/amd64", {"a": 1})
-    repo._conn.execute("UPDATE image_cache SET trivy_db_version = '0.0.1'")
+    repo.put_cache(DIGEST, "linux/amd64", _result(_item()))
+    repo._conn.execute("UPDATE image_cache SET trivy_db_version = '0.76.1'")  # pre-+c1 rows are a miss
     assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
 
 

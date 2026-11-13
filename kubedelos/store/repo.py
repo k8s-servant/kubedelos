@@ -1,13 +1,18 @@
 """Reads and writes of scan runs, results and the scan cache."""
 
-import json
 import re
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from pydantic import ValidationError
+
 from kubedelos.models import ImageResult, InventoryItem
 from kubedelos.trivy.pins import TRIVY_VERSION
+
+# Cached reports are scoped by Trivy version and by the shape of kubedelos' own models: bump the "+cN" suffix when
+# ImageResult or Finding change, so old rows are ignored instead of failing validation.
+CACHE_VERSION = f"{TRIVY_VERSION}+c1"
 
 # A cache key is either a bare digest or "<repo>@<digest>"; anything else is a mutable tag ref.
 _DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}\Z")  # \Z: unlike $, no match before a trailing newline
@@ -98,21 +103,29 @@ class Repo:
         row = self._conn.execute("SELECT MAX(id) FROM scan_run").fetchone()
         return row[0]
 
-    def get_cached(self, image_key: str, platform: str, max_age: timedelta) -> dict | None:
+    def get_cached(self, image_key: str, platform: str, max_age: timedelta) -> ImageResult | None:
+        """A fresh cached result, or None. A row that no longer parses or validates is a miss and is deleted."""
         if not _is_digest_key(image_key):
             return None
         row = self._conn.execute(
             "SELECT scanned_at, report_json FROM image_cache WHERE image_key = ? AND platform = ?"
             " AND trivy_db_version = ?",
-            (image_key, platform, TRIVY_VERSION),
+            (image_key, platform, CACHE_VERSION),
         ).fetchone()
         if row is None:
             return None
         if self._clock() - datetime.fromisoformat(row["scanned_at"]) > max_age:
             return None
-        return json.loads(row["report_json"])
+        try:
+            return ImageResult.model_validate_json(row["report_json"])
+        except ValidationError:  # covers invalid JSON too
+            with self._conn:
+                self._conn.execute(
+                    "DELETE FROM image_cache WHERE image_key = ? AND platform = ?", (image_key, platform)
+                )
+            return None
 
-    def put_cache(self, image_key: str, platform: str, report: dict) -> None:
+    def put_cache(self, image_key: str, platform: str, result: ImageResult) -> None:
         if not _is_digest_key(image_key):
             return
         with self._conn:
@@ -122,7 +135,7 @@ class Repo:
                 " ON CONFLICT(image_key, platform) DO UPDATE SET"
                 " trivy_db_version = excluded.trivy_db_version, scanned_at = excluded.scanned_at,"
                 " report_json = excluded.report_json",
-                (image_key, platform, TRIVY_VERSION, self._now(), json.dumps(report)),
+                (image_key, platform, CACHE_VERSION, self._now(), result.model_dump_json()),
             )
 
     def run_errors(self, run_id: int) -> list[sqlite3.Row]:

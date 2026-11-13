@@ -16,6 +16,8 @@ from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import TrivyServer, scan_many
 
+CUSTOM_TRIVY = "custom"
+
 
 @dataclass
 class Progress:
@@ -47,7 +49,8 @@ def run_scan(
     cancel = cancel if cancel is not None else threading.Event()
 
     items, warnings = collect(api, settings)
-    run_id = repo.start_run(api.current_context(), trigger, TRIVY_VERSION)
+    # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
+    run_id = repo.start_run(api.current_context(), trigger, CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION)
     try:
         errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
     except KeyboardInterrupt:
@@ -73,6 +76,7 @@ def _scan(
     """Persist cached and fresh results for ``items`` and return how many images errored."""
     total = len(items)
     done = errors = 0
+    use_cache = settings.trivy_path is None  # results from an unpinned Trivy never enter or come from the cache
     on_progress(Progress(total=total, done=0, errors=0, current=None))
 
     def record(item: InventoryItem, result: ImageResult) -> None:
@@ -96,24 +100,19 @@ def _scan(
                 ),
             )
             continue
-        cached = repo.get_cached(item.image.key, item.platform, cache_max_age)
+        cached = repo.get_cached(item.image.key, item.platform, cache_max_age) if use_cache else None
         if cached is None:
             todo.append(item)
         else:
-            record(
-                item,
-                ImageResult.model_validate(cached).model_copy(
-                    update={"status": "cached", "image": item.image, "platform": item.platform}
-                ),
-            )
+            record(item, cached.model_copy(update={"status": "cached", "image": item.image, "platform": item.platform}))
 
     by_key = {(i.image.key, i.platform): i for i in todo}
 
     def on_result(result: ImageResult) -> None:  # called on this thread by scan_many
         item = by_key[(result.image.key, result.platform)]
         record(item, result)
-        if result.status == "ok":
-            repo.put_cache(result.image.key, result.platform, result.model_dump(mode="json"))
+        if result.status == "ok" and use_cache:
+            repo.put_cache(result.image.key, result.platform, result)
 
     if not todo:  # everything cached or rejected: no Trivy server needed
         return errors

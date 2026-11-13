@@ -244,3 +244,17 @@ def test_inventory_namespace_scoped_identity_has_no_coverage_gaps():
     assert len(items) == 1
     assert len(warnings) == 2
     assert not any(w.coverage for w in warnings)
+
+
+def test_inventory_platform_uses_node_os():
+    api = FakeKubeApi(
+        namespaces=[namespace("d")],
+        pods={"d": [pod("win", "d", image="win:1", node_name="n-win"), pod("lin", "d", image="lin:1", node_name="n1")]},
+        nodes=[node("n-win", "amd64", os="windows"), node("n1", "arm64"), node("n2", "arm64", os="")],
+    )
+    items, warnings = collect(api, Settings())
+    assert warnings == []
+    assert {i.image.repo: i.platform for i in items} == {
+        "docker.io/library/win": "windows/amd64",  # kept and scanned for its own platform, not skipped
+        "docker.io/library/lin": "linux/arm64",
+    }

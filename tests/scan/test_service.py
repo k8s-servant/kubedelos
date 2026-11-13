@@ -181,3 +181,28 @@ def test_service_skips_server_when_only_invalid_refs(env, monkeypatch):
     out = service.run_scan(settings, api=_api(), repo=repo)
     assert calls == [] and FakeServer.started == 0
     assert _status(repo, out.run_id) == "partial"
+
+
+def test_custom_trivy_path_skips_cache_and_records_custom(env, monkeypatch, tmp_path):
+    settings, repo, calls = env
+    settings = settings.model_copy(update={"trivy_path": tmp_path / "my-trivy"})
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    pinned = service.run_scan(settings.model_copy(update={"trivy_path": None}), api=_api(), repo=repo)
+    assert repo.get_run(pinned.run_id)["trivy_version"] == "0.76.1"
+    assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 2
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert len(calls) == 2 and len(calls[1]) == 2  # the pinned run's cache was not read
+    assert repo.get_run(out.run_id)["trivy_version"] == "custom"
+    repo._conn.execute("DELETE FROM image_cache")
+    service.run_scan(settings, api=_api(), repo=repo)
+    assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0  # and not written
+
+
+def test_corrupt_cache_row_is_rescanned(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    repo._conn.execute('UPDATE image_cache SET report_json = \'{"findings": "nope"}\'')
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert _status(repo, out.run_id) == "ok"
+    assert len(calls) == 2 and len(calls[1]) == 2
