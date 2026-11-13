@@ -134,16 +134,36 @@ def test_inventory_platform_from_node():
         pods={
             "d": [
                 pod("on-arm", "d", image="a:1", node_name="n-arm"),
-                pod("pending", "d", image="b:1"),
+                pod("no-node", "d", image="b:1"),
             ]
         },
-        nodes=[node("n-arm", "arm64"), node("n-arm2", "arm64"), node("n-amd", "amd64")],
+        nodes=[node("n-arm", "arm64"), node("n-amd1", "amd64"), node("n-amd2", "amd64")],
     )
     items, _ = collect(api, Settings())
     assert {i.image.repo: i.platform for i in items} == {
-        "docker.io/library/a": "linux/arm64",
-        "docker.io/library/b": "linux/arm64",  # most common node arch
+        "docker.io/library/a": "linux/arm64",  # from the pod's own node, the minority arch
+        "docker.io/library/b": "linux/amd64",  # most common node arch
     }
+
+
+def test_inventory_forbidden_resource_skips_only_that_resource():
+    api = FakeKubeApi(
+        namespaces=[namespace("d")],
+        pods={"d": [pod("p", "d")]},
+        deployments={"d": [deployment("idle", "d", "idle:1", 0)]},
+        cronjobs={"d": [cronjob("nightly", "d", "job:1")]},
+        forbidden_resources={("cronjobs", "d")},
+    )
+    items, warnings = collect(api, Settings())
+    assert {i.image.ref for i in items} == {"docker.io/library/nginx:1.25", "docker.io/library/idle:1"}
+    assert warnings == ["skipped cronjobs in namespace d: forbidden"]
+
+
+def test_inventory_missing_selected_namespace_warns():
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
+    items, warnings = collect(api, Settings(namespaces=["a", "ghost"]))
+    assert len(items) == 1
+    assert warnings == ["namespace ghost not found"]
 
 
 def test_inventory_platform_defaults_to_amd64_without_nodes():

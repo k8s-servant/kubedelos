@@ -89,6 +89,16 @@ def _is_forbidden(exc: ApiException) -> bool:
     return exc.status == 403
 
 
+def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[str]) -> list:
+    try:
+        return list_fn(ns)
+    except ApiException as exc:
+        if not _is_forbidden(exc):
+            raise
+        warnings.append(f"skipped {resource} in namespace {ns}: forbidden")
+        return []
+
+
 def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[str]) -> list[V1Namespace]:
     wanted = set(settings.namespaces)
     try:
@@ -98,6 +108,8 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[str]) ->
             raise
         warnings.append("cannot list namespaces: forbidden; owner info unavailable for the selected namespaces")
         found = [V1Namespace(metadata=V1ObjectMeta(name=name)) for name in settings.namespaces]
+    for missing in sorted(wanted - {ns.metadata.name for ns in found}):
+        warnings.append(f"namespace {missing} not found")
     excluded = set(settings.exclude_namespaces)
     return [ns for ns in found if (not wanted or ns.metadata.name in wanted) and ns.metadata.name not in excluded]
 
@@ -130,14 +142,14 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
         owner, team = owners.resolve(ns, settings)
         try:
             pods = api.list_pods(name)
-            deployments = api.list_deployments(name)
-            statefulsets = api.list_statefulsets(name)
-            cronjobs = api.list_cronjobs(name)
         except ApiException as exc:
             if not _is_forbidden(exc):
                 raise
             warnings.append(f"skipped namespace {name}: forbidden")
             continue
+        deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings)
+        statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings)
+        cronjobs = _list_or_warn(api.list_cronjobs, "cronjobs", name, warnings)
 
         for pod in pods:
             ids = _status_ids(pod)
