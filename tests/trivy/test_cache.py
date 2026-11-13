@@ -21,6 +21,13 @@ def _lock_path(tmp_path: Path) -> Path:
     return path
 
 
+def _fake_dbs(tmp_path: Path) -> None:
+    """Leave the files a finished Trivy DB download leaves behind."""
+    for sub in ("db", "java-db"):
+        (tmp_path / "trivy-cache" / sub).mkdir(parents=True, exist_ok=True)
+        (tmp_path / "trivy-cache" / sub / "metadata.json").write_text("{}")
+
+
 def _try_exclusive(tmp_path: Path) -> bool:
     with open(_lock_path(tmp_path), "a") as f:
         try:
@@ -57,6 +64,7 @@ def test_holds_a_shared_lock_while_open(tmp_path):
 def test_busy_cache_skips_update_and_shares(tmp_path, monkeypatch):
     log = tmp_path / "downloads.jsonl"
     monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    _fake_dbs(tmp_path)
     with open(_lock_path(tmp_path), "a") as other:
         fcntl.flock(other, fcntl.LOCK_SH)  # another run is scanning
         start = time.monotonic()
@@ -80,9 +88,30 @@ def test_waits_while_another_process_downloads(tmp_path):
         worker = threading.Thread(target=run)
         worker.start()
         assert not entered.wait(0.3)
+        _fake_dbs(tmp_path)  # its download finishes
     assert entered.wait(2)
     worker.join(2)
     assert seen == [False]
+
+
+def test_takes_over_when_another_run_left_no_db(tmp_path, monkeypatch):
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    seen: list[bool] = []
+
+    def run() -> None:
+        with TrivyCache(FAKE_TRIVY, tmp_path) as cache:
+            seen.append(cache.updated)
+
+    with open(_lock_path(tmp_path), "a") as other:
+        fcntl.flock(other, fcntl.LOCK_EX)  # another run is downloading...
+        worker = threading.Thread(target=run)
+        worker.start()
+        time.sleep(0.3)
+    # ...and dies or fails without leaving a DB: never scan against a missing DB, download it instead
+    worker.join(5)
+    assert seen == [True]
+    assert len(log.read_text().splitlines()) == 2
 
 
 def test_download_failure_releases_lock(tmp_path, monkeypatch):

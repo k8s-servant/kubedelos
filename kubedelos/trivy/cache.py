@@ -4,7 +4,8 @@ Every scan is a standalone ``trivy image`` that keeps its layer cache in memory,
 ``kubedelos scan`` runs only share the two DBs, which Trivy opens read-only. A run takes an exclusive ``flock`` to
 download or update them, then holds a shared one while it scans, so no run replaces a DB another run is reading.
 If another run is already scanning, the update is skipped rather than waiting for that run to finish. The kernel
-drops a ``flock`` when its process dies, so a killed run never leaves a stale lock behind.
+drops a ``flock`` when its process dies, so a killed run never leaves a stale lock behind; a run whose download
+failed or was killed leaves no usable DB, so the next run to get the lock downloads it instead of scanning without.
 """
 
 import contextlib
@@ -19,6 +20,7 @@ from kubedelos.trivy.runner import _run_group, _short
 
 _DB_DOWNLOAD_TIMEOUT_S = 1800
 _LOCK_FILE = ".kubedelos.lock"
+_DB_METADATA = ("db/metadata.json", "java-db/metadata.json")  # written by Trivy once a download finished
 
 
 class TrivyCache:
@@ -39,11 +41,15 @@ class TrivyCache:
             except BlockingIOError:
                 # Another run holds the lock. A shared lock waits only while that run downloads.
                 fcntl.flock(self._fd, fcntl.LOCK_SH)
-            else:
-                for flag in ("--download-db-only", "--download-java-db-only"):
-                    self._download(flag)
-                fcntl.flock(self._fd, fcntl.LOCK_SH)
-                self.updated = True
+                if self._dbs_present():
+                    return self
+                # That run's download failed or it was killed: wait for the readers to finish, then download.
+                fcntl.flock(self._fd, fcntl.LOCK_UN)
+                fcntl.flock(self._fd, fcntl.LOCK_EX)
+            for flag in ("--download-db-only", "--download-java-db-only"):
+                self._download(flag)
+            fcntl.flock(self._fd, fcntl.LOCK_SH)
+            self.updated = True
         except BaseException:
             self._close()
             raise
@@ -53,6 +59,9 @@ class TrivyCache:
         self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
     ) -> None:
         self._close()
+
+    def _dbs_present(self) -> bool:
+        return all((self.dir / name).is_file() for name in _DB_METADATA)
 
     def _download(self, flag: str) -> None:
         argv = [str(self.trivy), "image", flag, "--cache-dir", str(self.dir)]
