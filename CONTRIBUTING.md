@@ -38,6 +38,11 @@ Using Claude Code or another assistant is fine. [`AGENTS.md`](AGENTS.md) holds t
 project conventions those tools should follow (`CLAUDE.md` imports it). You remain
 responsible for every line you submit.
 
+Claude also reviews every non-draft PR from a branch in this repository. Maintainers can
+mention `@claude` in an issue, a PR comment or a review to ask a question or have it fix
+something and push a branch. It only responds to the owner, org members and
+collaborators, and it runs the tests only when everyone in the thread is one of them.
+
 ## Releases
 
 Maintainers merge the release PR that release-please keeps open. That tags the release
