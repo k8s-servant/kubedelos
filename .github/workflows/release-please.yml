@@ -8,7 +8,8 @@ name: Release
 # workflows on its own for events that GITHUB_TOKEN creates, so the release PR's checks
 # would wait for a maintainer to approve them. The App needs Contents, Pull requests and
 # Issues (read and write) on this repository; its Client ID is the repository variable
-# RELEASE_APP_CLIENT_ID and its private key the secret RELEASE_APP_PRIVATE_KEY. The
+# RELEASE_APP_CLIENT_ID and its private key the secret RELEASE_APP_PRIVATE_KEY, both
+# held in the `release` environment. The
 # publish jobs keep GITHUB_TOKEN, and the signing identity stays this workflow file.
 on:
   push:
@@ -24,6 +25,9 @@ jobs:
   release-please:
     name: release-please
     runs-on: ubuntu-latest
+    # The App key and client ID live in the `release` environment, whose deployment
+    # branches must be limited to main, so no other branch can read them.
+    environment: release
     permissions: {} # release-please uses the App token
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
