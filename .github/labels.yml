@@ -1,0 +1,73 @@
+# Source of truth for repository labels, synced by .github/workflows/labels.yml.
+- name: type/bug
+  color: d73a4a
+  description: Something isn't working
+- name: type/feature
+  color: a2eeef
+  description: New capability or improvement
+- name: type/docs
+  color: 0075ca
+  description: Documentation
+- name: type/chore
+  color: ededed
+  description: Maintenance, refactoring, tooling
+- name: type/security
+  color: b60205
+  description: Security hardening (report vulnerabilities privately)
+- name: area/scanner
+  color: c5def5
+  description: Inventory, Trivy runner and findings
+- name: area/cli
+  color: c5def5
+  description: The kubedelos command line
+- name: area/ui
+  color: c5def5
+  description: The local web UI (delos)
+- name: area/reports
+  color: c5def5
+  description: Scheduled reports and notifications
+- name: area/ci
+  color: c5def5
+  description: GitHub Actions and release tooling
+- name: area/python
+  color: c5def5
+  description: Python dependencies and packaging
+- name: area/container
+  color: c5def5
+  description: Dockerfile and image
+- name: priority/high
+  color: e99695
+  description: Needs attention soon
+- name: priority/low
+  color: f9d0c4
+  description: Nice to have
+- name: triage
+  color: fbca04
+  description: Needs a maintainer to look at it
+- name: good first issue
+  color: 7057ff
+  description: Good for newcomers
+- name: help wanted
+  color: 008672
+  description: Extra attention is welcome
+- name: dependencies
+  color: 0366d6
+  description: Dependency updates
+- name: breaking-change
+  color: 5319e7
+  description: Changes behavior or configuration incompatibly
+- name: duplicate
+  color: cfd3d7
+  description: This issue or pull request already exists
+- name: wontfix
+  color: ffffff
+  description: This will not be worked on
+- name: invalid
+  color: e4e669
+  description: This doesn't seem right
+- name: "autorelease: pending"
+  color: ededed
+  description: Used by release-please
+- name: "autorelease: tagged"
+  color: ededed
+  description: Used by release-please
