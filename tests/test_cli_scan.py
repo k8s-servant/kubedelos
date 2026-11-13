@@ -316,3 +316,17 @@ def test_sigterm_stops_running_scans(tmp_path):
     assert proc.returncode == 130
     assert _gone(int(pid_file.read_text()))
     assert _gone(int(child_file.read_text()))
+
+
+def test_cli_scan_pkg_types_passed(make_run):
+    make_run([])
+    r = _run("--pkg-types", "os")
+    assert r.exit_code == 0, r.output
+    assert make_run.seen["settings"].pkg_types == ("os",)
+
+
+def test_cli_scan_pkg_types_rejects_unknown(make_run):
+    make_run([])
+    r = _run("--pkg-types", "secrets")
+    assert r.exit_code == 2
+    assert "error: --pkg-types:" in r.stderr

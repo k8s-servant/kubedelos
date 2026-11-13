@@ -1,6 +1,7 @@
 import threading
 from datetime import timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from kubernetes.client import V1Namespace, V1ObjectMeta
@@ -31,8 +32,11 @@ def _settings(tmp_path):
 class FakeCache:
     started = 0
 
-    def __init__(self, trivy, cache_dir):
+    java_db: ClassVar[list[bool]] = []
+
+    def __init__(self, trivy, cache_dir, *, java_db=True):
         self.dir = cache_dir / "trivy-cache"
+        FakeCache.java_db.append(java_db)
 
     def __enter__(self):
         FakeCache.started += 1
@@ -45,6 +49,7 @@ class FakeCache:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     FakeCache.started = 0
+    FakeCache.java_db = []
     calls: list[list] = []
     monkeypatch.setattr(service, "TrivyCache", FakeCache)
     monkeypatch.setattr(service, "ensure_trivy", lambda settings: Path("/fake/trivy"))
@@ -206,3 +211,14 @@ def test_corrupt_cache_row_is_rescanned(env, monkeypatch):
     out = service.run_scan(settings, api=_api(), repo=repo)
     assert _status(repo, out.run_id) == "ok"
     assert len(calls) == 2 and len(calls[1]) == 2
+
+
+def test_service_uses_scan_level_for_cache(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    first = service.run_scan(settings.model_copy(update={"pkg_types": ("os",)}), api=_api(), repo=repo)
+    second = service.run_scan(settings, api=_api(), repo=repo)
+    assert len(calls) == 2  # an os-only result is never a cache hit for library,os
+    assert FakeCache.java_db == [False, True]
+    assert repo.get_run(first.run_id)["pkg_types"] == "os"
+    assert repo.get_run(second.run_id)["pkg_types"] == "library,os"

@@ -121,6 +121,7 @@ def scan_image(
     docker_config: Path | None = None,
     *,
     cache_dir: Path | None = None,
+    pkg_types: tuple[str, ...] = ("library", "os"),
     _groups: _ClientGroups | None = None,
 ) -> ImageResult:
     """Scan one image with a standalone Trivy. Failures come back as ``status="error"``; this never raises."""
@@ -131,6 +132,8 @@ def scan_image(
         "json",
         "--scanners",
         "vuln",
+        "--pkg-types",
+        ",".join(pkg_types),
         "--image-src",
         "remote",
         "--platform",
@@ -199,6 +202,7 @@ def scan_many(
                 item.platform,
                 settings.scan_timeout_s,
                 cache_dir=cache_dir,
+                pkg_types=settings.pkg_types,
                 _groups=groups,
             )
         except Exception as exc:

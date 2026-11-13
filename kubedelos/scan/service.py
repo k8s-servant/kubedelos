@@ -128,6 +128,6 @@ def _scan(
         return errors
 
     trivy = ensure_trivy(settings)
-    with TrivyCache(trivy, settings.cache_dir) as cache:
+    with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
         scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
     return errors

@@ -36,6 +36,8 @@ def test_runner_builds_expected_args(tmp_path, monkeypatch):
         "json",
         "--scanners",
         "vuln",
+        "--pkg-types",
+        "library,os",
         "--image-src",
         "remote",
         "--platform",
@@ -216,3 +218,15 @@ def test_scan_many_returns_immediately_for_no_items(tmp_path):
         cancel=threading.Event(),
     )  # fmt: skip
     assert results == []
+
+
+def test_scan_many_passes_pkg_types(tmp_path, monkeypatch):
+    record = tmp_path / "record.json"
+    monkeypatch.setenv("FAKE_TRIVY_RECORD", str(record))
+    settings = Settings(cache_dir=tmp_path, parallelism=1, pkg_types="os")
+    scan_many(
+        _items(1), cache_dir=tmp_path, trivy=FAKE_TRIVY, settings=settings, on_result=lambda r: None,
+        cancel=threading.Event(),
+    )  # fmt: skip
+    argv = json.loads(record.read_text())["FakeArgv"]
+    assert argv[argv.index("--pkg-types") + 1] == "os"

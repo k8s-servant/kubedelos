@@ -153,3 +153,37 @@ def test_sigterm_while_waiting_for_lock_exits(tmp_path):
         check=False,
     )
     assert proc.returncode == 130
+
+
+def _downloads(log: Path) -> list[str]:
+    return [json.loads(line)[1] for line in log.read_text().splitlines()] if log.exists() else []
+
+
+def test_os_only_skips_java_db(tmp_path, monkeypatch):
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    with TrivyCache(FAKE_TRIVY, tmp_path, java_db=False):
+        pass
+    assert _downloads(log) == ["--download-db-only"]
+
+
+def test_library_run_downloads_java_db_after_os_only(tmp_path, monkeypatch):
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    with TrivyCache(FAKE_TRIVY, tmp_path, java_db=False):
+        pass
+    with TrivyCache(FAKE_TRIVY, tmp_path, java_db=True):
+        pass
+    assert _downloads(log) == ["--download-db-only", "--download-db-only", "--download-java-db-only"]
+
+
+def test_busy_os_only_cache_does_not_need_java_db(tmp_path, monkeypatch):
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    (tmp_path / "trivy-cache" / "db").mkdir(parents=True)
+    (tmp_path / "trivy-cache" / "db" / "metadata.json").write_text("{}")  # no java-db: an OS-only cache
+    with open(_lock_path(tmp_path), "a") as other:
+        fcntl.flock(other, fcntl.LOCK_SH)
+        with TrivyCache(FAKE_TRIVY, tmp_path, java_db=False) as cache:
+            assert cache.updated is False
+    assert _downloads(log) == []
