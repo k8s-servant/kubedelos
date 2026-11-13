@@ -6,7 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
-from kubedelos.store.db import connect
+from kubedelos.store.db import MIGRATIONS, connect
 from kubedelos.store.repo import Repo
 
 DIGEST = "sha256:" + "a" * 64
@@ -56,14 +56,14 @@ def test_migrations_idempotent(tmp_path):
     connect(path).close()
     conn = connect(path)
     _OPEN.append(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_run_roundtrip_counts(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     assert repo.get_run(run)["status"] == "running"
     for i, status in enumerate(["ok", "ok", "error"]):
         item = _item(ref=f"reg.io/app:{i}", digest=f"sha256:{i:064d}")
@@ -82,7 +82,7 @@ def test_latest_run_id_empty(tmp_path):
 
 def test_run_findings_joins_workloads_and_orders(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     wls = [
         Workload(namespace="zz", kind="Deployment", name="b", container="c", owner="o@x", team="t"),
         Workload(namespace="aa", kind="StatefulSet", name="a", container="c"),
@@ -105,7 +105,7 @@ def test_run_findings_joins_workloads_and_orders(tmp_path):
 
 def test_cached_status_stored_as_is(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     item = _item()
     repo.add_result(run, item, _result(item, "cached", findings=[_finding()]))
     assert repo._conn.execute("SELECT status FROM image_result").fetchone()[0] == "cached"
@@ -114,7 +114,7 @@ def test_cached_status_stored_as_is(tmp_path):
 
 def test_add_result_is_atomic(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     item = _item()
     with pytest.raises(sqlite3.IntegrityError):
         repo.add_result(run + 100, item, _result(item, findings=[_finding()]))
@@ -126,15 +126,15 @@ def test_cache_hit_and_expiry(tmp_path):
     repo = _repo(tmp_path, clock=lambda: now[0])
     item = _item()
     report = _result(item, findings=[_finding()])
-    repo.put_cache(DIGEST, "linux/amd64", report)
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) == report
-    assert repo.get_cached(DIGEST, "linux/arm64", timedelta(hours=1)) is None
+    repo.put_cache(DIGEST, "linux/amd64", report, scan_level="library,os")
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="library,os") == report
+    assert repo.get_cached(DIGEST, "linux/arm64", timedelta(hours=1), scan_level="library,os") is None
     now[0] += timedelta(hours=2)
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) is None
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None
     # upsert refreshes the entry
     newer = _result(item, os_family="debian")
-    repo.put_cache(DIGEST, "linux/amd64", newer)
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1)) == newer
+    repo.put_cache(DIGEST, "linux/amd64", newer, scan_level="library,os")
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="library,os") == newer
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 1
     assert json.loads(repo._conn.execute("SELECT report_json FROM image_cache").fetchone()[0])["os_family"] == "debian"
     assert repo._conn.execute("SELECT trivy_db_version FROM image_cache").fetchone()[0] == "0.76.1+c1"
@@ -143,23 +143,23 @@ def test_cache_hit_and_expiry(tmp_path):
 @pytest.mark.parametrize("blob", ["{not json", '{"image": 1}', '{"status": "ok"}', "[]"])
 def test_invalid_cache_row_is_a_miss_and_deleted(tmp_path, blob):
     repo = _repo(tmp_path)
-    repo.put_cache(DIGEST, "linux/amd64", _result(_item()))
+    repo.put_cache(DIGEST, "linux/amd64", _result(_item()), scan_level="library,os")
     repo._conn.execute("UPDATE image_cache SET report_json = ?", (blob,))
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1), scan_level="library,os") is None
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
 
 
 def test_tag_refs_not_cached(tmp_path):
     repo = _repo(tmp_path)
-    repo.put_cache("reg.io/app:latest", "linux/amd64", _result(_item()))
+    repo.put_cache("reg.io/app:latest", "linux/amd64", _result(_item()), scan_level="library,os")
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
-    assert repo.get_cached("reg.io/app:latest", "linux/amd64", timedelta(days=1)) is None
+    assert repo.get_cached("reg.io/app:latest", "linux/amd64", timedelta(days=1), scan_level="library,os") is None
 
 
 @pytest.mark.parametrize("status", ["running", "bogus", ""])
 def test_finish_run_rejects_bad_status(tmp_path, status):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     with pytest.raises(ValueError):
         repo.finish_run(run, status)
     assert repo.get_run(run)["status"] == "running"
@@ -172,31 +172,31 @@ def test_finish_run_rejects_bad_status(tmp_path, status):
 )  # fmt: skip
 def test_non_digest_keys_not_cached(tmp_path, key):
     repo = _repo(tmp_path)
-    repo.put_cache(key, "linux/amd64", _result(_item()))
+    repo.put_cache(key, "linux/amd64", _result(_item()), scan_level="library,os")
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
-    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) is None
+    assert repo.get_cached(key, "linux/amd64", timedelta(days=1), scan_level="library,os") is None
 
 
 @pytest.mark.parametrize("key", [DIGEST, "reg.io/app@" + DIGEST])
 def test_valid_digest_keys_cached(tmp_path, key):
     repo = _repo(tmp_path)
     report = _result(_item())
-    repo.put_cache(key, "linux/amd64", report)
-    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) == report
+    repo.put_cache(key, "linux/amd64", report, scan_level="library,os")
+    assert repo.get_cached(key, "linux/amd64", timedelta(days=1), scan_level="library,os") == report
 
 
 def test_cache_miss_on_other_trivy_version(tmp_path):
     repo = _repo(tmp_path)
-    repo.put_cache(DIGEST, "linux/amd64", _result(_item()))
+    repo.put_cache(DIGEST, "linux/amd64", _result(_item()), scan_level="library,os")
     repo._conn.execute("UPDATE image_cache SET trivy_db_version = '0.76.1'")  # pre-+c1 rows are a miss
-    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1), scan_level="library,os") is None
 
 
 def test_db_files_are_private(tmp_path):
     path = tmp_path / "kubedelos" / "k.db"
     conn = connect(path)
     _OPEN.append(conn)
-    Repo(conn).start_run("c", "cli", "v")
+    Repo(conn).start_run("c", "cli", "v", scan_level="library,os")
     for f in (path, path.with_name("k.db-wal"), path.with_name("k.db-shm")):
         if f.exists():
             assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
@@ -219,13 +219,61 @@ def test_existing_kubedelos_dir_is_tightened(tmp_path):
 
 def test_run_errors_lists_failed_images_only(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1")
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     ok, bad = _item(), _item(ref="reg.io/bad:1", digest=None)
     repo.add_result(run, ok, _result(ok))
     repo.add_result(run, bad, _result(bad, status="error", error_kind="not_found", error="manifest unknown"))
-    other = repo.start_run("ctx", "cli", "0.76.1")
+    other = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     repo.add_result(other, bad, _result(bad, status="error", error_kind="auth", error="denied"))
     rows = [dict(r) for r in repo.run_errors(run)]
     assert rows == [
         {"ref": "reg.io/bad:1", "platform": "linux/amd64", "error_kind": "not_found", "error": "manifest unknown"}
     ]
+
+
+def test_cache_is_keyed_by_scan_level(tmp_path):
+    repo = _repo(tmp_path)
+    os_only = _result(_item(), findings=[_finding("CVE-OS")])
+    full = _result(_item(), findings=[_finding("CVE-OS"), _finding("CVE-LIB")])
+    repo.put_cache(DIGEST, "linux/amd64", os_only, scan_level="os")
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="os") == os_only
+    repo.put_cache(DIGEST, "linux/amd64", full, scan_level="library,os")
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="os") == os_only  # both kept
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(hours=1), scan_level="library,os") == full
+
+
+def test_run_records_scan_level(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    assert repo.get_run(run)["pkg_types"] == "os"
+
+
+def test_run_findings_include_pkg_class(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    finding = _finding().model_copy(update={"pkg_class": "library"})
+    repo.add_result(run, _item(), _result(_item(), findings=[finding]))
+    assert [r["pkg_class"] for r in repo.run_findings(run)] == ["library"]
+
+
+def test_migration_from_v1_keeps_runs_drops_cache(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(f"BEGIN;\n{MIGRATIONS[0]}\nPRAGMA user_version = 1;\nCOMMIT;")
+    old.execute(
+        "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version)"
+        " VALUES ('2026-11-01T00:00:00+00:00', 'ok', 'ctx', 'cli', '0.76.1')"
+    )
+    old.execute(
+        "INSERT INTO image_cache (image_key, platform, trivy_db_version, scanned_at, report_json)"
+        " VALUES (?, 'linux/amd64', 'x', '2026-11-01T00:00:00+00:00', '{}')",
+        (DIGEST,),
+    )
+    old.commit()
+    old.close()
+    conn = connect(path)
+    _OPEN.append(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert [tuple(r) for r in conn.execute("SELECT context, pkg_types FROM scan_run")] == [("ctx", None)]
+    assert conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0

@@ -48,7 +48,7 @@ def make_run(tmp_path, monkeypatch):
     def build(findings, *, error=False, error_msg="x", status=None, raises=None, warnings=(), failures=()):
         with contextlib.closing(connect(Settings().db_path)) as conn:
             repo = Repo(conn)
-            run_id = repo.start_run("ctx", "cli", "0.76.1")
+            run_id = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
             item = _item("reg.io/a:1")
             repo.add_result(
                 run_id, item, ImageResult(image=item.image, platform="linux/amd64", status="ok", findings=findings)

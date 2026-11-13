@@ -51,7 +51,12 @@ def run_scan(
 
     items, warnings = collect(api, settings)
     # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
-    run_id = repo.start_run(api.current_context(), trigger, CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION)
+    run_id = repo.start_run(
+        api.current_context(),
+        trigger,
+        CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
+        scan_level=settings.scan_level,
+    )
     try:
         errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
     except KeyboardInterrupt:
@@ -101,7 +106,11 @@ def _scan(
                 ),
             )
             continue
-        cached = repo.get_cached(item.image.key, item.platform, cache_max_age) if use_cache else None
+        cached = (
+            repo.get_cached(item.image.key, item.platform, cache_max_age, scan_level=settings.scan_level)
+            if use_cache
+            else None
+        )
         if cached is None:
             todo.append(item)
         else:
@@ -113,7 +122,7 @@ def _scan(
         item = by_key[(result.image.key, result.platform)]
         record(item, result)
         if result.status == "ok" and use_cache:
-            repo.put_cache(result.image.key, result.platform, result)
+            repo.put_cache(result.image.key, result.platform, result, scan_level=settings.scan_level)
 
     if not todo:  # everything cached or rejected: no Trivy needed
         return errors

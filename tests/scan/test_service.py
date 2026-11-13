@@ -83,8 +83,8 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     assert len(repo.run_findings(out.run_id)) == 1
     assert [(p.done, p.errors) for p in progress] == [(0, 0), (1, 0), (2, 1)]
     assert progress[-1].total == 2 and progress[-1].current is not None
-    assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1)) is not None
-    assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1)) is None  # errors not cached
+    assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1), scan_level="library,os") is not None
+    assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None  # errors not cached
 
 
 def test_service_uses_cache_second_run(env, monkeypatch):
