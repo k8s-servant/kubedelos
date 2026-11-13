@@ -13,13 +13,26 @@ REQUEST_TIMEOUT = (10, 120)  # (connect, read) seconds, so a hung API server can
 
 
 class KubeApi(Protocol):
-    def list_namespaces(self, label_selector: str | None = None) -> list[V1Namespace]: ...
-    def list_pods(self, ns: str, label_selector: str | None = None) -> list: ...
-    def list_deployments(self, ns: str, label_selector: str | None = None) -> list: ...
-    def list_statefulsets(self, ns: str, label_selector: str | None = None) -> list: ...
-    def list_cronjobs(self, ns: str, label_selector: str | None = None) -> list: ...
-    def list_nodes(self) -> list: ...
-    def current_context(self) -> str: ...
+    def list_namespaces(self, label_selector: str | None = None) -> list[V1Namespace]:
+        """Namespaces, optionally filtered by a label selector."""
+
+    def list_pods(self, ns: str, label_selector: str | None = None) -> list:
+        """Pods in ``ns``, optionally filtered by a label selector."""
+
+    def list_deployments(self, ns: str, label_selector: str | None = None) -> list:
+        """Deployments in ``ns``, optionally filtered by a label selector."""
+
+    def list_statefulsets(self, ns: str, label_selector: str | None = None) -> list:
+        """StatefulSets in ``ns``, optionally filtered by a label selector."""
+
+    def list_cronjobs(self, ns: str, label_selector: str | None = None) -> list:
+        """CronJobs in ``ns``, optionally filtered by a label selector."""
+
+    def list_nodes(self) -> list:
+        """Cluster nodes, for each pod's platform."""
+
+    def current_context(self) -> str:
+        """The kube-context name, or ``in-cluster``."""
 
 
 def _list_kwargs(label_selector: str | None) -> dict[str, object]:

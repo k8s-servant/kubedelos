@@ -120,10 +120,11 @@ def image_names(image: ImageRef) -> set[str]:
     (``nginx:1.19`` and ``library/nginx:1.19`` for ``docker.io/library/nginx:1.19``).
     """
     repos = {image.repo}
-    if image.repo.startswith("docker.io/library/"):
-        repos |= {image.repo.removeprefix("docker.io/library/"), image.repo.removeprefix("docker.io/")}
-    elif image.repo.startswith("docker.io/"):
-        repos.add(image.repo.removeprefix("docker.io/"))
+    host, _, path = image.repo.partition("/")  # the repo is normalised, so the first segment is always the host
+    if host == "docker.io":
+        repos.add(path)
+        if path.startswith("library/"):
+            repos.add(path.removeprefix("library/"))
     names = set(repos)
     for repo in repos:
         if image.tag:
