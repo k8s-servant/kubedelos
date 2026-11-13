@@ -110,9 +110,19 @@ def _is_forbidden(exc: ApiException) -> bool:
     return exc.status == 403
 
 
-def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarning]) -> list:
+def _with_selector(list_fn, selector: str | None, *args: str) -> list:
+    """Call ``list_fn`` with ``selector``; a selector the API server cannot parse (HTTP 400) is a clear error."""
     try:
-        return list_fn(ns)
+        return list_fn(*args, label_selector=selector)
+    except ApiException as exc:
+        if selector is not None and exc.status == 400:
+            raise ValueError(f"invalid label selector {selector!r}: {exc.reason}") from None
+        raise
+
+
+def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarning], selector: str | None) -> list:
+    try:
+        return _with_selector(list_fn, selector, ns)
     except ApiException as exc:
         if not _is_forbidden(exc):
             raise
@@ -122,9 +132,15 @@ def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarni
 
 def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[InventoryWarning]) -> list[V1Namespace]:
     wanted = set(settings.namespaces)
+    selector = settings.namespace_selector
     try:
-        found = api.list_namespaces()
+        found = _with_selector(api.list_namespaces, selector)
     except ApiException as exc:
+        if _is_forbidden(exc) and selector is not None:
+            # The labels cannot be read, so the selector cannot be applied: never guess which namespaces it means.
+            raise RuntimeError(
+                "cannot list namespaces: forbidden; --namespace-selector needs list rights on namespaces"
+            ) from None
         if not (_is_forbidden(exc) and wanted):
             raise
         warnings.append(
@@ -133,7 +149,15 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[Inventor
             )
         )
         found = [V1Namespace(metadata=V1ObjectMeta(name=name)) for name in settings.namespaces]
-    for missing in sorted(wanted - {ns.metadata.name for ns in found}):
+    unmatched: set[str] = set()
+    if selector is not None and wanted - {ns.metadata.name for ns in found}:
+        # A named namespace the selector dropped is not missing: say so instead of reporting it as not found.
+        unmatched = (wanted & {ns.metadata.name for ns in api.list_namespaces()}) - {ns.metadata.name for ns in found}
+        for name in sorted(unmatched):
+            warnings.append(
+                InventoryWarning(f"namespace {name} does not match --namespace-selector; not scanned", coverage=False)
+            )
+    for missing in sorted(wanted - unmatched - {ns.metadata.name for ns in found}):
         warnings.append(InventoryWarning(f"namespace {missing} not found", coverage=True))
     excluded = set(settings.exclude_namespaces)
     return [ns for ns in found if (not wanted or ns.metadata.name in wanted) and ns.metadata.name not in excluded]
@@ -169,15 +193,15 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
         name = ns.metadata.name
         owner, team = owners.resolve(ns, settings)
         try:
-            pods = api.list_pods(name)
+            pods = _with_selector(api.list_pods, settings.selector, name)
         except ApiException as exc:
             if not _is_forbidden(exc):
                 raise
             warnings.append(InventoryWarning(f"skipped namespace {name}: forbidden", coverage=True))
             continue
-        deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings)
-        statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings)
-        cronjobs = _list_or_warn(api.list_cronjobs, "cronjobs", name, warnings)
+        deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings, settings.selector)
+        statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings, settings.selector)
+        cronjobs = _list_or_warn(api.list_cronjobs, "cronjobs", name, warnings, settings.selector)
 
         for pod in pods:
             ids = _status_ids(pod)

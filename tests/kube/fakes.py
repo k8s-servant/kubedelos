@@ -126,31 +126,42 @@ class FakeKubeApi:
         self.namespaces_forbidden = namespaces_forbidden
         self.forbidden_resources = forbidden_resources or set()
         self.nodes_forbidden = nodes_forbidden
+        self.selectors: list[tuple[str, str | None]] = []
 
     def _check(self, ns: str, resource: str) -> None:
         if ns in self.forbidden or (resource, ns) in self.forbidden_resources:
             raise ApiException(status=403, reason="Forbidden")
 
-    def list_namespaces(self):
+    def _match(self, method: str, objs: list, label_selector: str | None) -> list:
+        """Record the selector and filter by comma-ANDed ``k=v`` equality; the real API server parses the rest."""
+        self.selectors.append((method, label_selector))
+        if not label_selector:
+            return objs
+        if "(" in label_selector and ")" not in label_selector:
+            raise ApiException(status=400, reason="unable to parse requirement")
+        wanted = dict(part.split("=", 1) for part in label_selector.split(","))
+        return [o for o in objs if all((o.metadata.labels or {}).get(k) == v for k, v in wanted.items())]
+
+    def list_namespaces(self, label_selector=None):
         if self.namespaces_forbidden:
             raise ApiException(status=403, reason="Forbidden")
-        return self.namespaces
+        return self._match("list_namespaces", self.namespaces, label_selector)
 
-    def list_pods(self, ns):
+    def list_pods(self, ns, label_selector=None):
         self._check(ns, "pods")
-        return self.pods.get(ns, [])
+        return self._match("list_pods", self.pods.get(ns, []), label_selector)
 
-    def list_deployments(self, ns):
+    def list_deployments(self, ns, label_selector=None):
         self._check(ns, "deployments")
-        return self.deployments.get(ns, [])
+        return self._match("list_deployments", self.deployments.get(ns, []), label_selector)
 
-    def list_statefulsets(self, ns):
+    def list_statefulsets(self, ns, label_selector=None):
         self._check(ns, "statefulsets")
-        return self.statefulsets.get(ns, [])
+        return self._match("list_statefulsets", self.statefulsets.get(ns, []), label_selector)
 
-    def list_cronjobs(self, ns):
+    def list_cronjobs(self, ns, label_selector=None):
         self._check(ns, "cronjobs")
-        return self.cronjobs.get(ns, [])
+        return self._match("list_cronjobs", self.cronjobs.get(ns, []), label_selector)
 
     def list_nodes(self):
         if self.nodes_forbidden:

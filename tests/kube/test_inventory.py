@@ -258,3 +258,50 @@ def test_inventory_platform_uses_node_os():
         "docker.io/library/win": "windows/amd64",  # kept and scanned for its own platform, not skipped
         "docker.io/library/lin": "linux/arm64",
     }
+
+
+def _refs(items):
+    return sorted(i.image.ref for i in items)
+
+
+def test_namespace_selector_filters_namespaces():
+    api = FakeKubeApi(
+        namespaces=[namespace("a", labels={"team": "x"}), namespace("b", labels={"team": "y"})],
+        pods={"a": [pod("p", "a", image="a:1")], "b": [pod("p", "b", image="b:1")]},
+    )
+    items, _ = collect(api, Settings(namespace_selector="team=x"))
+    assert _refs(items) == ["docker.io/library/a:1"]
+    assert ("list_namespaces", "team=x") in api.selectors
+
+
+def test_selector_passed_to_every_namespaced_list():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("web", "a", image="web:1", labels={"app": "web"}), pod("db", "a", image="db:1")]},
+    )
+    items, _ = collect(api, Settings(selector="app=web"))
+    assert _refs(items) == ["docker.io/library/web:1"]
+    for method in ("list_pods", "list_deployments", "list_statefulsets", "list_cronjobs"):
+        assert (method, "app=web") in api.selectors
+
+
+def test_namespace_selector_with_forbidden_namespace_list_fails_closed():
+    api = FakeKubeApi(namespaces_forbidden=True, pods={"a": [pod("p", "a")]})
+    with pytest.raises(RuntimeError, match="--namespace-selector"):
+        collect(api, Settings(namespaces=["a"], namespace_selector="team=x"))
+
+
+def test_named_namespace_outside_selector_warns():
+    api = FakeKubeApi(
+        namespaces=[namespace("a", labels={"team": "x"}), namespace("b")],
+        pods={"a": [pod("p", "a", image="a:1")], "b": [pod("p", "b", image="b:1")]},
+    )
+    items, warnings = collect(api, Settings(namespaces=["a", "b"], namespace_selector="team=x"))
+    assert _refs(items) == ["docker.io/library/a:1"]
+    assert InventoryWarning("namespace b does not match --namespace-selector; not scanned", coverage=False) in warnings
+
+
+def test_invalid_selector_is_a_clear_error():
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
+    with pytest.raises(ValueError, match=r"invalid label selector 'app in \('"):
+        collect(api, Settings(selector="app in ("))

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     context: str | None = None
     namespaces: list[str] = []  # empty means all
     exclude_namespaces: list[str] = []
+    namespace_selector: str | None = None  # kubectl label-selector syntax, applied by the API server
+    selector: str | None = None  # pod and workload labels, same syntax
     cache_dir: Path = Field(default_factory=_default_cache_dir)
     data_dir: Path = Field(default_factory=_default_data_dir)
     trivy_path: Path | None = None
@@ -35,6 +37,13 @@ class Settings(BaseSettings):
     team_label: str = "kubedelos.io/team"
     # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.
     pkg_types: Annotated[tuple[str, ...], NoDecode] = ("library", "os")
+
+    @field_validator("namespace_selector", "selector", mode="before")
+    @classmethod
+    def _blank_selector_is_none(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
 
     @field_validator("pkg_types", mode="before")
     @classmethod

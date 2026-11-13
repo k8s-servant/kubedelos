@@ -75,7 +75,7 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
     class Recorder:
         def __getattr__(self, name):
             def call(*args, **kwargs):
-                seen.append((name, kwargs.get("_request_timeout")))
+                seen.append((name, kwargs))
                 return SimpleNamespace(items=[])
 
             return call
@@ -88,4 +88,12 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
     for fn in (real.list_pods, real.list_deployments, real.list_statefulsets, real.list_cronjobs):
         fn("ns")
     assert len(seen) == 6
-    assert all(timeout == kube_client.REQUEST_TIMEOUT for _, timeout in seen)
+    assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
+    assert all("label_selector" not in kw for _, kw in seen)
+
+    seen.clear()
+    real.list_namespaces(label_selector="team=x")
+    for fn in (real.list_pods, real.list_deployments, real.list_statefulsets, real.list_cronjobs):
+        fn("ns", label_selector="app=web")
+    assert [kw["label_selector"] for _, kw in seen] == ["team=x"] + ["app=web"] * 4
+    assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
