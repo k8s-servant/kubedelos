@@ -5,7 +5,7 @@ from kubedelos.config import Settings
 from kubedelos.kube.inventory import collect, parse_image_id
 from kubedelos.models import ImageRef
 
-DIGEST = "sha256:" + "a" * 8
+DIGEST = "sha256:" + "a" * 64
 ID = f"docker-pullable://nginx@{DIGEST}"
 
 
@@ -67,8 +67,12 @@ def test_inventory_includes_init_ephemeral_and_templates():
             ImageRef(ref="docker.io/library/nginx:latest", repo="docker.io/library/nginx", tag="latest"),
         ),
         (
-            "docker-pullable://nginx@sha256:abc",
-            ImageRef(ref="docker.io/library/nginx@sha256:abc", repo="docker.io/library/nginx", digest="sha256:abc"),
+            "docker-pullable://nginx@sha256:" + "c" * 64,
+            ImageRef(
+                ref="docker.io/library/nginx@sha256:" + "c" * 64,
+                repo="docker.io/library/nginx",
+                digest="sha256:" + "c" * 64,
+            ),
         ),
         ("nginx", ImageRef(ref="docker.io/library/nginx:latest", repo="docker.io/library/nginx", tag="latest")),
     ],
@@ -83,8 +87,8 @@ def test_inventory_imageid_variants(image_id, expected):
         ("bitnami/redis", "", "docker.io/bitnami/redis:latest", "latest"),
         ("ghcr.io/x/y:1", "", "ghcr.io/x/y:1", "1"),
         ("localhost:5000/app", "", "localhost:5000/app:latest", "latest"),
-        ("ghcr.io/x/y:1", "docker://ghcr.io/x/y@sha256:abc", "ghcr.io/x/y@sha256:abc", "1"),
-        ("nginx@sha256:abc", "", "docker.io/library/nginx@sha256:abc", None),
+        ("ghcr.io/x/y:1", "docker://ghcr.io/x/y@sha256:" + "c" * 64, "ghcr.io/x/y@sha256:" + "c" * 64, "1"),
+        ("nginx@sha256:" + "c" * 64, "", "docker.io/library/nginx@sha256:" + "c" * 64, None),
     ],
 )
 def test_parse_image_id_registries_and_tags(image, image_id, ref, tag):
@@ -189,3 +193,11 @@ def test_owner_from_namespace_annotation():
     for item in items:
         for w in item.workloads:
             assert (w.owner, w.team) == ("a@x.io", "pay")
+
+
+@pytest.mark.parametrize("bad", ["sha256:abc", "sha256:" + "C" * 64, "sha256:" + "c" * 63, "sha256:" + "c" * 65])
+def test_parse_image_id_malformed_digest_is_tag_ref(bad):
+    parsed = parse_image_id("nginx", f"docker-pullable://nginx@{bad}")
+    assert parsed.digest is None and parsed.ref == "docker.io/library/nginx:latest"
+    spec = parse_image_id(f"nginx@{bad}", "")
+    assert spec.digest is None and spec.ref == "docker.io/library/nginx:latest"

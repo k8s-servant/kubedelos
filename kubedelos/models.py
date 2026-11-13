@@ -1,9 +1,17 @@
 """Domain models shared by inventory, scanning and storage."""
 
+import re
 from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict
+
+_DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+
+
+def is_digest(value: str) -> bool:
+    """True only for a complete ``sha256:<64 lowercase hex>`` digest."""
+    return _DIGEST_RE.fullmatch(value) is not None
 
 
 class Severity(StrEnum):

@@ -137,3 +137,53 @@ def test_finish_run_rejects_bad_status(tmp_path, status):
     with pytest.raises(ValueError):
         repo.finish_run(run, status)
     assert repo.get_run(run)["status"] == "running"
+
+
+@pytest.mark.parametrize(
+    "key",
+    ["sha256:5000/app:latest", "sha256:abc", "reg.io/app@sha256:" + "A" * 64, "reg.io/app@sha256:" + "a" * 63,
+     "x@sha256:" + "a" * 64 + "/y"],
+)  # fmt: skip
+def test_non_digest_keys_not_cached(tmp_path, key):
+    repo = Repo(connect(tmp_path / "k.db"))
+    repo.put_cache(key, "linux/amd64", {"a": 1})
+    assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
+    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) is None
+
+
+@pytest.mark.parametrize("key", [DIGEST, "reg.io/app@" + DIGEST])
+def test_valid_digest_keys_cached(tmp_path, key):
+    repo = Repo(connect(tmp_path / "k.db"))
+    repo.put_cache(key, "linux/amd64", {"a": 1})
+    assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) == {"a": 1}
+
+
+def test_cache_miss_on_other_trivy_version(tmp_path):
+    repo = Repo(connect(tmp_path / "k.db"))
+    repo.put_cache(DIGEST, "linux/amd64", {"a": 1})
+    repo._conn.execute("UPDATE image_cache SET trivy_db_version = '0.0.1'")
+    assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
+
+
+def test_db_files_are_private(tmp_path):
+    path = tmp_path / "kubedelos" / "k.db"
+    conn = connect(path)
+    Repo(conn).start_run("c", "cli", "v")
+    for f in (path, path.with_name("k.db-wal"), path.with_name("k.db-shm")):
+        if f.exists():
+            assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
+    assert stat.S_IMODE(path.parent.stat().st_mode) == 0o700
+
+
+def test_existing_foreign_parent_dir_not_chmodded(tmp_path):
+    (tmp_path / "shared").mkdir(mode=0o755)
+    (tmp_path / "shared").chmod(0o755)
+    connect(tmp_path / "shared" / "k.db").close()
+    assert stat.S_IMODE((tmp_path / "shared").stat().st_mode) == 0o755
+
+
+def test_existing_kubedelos_dir_is_tightened(tmp_path):
+    (tmp_path / "kubedelos").mkdir()
+    (tmp_path / "kubedelos").chmod(0o755)
+    connect(tmp_path / "kubedelos" / "k.db").close()
+    assert stat.S_IMODE((tmp_path / "kubedelos").stat().st_mode) == 0o700

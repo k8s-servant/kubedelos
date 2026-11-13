@@ -1,5 +1,6 @@
 """Connection setup and schema migrations."""
 
+import os
 import sqlite3
 from pathlib import Path
 
@@ -87,14 +88,25 @@ def _migrate(conn: sqlite3.Connection) -> None:
 def connect(path: Path) -> sqlite3.Connection:
     """Open (creating if needed) the database at ``path`` and bring its schema up to date."""
     path = Path(path)
-    # The database holds owner emails, so keep it out of reach of other users.
-    # mkdir(parents=True, mode=...) applies the mode to the leaf only, so create each missing level.
-    for directory in reversed([d for d in path.parents if not d.exists()]):
+    # The database holds owner emails. Create each missing directory 0700 (mkdir(parents=True, mode=...)
+    # only applies the mode to the leaf). Tighten an existing parent only if it is our own data dir;
+    # never touch arbitrary user directories.
+    created = [d for d in path.parents if not d.exists()]
+    for directory in reversed(created):
         directory.mkdir(mode=0o700, exist_ok=True)
+    if path.parent.name == "kubedelos":
+        path.parent.chmod(0o700)
+    if not path.exists():
+        os.close(os.open(path, os.O_CREAT | os.O_WRONLY, 0o600))
+    path.chmod(0o600)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA foreign_keys = ON")
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.exists():
+            sidecar.chmod(0o600)
     _migrate(conn)
     return conn

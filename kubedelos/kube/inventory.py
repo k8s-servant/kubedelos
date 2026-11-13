@@ -8,7 +8,7 @@ from kubernetes.client.rest import ApiException
 from kubedelos.config import Settings
 from kubedelos.kube import owners
 from kubedelos.kube.client import KubeApi
-from kubedelos.models import ImageRef, InventoryItem, Workload
+from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest
 
 DEFAULT_PLATFORM = "linux/amd64"
 _PREFIXES = ("docker-pullable://", "docker://")
@@ -45,8 +45,11 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
     spec_repo, spec_tag, spec_digest = _split(image)
     if "@sha256:" in image_id:
         repo, _, digest = _split(image_id)
+    else:
+        repo, digest = "", None
+    if digest and is_digest(digest):
         return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=spec_tag, digest=digest)
-    if spec_digest:
+    if spec_digest and is_digest(spec_digest):
         return ImageRef(ref=f"{spec_repo}@{spec_digest}", repo=spec_repo, tag=spec_tag, digest=spec_digest)
     tag = spec_tag or "latest"
     return ImageRef(ref=f"{spec_repo}:{tag}", repo=spec_repo, tag=tag)

@@ -1,6 +1,7 @@
 """Reads and writes of scan runs, results and the scan cache."""
 
 import json
+import re
 import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -8,6 +9,8 @@ from datetime import UTC, datetime, timedelta
 from kubedelos.models import ImageResult, InventoryItem
 from kubedelos.trivy.pins import TRIVY_VERSION
 
+# A cache key is either a bare digest or "<repo>@<digest>"; anything else is a mutable tag ref.
+_DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}$")
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _RUN_FINDINGS_SQL = """
@@ -22,6 +25,10 @@ WHERE r.run_id = ?
 ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END DESC,
          w.namespace, w.name, f.vuln_id
 """
+
+
+def _is_digest_key(key: str) -> bool:
+    return _DIGEST_KEY_RE.search(key) is not None
 
 
 def _utcnow() -> datetime:
@@ -92,11 +99,12 @@ class Repo:
         return row[0]
 
     def get_cached(self, image_key: str, platform: str, max_age: timedelta) -> dict | None:
-        if "sha256:" not in image_key:
+        if not _is_digest_key(image_key):
             return None
         row = self._conn.execute(
-            "SELECT scanned_at, report_json FROM image_cache WHERE image_key = ? AND platform = ?",
-            (image_key, platform),
+            "SELECT scanned_at, report_json FROM image_cache WHERE image_key = ? AND platform = ?"
+            " AND trivy_db_version = ?",
+            (image_key, platform, TRIVY_VERSION),
         ).fetchone()
         if row is None:
             return None
@@ -105,7 +113,7 @@ class Repo:
         return json.loads(row["report_json"])
 
     def put_cache(self, image_key: str, platform: str, report: dict) -> None:
-        if "sha256:" not in image_key:
+        if not _is_digest_key(image_key):
             return
         with self._conn:
             self._conn.execute(
