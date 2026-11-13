@@ -1,4 +1,4 @@
-"""Orchestrates one scan run: inventory, cache lookup, Trivy server, parallel scans and persistence."""
+"""Orchestrates one scan run: inventory, cache lookup, the Trivy DB cache, parallel scans and persistence."""
 
 import threading
 from collections.abc import Callable
@@ -13,8 +13,9 @@ from kubedelos.models import ImageResult, InventoryItem, is_valid_ref
 from kubedelos.store import db
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import ensure_trivy
+from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
-from kubedelos.trivy.runner import TrivyServer, scan_many
+from kubedelos.trivy.runner import scan_many
 
 CUSTOM_TRIVY = "custom"
 
@@ -114,10 +115,10 @@ def _scan(
         if result.status == "ok" and use_cache:
             repo.put_cache(result.image.key, result.platform, result)
 
-    if not todo:  # everything cached or rejected: no Trivy server needed
+    if not todo:  # everything cached or rejected: no Trivy needed
         return errors
 
     trivy = ensure_trivy(settings)
-    with TrivyServer(trivy, settings.cache_dir) as server:
-        scan_many(todo, server=server, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
+    with TrivyCache(trivy, settings.cache_dir) as cache:
+        scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
     return errors

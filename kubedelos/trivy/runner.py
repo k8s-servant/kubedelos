@@ -1,26 +1,21 @@
-"""Run one local ``trivy server`` and parallel ``trivy image --server`` clients against it.
+"""Scan images in parallel, each with its own standalone ``trivy image`` process.
 
-The server owns the vulnerability DB, so it is downloaded once and parallel clients never fight over its BoltDB lock.
-Every Trivy process runs in its own process group so that a stop or a timeout also reaches its children.
+Parallel Trivy processes fight over the BoltDB lock of the on-disk layer cache, so every scan keeps that cache in
+memory (``--cache-backend memory``) and only reads the shared vulnerability and Java DBs, which
+:class:`kubedelos.trivy.cache.TrivyCache` keeps up to date under a file lock. Every Trivy process runs in its own
+process group so that a stop or a timeout also reaches its children.
 """
 
 import contextlib
 import json
 import os
-import secrets
 import signal
-import socket
 import subprocess
-import tempfile
 import threading
-import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
-from types import TracebackType
-from typing import IO, Literal, Self
-
-import httpx
+from typing import Literal
 
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem
@@ -28,9 +23,6 @@ from kubedelos.trivy.parse import parse_report
 
 ErrorKind = Literal["auth", "not_found", "timeout", "trivy", "unknown"]
 
-_READY_TIMEOUT_S = 30.0
-_STOP_GRACE_S = 5.0
-_DB_DOWNLOAD_TIMEOUT_S = 1800
 _TIMEOUT_GRACE_S = 30  # Trivy's own --timeout should fire first; the subprocess limit is the backstop
 _MAX_ERROR_CHARS = 2000
 
@@ -107,12 +99,9 @@ def _run_group(
     return proc.returncode, stdout, stderr
 
 
-def _short(text: str, token: str | None) -> str:
-    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters, with the server token masked."""
-    if token:
-        text = text.replace(token, "***")
-    text = text.strip()
-    return text[-_MAX_ERROR_CHARS:]
+def _short(text: str) -> str:
+    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters."""
+    return text.strip()[-_MAX_ERROR_CHARS:]
 
 
 def _classify(stderr: str) -> ErrorKind:
@@ -123,127 +112,20 @@ def _classify(stderr: str) -> ErrorKind:
     return "trivy"
 
 
-def _free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return sock.getsockname()[1]
-
-
-def _tail(stream: IO[bytes]) -> str:
-    stream.seek(0)
-    return stream.read().decode(errors="replace")[-_MAX_ERROR_CHARS:].strip()
-
-
-class TrivyServer:
-    """``trivy server`` on 127.0.0.1, guarded by a random token, for the lifetime of a ``with`` block."""
-
-    def __init__(self, trivy: Path, cache_dir: Path) -> None:
-        self.trivy = trivy
-        self.cache_dir = cache_dir / "trivy-cache"  # shared by the server and its clients
-        self.token = secrets.token_urlsafe(32)
-        self._url: str | None = None
-        self._proc: subprocess.Popen[bytes] | None = None
-        self._stderr: IO[bytes] | None = None
-
-    @property
-    def url(self) -> str:
-        if self._url is None:
-            raise RuntimeError("the Trivy server is not running")
-        return self._url
-
-    def __enter__(self) -> Self:
-        self.cache_dir.mkdir(parents=True, exist_ok=True)
-        for flag in ("--download-db-only", "--download-java-db-only"):
-            self._download(flag)
-        try:
-            self._start()
-            self._wait_ready()
-        except BaseException:
-            self._stop()
-            raise
-        return self
-
-    def __exit__(
-        self, exc_type: type[BaseException] | None, exc: BaseException | None, tb: TracebackType | None
-    ) -> None:
-        self._stop()
-
-    def _download(self, flag: str) -> None:
-        argv = [str(self.trivy), "image", flag, "--cache-dir", str(self.cache_dir)]
-        try:
-            code, _, stderr = _run_group(argv, dict(os.environ), _DB_DOWNLOAD_TIMEOUT_S)
-        except subprocess.TimeoutExpired:
-            raise RuntimeError(f"trivy image {flag} did not finish within {_DB_DOWNLOAD_TIMEOUT_S}s") from None
-        if code != 0:
-            raise RuntimeError(f"trivy image {flag} failed with exit code {code}: {_short(stderr, None)}")
-
-    def _start(self) -> None:
-        port = _free_port()
-        env = {**os.environ, "TRIVY_TOKEN": self.token}  # through the environment, so ps does not show it
-        # A file, not a pipe: nobody drains it while the server runs. Closed in _stop.
-        self._stderr = tempfile.TemporaryFile()  # noqa: SIM115
-        self._proc = subprocess.Popen(
-            [str(self.trivy), "server", "--listen", f"127.0.0.1:{port}", "--cache-dir", str(self.cache_dir)],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=self._stderr,
-            env=env,
-            start_new_session=True,
-        )
-        self._url = f"http://127.0.0.1:{port}"
-
-    def _wait_ready(self) -> None:
-        if self._proc is None or self._stderr is None or self._url is None:
-            raise RuntimeError("the Trivy server was not started")
-        deadline = time.monotonic() + _READY_TIMEOUT_S
-        with httpx.Client(trust_env=False, timeout=httpx.Timeout(1.0)) as client:
-            while True:
-                code = self._proc.poll()
-                if code is not None:
-                    raise RuntimeError(
-                        f"trivy server exited with code {code} before it was ready: "
-                        f"{_short(_tail(self._stderr), self.token)}"
-                    )
-                # Connection errors are expected until the server listens; keep polling until the deadline.
-                with contextlib.suppress(httpx.HTTPError):
-                    if client.get(f"{self._url}/healthz").status_code == 200:
-                        return
-                if time.monotonic() > deadline:
-                    raise RuntimeError(f"trivy server did not become ready within {_READY_TIMEOUT_S:.0f}s")
-                time.sleep(0.1)
-
-    def _stop(self) -> None:
-        proc, self._proc, self._url = self._proc, None, None
-        if proc is not None:
-            _kill_group(proc.pid, signal.SIGTERM)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=_STOP_GRACE_S)
-            # The leader may have exited on SIGTERM while children it started linger in the group.
-            _kill_group(proc.pid, signal.SIGKILL)
-            proc.wait()
-        if self._stderr is not None:
-            self._stderr.close()
-            self._stderr = None
-
-
 def scan_image(
     trivy: Path,
-    server_url: str,
     item_ref: ImageRef,
     platform: str,
     timeout_s: int,
     docker_config: Path | None = None,
     *,
-    token: str | None = None,
     cache_dir: Path | None = None,
     _groups: _ClientGroups | None = None,
 ) -> ImageResult:
-    """Scan one image through the Trivy server. Failures come back as ``status="error"``; this never raises."""
+    """Scan one image with a standalone Trivy. Failures come back as ``status="error"``; this never raises."""
     argv = [
         str(trivy),
         "image",
-        "--server",
-        server_url,
         "--format",
         "json",
         "--scanners",
@@ -255,6 +137,8 @@ def scan_image(
         "--quiet",
         "--timeout",
         f"{timeout_s}s",
+        "--cache-backend",
+        "memory",  # the on-disk layer cache is a BoltDB file that parallel scans would lock each other out of
     ]
     if cache_dir is not None:
         argv += ["--cache-dir", str(cache_dir)]
@@ -262,15 +146,11 @@ def scan_image(
     argv += ["--skip-db-update", "--skip-java-db-update", "--", item_ref.ref]
 
     env = dict(os.environ)
-    if token is not None:
-        env["TRIVY_TOKEN"] = token
     if docker_config is not None:
         env["DOCKER_CONFIG"] = str(docker_config)
 
     def error(kind: ErrorKind, message: str) -> ImageResult:
-        return ImageResult(
-            image=item_ref, platform=platform, status="error", error_kind=kind, error=_short(message, token)
-        )
+        return ImageResult(image=item_ref, platform=platform, status="error", error_kind=kind, error=_short(message))
 
     limit = timeout_s + _TIMEOUT_GRACE_S
     try:
@@ -294,7 +174,7 @@ def scan_image(
 def scan_many(
     items: list[InventoryItem],
     *,
-    server: TrivyServer,
+    cache_dir: Path,
     trivy: Path,
     settings: Settings,
     on_result: Callable[[ImageResult], None],
@@ -309,17 +189,14 @@ def scan_many(
         return
     workers = settings.parallelism
     groups = _ClientGroups()
-    url, token, cache_dir = server.url, server.token, server.cache_dir
 
     def work(item: InventoryItem) -> ImageResult:
         try:
             return scan_image(
                 trivy,
-                url,
                 item.image,
                 item.platform,
                 settings.scan_timeout_s,
-                token=token,
                 cache_dir=cache_dir,
                 _groups=groups,
             )
@@ -329,7 +206,7 @@ def scan_many(
                 platform=item.platform,
                 status="error",
                 error_kind="unknown",
-                error=_short(f"{type(exc).__name__}: {exc}", token),
+                error=_short(f"{type(exc).__name__}: {exc}"),
             )
 
     remaining = iter(items)

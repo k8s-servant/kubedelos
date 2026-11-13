@@ -28,14 +28,14 @@ def _settings(tmp_path):
     return Settings(namespaces=["default"], data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
 
 
-class FakeServer:
+class FakeCache:
     started = 0
 
     def __init__(self, trivy, cache_dir):
-        pass
+        self.dir = cache_dir / "trivy-cache"
 
     def __enter__(self):
-        FakeServer.started += 1
+        FakeCache.started += 1
         return self
 
     def __exit__(self, *exc):
@@ -44,9 +44,9 @@ class FakeServer:
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
-    FakeServer.started = 0
+    FakeCache.started = 0
     calls: list[list] = []
-    monkeypatch.setattr(service, "TrivyServer", FakeServer)
+    monkeypatch.setattr(service, "TrivyCache", FakeCache)
     monkeypatch.setattr(service, "ensure_trivy", lambda settings: Path("/fake/trivy"))
     conn = connect(tmp_path / "t.db")
     yield _settings(tmp_path), Repo(conn), calls
@@ -54,7 +54,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _fake_scan(calls, fail_ref=None):
-    def scan_many(items, *, server, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
         calls.append(list(items))
         for item in items:
             if fail_ref and item.image.ref == fail_ref:
@@ -91,10 +91,10 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     settings, repo, calls = env
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     service.run_scan(settings, api=_api(), repo=repo)
-    assert FakeServer.started == 1
+    assert FakeCache.started == 1
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
-    assert len(calls) == 1 and FakeServer.started == 1  # nothing left to scan: no scan_many, no server
+    assert len(calls) == 1 and FakeCache.started == 1  # nothing left to scan: no scan_many, no Trivy
     assert _status(repo, out.run_id) == "ok"
     assert len(repo.run_findings(out.run_id)) == 2  # stored findings kept
     assert (
@@ -110,7 +110,7 @@ def test_service_cancel(env, monkeypatch):
     settings, repo, _calls = env
     cancel = threading.Event()
 
-    def scan_many(items, *, server, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
         cancel.set()
 
     monkeypatch.setattr(service, "scan_many", scan_many)
@@ -173,13 +173,13 @@ def test_service_rejects_invalid_refs(env, monkeypatch, bad):
     assert _status(repo, out.run_id) == "partial"
 
 
-def test_service_skips_server_when_only_invalid_refs(env, monkeypatch):
+def test_service_skips_trivy_when_only_invalid_refs(env, monkeypatch):
     settings, repo, calls = env
     evil = InventoryItem(image=ImageRef(ref="-oyaml", repo="-oyaml"), platform="linux/amd64")
     monkeypatch.setattr(service, "collect", lambda api, settings: ([evil], []))
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings, api=_api(), repo=repo)
-    assert calls == [] and FakeServer.started == 0
+    assert calls == [] and FakeCache.started == 0
     assert _status(repo, out.run_id) == "partial"
 
 
