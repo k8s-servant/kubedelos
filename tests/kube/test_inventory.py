@@ -71,6 +71,7 @@ def test_inventory_includes_init_ephemeral_and_templates():
             ImageRef(
                 ref="docker.io/library/nginx@sha256:" + "c" * 64,
                 repo="docker.io/library/nginx",
+                tag="latest",  # an untagged spec image is pulled as :latest
                 digest="sha256:" + "c" * 64,
             ),
         ),
@@ -338,3 +339,15 @@ def test_no_exclusion_no_warning():
     api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
     _, warnings = collect(api, Settings())
     assert not any("--exclude-image" in w.text for w in warnings)
+
+
+@pytest.mark.parametrize("pattern", ["nginx:*", "nginx:latest"])
+def test_exclude_image_matches_untagged_running_pod(pattern):
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a", image="nginx", image_id=ID)]})
+    assert collect(api, Settings(exclude_images=[pattern]))[0] == []
+
+
+def test_untagged_running_image_records_latest_like_its_template():
+    assert parse_image_id("nginx", ID).tag == "latest"
+    assert parse_image_id("nginx", "").tag == "latest"
+    assert parse_image_id(f"nginx@{DIGEST}", ID).tag is None  # pinned by digest only: no tag was involved

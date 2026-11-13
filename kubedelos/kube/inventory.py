@@ -67,7 +67,9 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
         if repo != spec_repo:  # e.g. kind's "import-<date>" repo for a locally loaded image: not this image's digest
             repo, digest = "", None
     if digest and is_digest(digest):
-        return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=spec_tag, digest=digest)
+        # An untagged spec image was pulled as :latest; record that, as the template path does, so tag patterns match.
+        tag = spec_tag or (None if spec_digest else "latest")
+        return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=tag, digest=digest)
     if spec_digest and is_digest(spec_digest):
         return ImageRef(ref=f"{spec_repo}@{spec_digest}", repo=spec_repo, tag=spec_tag, digest=spec_digest)
     tag = spec_tag or "latest"
