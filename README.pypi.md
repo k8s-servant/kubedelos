@@ -24,7 +24,7 @@ from the `kubedelos.io/owner-email` namespace annotation.
 | 0 | Scan finished and no `--fail-on` threshold was reached |
 | 1 | A finding at or above the `--fail-on` severity was found |
 | 2 | With `--fail-on`: an image failed to scan, or a namespace or resource could not be listed so images may be missing; or a fatal error |
-| 130 | Cancelled (Ctrl-C, SIGTERM or SIGHUP). The Trivy server is stopped and the run is recorded as cancelled |
+| 130 | Cancelled (Ctrl-C, SIGTERM or SIGHUP). Running Trivy scans are stopped and the run is recorded as cancelled |
 
 With `--fail-on` unset (or `none`), image scan errors are only reported on stderr and the exit code stays 0, so check stderr before treating 0 as fully scanned. Each failed image gets one line there, with its ref, platform, error kind (`auth`, `not_found`, `timeout`, `trivy` or `unknown`) and the first line of the error.
 
@@ -60,7 +60,7 @@ Inside a pod with no kubeconfig, kubedelos uses the in-cluster service account. 
 
 ## Trivy
 
-kubedelos runs a pinned Trivy release (v0.76.1) in server mode. `kubedelos trivy install` downloads it
+kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. `kubedelos trivy install` downloads it
 and checks it against an embedded SHA-256. It never resolves "latest". Use `--trivy-path` to bring your own binary. Results from your own binary are
 not cached and the run records its Trivy version as `custom`.
 
