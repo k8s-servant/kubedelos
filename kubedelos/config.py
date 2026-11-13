@@ -1,12 +1,14 @@
 """Runtime settings, loaded from ``KUBEDELOS_*`` environment variables."""
 
 from pathlib import Path
+from typing import Annotated, Any
 
 import platformdirs
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 APP_NAME = "kubedelos"
+PKG_TYPES = frozenset({"os", "library"})  # Trivy's --pkg-types values kubedelos supports
 
 
 def _default_cache_dir() -> Path:
@@ -31,6 +33,23 @@ class Settings(BaseSettings):
     scan_timeout_s: int = 600
     owner_annotation: str = "kubedelos.io/owner-email"
     team_label: str = "kubedelos.io/team"
+    # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.
+    pkg_types: Annotated[tuple[str, ...], NoDecode] = ("library", "os")
+
+    @field_validator("pkg_types", mode="before")
+    @classmethod
+    def _normalise_pkg_types(cls, value: Any) -> tuple[str, ...]:
+        """Accept ``"os,library"`` or a list, case- and order-insensitively, so one scan level has one spelling."""
+        items = value.split(",") if isinstance(value, str) else list(value)
+        names = [str(item).strip().lower() for item in items]
+        if not names or any(name not in PKG_TYPES for name in names):
+            raise ValueError(f"must be a comma-separated list of {', '.join(sorted(PKG_TYPES))}")
+        return tuple(sorted(set(names)))
+
+    @property
+    def scan_level(self) -> str:
+        """The package types as one normalised string, e.g. ``library,os``: part of the cache key and of each run."""
+        return ",".join(self.pkg_types)
 
     @property
     def db_path(self) -> Path:

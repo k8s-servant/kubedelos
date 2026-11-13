@@ -96,6 +96,7 @@ class Finding(BaseModel):
     primary_url: str | None = None
     target: str
     pkg_type: str
+    pkg_class: Literal["os", "library"] | None = None  # from Trivy's result Class; None for unknown or old rows
 
     @property
     def fixable(self) -> bool:

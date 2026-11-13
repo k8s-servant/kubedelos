@@ -75,3 +75,20 @@ def test_parse_unknown_severity_maps_to_unknown():
 def test_parse_result_without_vulnerabilities():
     data = {"Results": [{"Target": "a", "Type": "x", "Vulnerabilities": None}, {"Target": "b", "Type": "y"}]}
     assert parse_report(data) == ([], None)
+
+
+def _report(cls):
+    result = {"Target": "app", "Type": "jar", "Vulnerabilities": [
+        {"VulnerabilityID": "CVE-1", "PkgName": "p", "InstalledVersion": "1", "Severity": "HIGH"}
+    ]}  # fmt: skip
+    if cls is not None:
+        result["Class"] = cls
+    return {"Results": [result]}
+
+
+def test_parse_records_pkg_class():
+    findings, _ = parse_report(load("alpine.json"))
+    assert {f.pkg_class for f in findings} == {"os"}
+    assert parse_report(_report("lang-pkgs"))[0][0].pkg_class == "library"
+    assert parse_report(_report(None))[0][0].pkg_class is None
+    assert parse_report(_report("custom"))[0][0].pkg_class is None
