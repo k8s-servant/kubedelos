@@ -49,6 +49,7 @@ include = ["kubedelos*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 markers = ["e2e: needs kind + network"]
 addopts = "-m 'not e2e'"
 

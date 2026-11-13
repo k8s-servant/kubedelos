@@ -8,6 +8,7 @@ from typing import Any
 
 from rich.console import Console
 from rich.table import Table
+from rich.text import Text
 
 from kubedelos import __version__
 
@@ -30,7 +31,7 @@ def render_table(rows: Sequence[Row]) -> str:
     for col in ("Namespace/Workload", "Image", "Vulnerability", "Severity", "Installed", "Fixed"):
         table.add_column(col, overflow="fold")
     for r in rows:
-        table.add_row(
+        cells = (
             f"{r['namespace']}/{r['workload']}",
             r["image"],
             r["vuln_id"],
@@ -38,6 +39,9 @@ def render_table(rows: Sequence[Row]) -> str:
             r["installed_version"],
             r["fixed_version"] or "",
         )
+        table.add_row(
+            *(Text(c) for c in cells)
+        )  # Text, not str: cluster-controlled values must not be parsed as markup
     buf = io.StringIO()
     Console(file=buf, color_system=None, force_terminal=False, width=160).print(table)
     return buf.getvalue()

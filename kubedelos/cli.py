@@ -135,7 +135,6 @@ def scan(
             raise RuntimeError("scan run failed")
         findings = repo.run_findings(outcome.run_id)
     except KeyboardInterrupt:
-        cancel.set()
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None
     except Exception as exc:
@@ -150,7 +149,11 @@ def scan(
 
     rendered = RENDERERS[output.value]([r for r in findings if r["severity"] in wanted])
     if output_file is not None:
-        output_file.write_text(rendered)
+        try:
+            output_file.write_text(rendered)
+        except OSError as exc:
+            typer.echo(f"error: cannot write {output_file}: {exc.strerror or exc}", err=True)
+            raise typer.Exit(2) from exc
     else:
         typer.echo(rendered, nl=not rendered.endswith("\n"))
 

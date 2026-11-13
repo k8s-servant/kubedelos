@@ -72,3 +72,8 @@ def test_render_table_plain_and_empty():
     out = render_table(ROWS)
     assert "CVE-1" in out and "prod/api" in out and "\x1b" not in out
     assert "CVE" not in render_table([])
+
+
+def test_render_table_does_not_parse_markup():
+    out = render_table([_row(image="reg.io/[bold]x[/bold]:1", installed_version="[/x]")])
+    assert "[bold]x[/bold]" in out and "[/x]" in out

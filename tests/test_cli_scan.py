@@ -130,3 +130,10 @@ def test_warnings_and_output_file(make_run, tmp_path):
     assert "warning: namespace x forbidden" in r.stderr
     assert json.loads(out.read_text())["version"] == "2.1.0"
     assert r.stdout == ""
+
+
+def test_unwritable_output_file_is_fatal_exit_2(make_run, tmp_path):
+    make_run([_finding("CVE-1", Severity.CRITICAL)])
+    r = _run("-o", "json", "--output-file", str(tmp_path / "missing-dir" / "o.json"), "--fail-on", "high")
+    assert r.exit_code == 2
+    assert "error: cannot write" in r.stderr and "Traceback" not in r.stderr
