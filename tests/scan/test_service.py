@@ -222,3 +222,12 @@ def test_service_uses_scan_level_for_cache(env, monkeypatch):
     assert FakeCache.java_db == [False, True]
     assert repo.get_run(first.run_id)["pkg_types"] == "os"
     assert repo.get_run(second.run_id)["pkg_types"] == "library,os"
+
+
+def test_service_records_scope(env, monkeypatch):
+    import json
+
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings.model_copy(update={"selector": "app=web"}), api=_api(), repo=repo)
+    assert json.loads(repo.get_run(out.run_id)["scope"])["selector"] == "app=web"

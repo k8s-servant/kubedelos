@@ -56,6 +56,7 @@ def run_scan(
         trigger,
         CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
         scan_level=settings.scan_level,
+        scope=settings.scope,
     )
     try:
         errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)

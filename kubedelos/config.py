@@ -1,5 +1,6 @@
 """Runtime settings, loaded from ``KUBEDELOS_*`` environment variables."""
 
+import json
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -60,6 +61,18 @@ class Settings(BaseSettings):
     def scan_level(self) -> str:
         """The package types as one normalised string, e.g. ``library,os``: part of the cache key and of each run."""
         return ",".join(self.pkg_types)
+
+    @property
+    def scope(self) -> str:
+        """What a run covers, as canonical JSON: equal scopes mean comparable runs (with the same scan level)."""
+        scope = {
+            "namespaces": sorted(self.namespaces),
+            "exclude_namespaces": sorted(self.exclude_namespaces),
+            "namespace_selector": self.namespace_selector,
+            "selector": self.selector,
+            "exclude_images": sorted(self.exclude_images),
+        }
+        return json.dumps(scope, sort_keys=True, separators=(",", ":"))
 
     @property
     def db_path(self) -> Path:

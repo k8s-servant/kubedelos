@@ -350,3 +350,18 @@ def test_cli_scan_bad_env_value_names_the_variable(make_run, monkeypatch):
     assert r.exit_code == 2
     assert "error: KUBEDELOS_PKG_TYPES:" in r.stderr
     assert "--pkg-types" not in r.stderr
+
+
+def test_cli_scan_scope_flags(make_run):
+    make_run([])
+    r = _run("--namespace-selector", "team=x", "-l", "app=web", "--exclude-image", "a/*", "--exclude-image", "b:*")
+    assert r.exit_code == 0, r.output
+    s = make_run.seen["settings"]
+    assert (s.namespace_selector, s.selector, s.exclude_images) == ("team=x", "app=web", ["a/*", "b:*"])
+
+
+def test_cli_scan_invalid_selector_exits_2(make_run):
+    make_run([], raises=ValueError("invalid label selector 'x(': unable to parse requirement"))
+    r = _run("-l", "x(")
+    assert r.exit_code == 2
+    assert "invalid label selector" in r.stderr

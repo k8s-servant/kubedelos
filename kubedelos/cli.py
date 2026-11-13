@@ -164,6 +164,20 @@ def scan(
         list[str] | None, typer.Option("--namespace", "-n", help="Namespace to scan (repeatable).")
     ] = None,
     exclude_namespace: Annotated[list[str] | None, typer.Option(help="Namespace to skip (repeatable).")] = None,
+    namespace_selector: Annotated[
+        str | None,
+        typer.Option(help="Only scan namespaces matching this label selector, e.g. team=payments,env!=dev."),
+    ] = None,
+    selector: Annotated[
+        str | None,
+        typer.Option(
+            "--selector", "-l", help="Only scan pods and workloads matching this label selector, e.g. app=web."
+        ),
+    ] = None,
+    exclude_image: Annotated[
+        list[str] | None,
+        typer.Option(help="Skip images matching this glob, e.g. registry.k8s.io/* or nginx:* (repeatable)."),
+    ] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format.")] = OutputFormat.table,
     severity: Annotated[
         str, typer.Option(help="Comma-separated severities to output. Does not limit what --fail-on checks.")
@@ -202,6 +216,9 @@ def scan(
         "kubeconfig": kubeconfig,
         "namespaces": namespace,
         "exclude_namespaces": exclude_namespace,
+        "namespace_selector": namespace_selector,
+        "selector": selector,
+        "exclude_images": exclude_image,
         "parallelism": parallelism,
         "pkg_types": pkg_types,
         "trivy_path": trivy_path,

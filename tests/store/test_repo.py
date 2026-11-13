@@ -274,6 +274,12 @@ def test_migration_from_v1_keeps_runs_drops_cache(tmp_path):
     old.close()
     conn = connect(path)
     _OPEN.append(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 2
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     assert [tuple(r) for r in conn.execute("SELECT context, pkg_types FROM scan_run")] == [("ctx", None)]
     assert conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
+
+
+def test_run_records_scope(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope='{"x":1}')
+    assert repo.get_run(run)["scope"] == '{"x":1}'

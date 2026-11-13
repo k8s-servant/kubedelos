@@ -48,12 +48,14 @@ class Repo:
     def _now(self) -> str:
         return self._clock().isoformat()
 
-    def start_run(self, context: str | None, trigger: str | None, trivy_version: str, *, scan_level: str) -> int:
+    def start_run(
+        self, context: str | None, trigger: str | None, trivy_version: str, *, scan_level: str, scope: str | None = None
+    ) -> int:
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types)"
-                " VALUES (?, 'running', ?, ?, ?, ?)",
-                (self._now(), context, trigger, trivy_version, scan_level),
+                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope)"
+                " VALUES (?, 'running', ?, ?, ?, ?, ?)",
+                (self._now(), context, trigger, trivy_version, scan_level, scope),
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
 

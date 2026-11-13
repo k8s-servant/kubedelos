@@ -85,6 +85,10 @@ MIGRATIONS: list[str] = [
         PRIMARY KEY (image_key, platform, scan_level)
     );
     """,
+    # 3: what each run covered (namespaces, selectors, exclusions) as canonical JSON, so runs compare like with like.
+    """
+    ALTER TABLE scan_run ADD COLUMN scope TEXT;
+    """,
 ]
 
 
