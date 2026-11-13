@@ -236,14 +236,25 @@ def test_sigterm_and_sighup_become_keyboard_interrupt_and_handlers_are_restored(
 
 
 _SIGTERM_SCRIPT = """
-import os, signal, sys, time
+import os, signal, sys, threading, time
 from pathlib import Path
 from kubedelos import cli
-from kubedelos.trivy.runner import TrivyServer
+from kubedelos.config import Settings
+from kubedelos.models import ImageRef, InventoryItem
+from kubedelos.trivy.runner import scan_many
+trivy, tmp = Path(sys.argv[1]), Path(sys.argv[2])
+pid_file = tmp / "scan.pid"
+def kill_once_scanning():
+    while not pid_file.exists():
+        time.sleep(0.05)
+    os.kill(os.getpid(), signal.SIGTERM)
+threading.Thread(target=kill_once_scanning, daemon=True).start()
+items = [InventoryItem(image=ImageRef(ref=f"registry.example/app:{i}", repo="registry.example/app", tag=str(i)),
+                       platform="linux/amd64") for i in range(2)]
 try:
-    with cli._signals_as_interrupt(), TrivyServer(Path(sys.argv[1]), Path(sys.argv[2])):
-        os.kill(os.getpid(), signal.SIGTERM)
-        time.sleep(30)
+    with cli._signals_as_interrupt():
+        scan_many(items, cache_dir=tmp, trivy=trivy, settings=Settings(cache_dir=tmp, parallelism=1),
+                  on_result=lambda r: None, cancel=threading.Event())
 except KeyboardInterrupt:
     sys.exit(130)
 """
@@ -259,9 +270,14 @@ def _gone(pid):
     return False
 
 
-def test_sigterm_stops_the_trivy_server(tmp_path):
-    pid_file, child_file = tmp_path / "server.pid", tmp_path / "child.pid"
-    env = {**os.environ, "FAKE_TRIVY_PID_FILE": str(pid_file), "FAKE_TRIVY_CHILD_PID_FILE": str(child_file)}
+def test_sigterm_stops_running_scans(tmp_path):
+    pid_file, child_file = tmp_path / "scan.pid", tmp_path / "child.pid"
+    env = {
+        **os.environ,
+        "FAKE_TRIVY_PID_FILE": str(pid_file),
+        "FAKE_TRIVY_CHILD_PID_FILE": str(child_file),
+        "FAKE_TRIVY_SLEEP": "30",
+    }
     proc = subprocess.run(
         [sys.executable, "-c", _SIGTERM_SCRIPT, str(FAKE_TRIVY), str(tmp_path)], env=env, timeout=60, check=False
     )

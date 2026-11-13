@@ -61,7 +61,7 @@ class TrivyCache:
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"trivy image {flag} did not finish within {_DB_DOWNLOAD_TIMEOUT_S}s") from None
         if code != 0:
-            raise RuntimeError(f"trivy image {flag} failed with exit code {code}: {_short(stderr, None)}")
+            raise RuntimeError(f"trivy image {flag} failed with exit code {code}: {_short(stderr)}")
 
     def _close(self) -> None:
         fd, self._fd = self._fd, None
