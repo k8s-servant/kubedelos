@@ -5,9 +5,10 @@ name: Claude
 # trusted authors (owner, org members, collaborators) can trigger it, because the job
 # holds write permissions and the Claude credential.
 #
-# Claude may run pytest and ruff so it checks its work before pushing. Running tests
-# executes repository code, so this is allowed only when every human in the thread is a
-# trusted author and the code comes from this repository (not a fork).
+# Claude runs only when every human in the thread is a trusted author and the code comes
+# from this repository (not a fork). Outsider-written text could steer a model holding a
+# write token, so on any other thread the job skips Claude and says why in the run log.
+# On a trusted thread Claude may run pytest and ruff to check its work before pushing.
 on:
   issue_comment: # zizmor: ignore[dangerous-triggers] gated on trusted author_association below
     types: [created]
@@ -46,9 +47,7 @@ jobs:
         with:
           fetch-depth: 1
           persist-credentials: false
-      # Tests are allowed only for issues and PRs written by trusted authors, and never
-      # for fork PRs. Outsider-written text could steer Claude into running hostile code.
-      - name: Decide whether Claude may run the test suite
+      - name: Decide whether the thread is trusted
         id: trust
         env:
           GH_TOKEN: ${{ github.token }}
@@ -61,7 +60,11 @@ jobs:
         run: |
           case "${AUTHOR_ASSOCIATION}" in
             OWNER|MEMBER|COLLABORATOR) ;;
-            *) echo "run_tests=false" >> "${GITHUB_OUTPUT}"; exit 0 ;;
+            *)
+              echo "::notice::Skipping Claude: #${NUMBER} was opened by someone outside the org."
+              echo "trusted=false" >> "${GITHUB_OUTPUT}"
+              exit 0
+              ;;
           esac
           is_pr=false
           head="${PR_HEAD_REPO}"
@@ -88,29 +91,30 @@ jobs:
           fi
           untrusted=$(printf '%s\n' "${who}" | grep -vcE '^(OWNER|MEMBER|COLLABORATOR)?$' || true)
           if [ "${untrusted}" != 0 ]; then
-            echo "run_tests=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Skipping Claude: someone outside the org commented on #${NUMBER}."
+            echo "trusted=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
           # A PR whose head repo is unknown (deleted fork) counts as untrusted.
           if [ "${is_pr}" = false ] || [ "${head}" = "${REPO}" ]; then
-            echo "run_tests=true" >> "${GITHUB_OUTPUT}"
+            echo "trusted=true" >> "${GITHUB_OUTPUT}"
           else
-            echo "run_tests=false" >> "${GITHUB_OUTPUT}"
+            echo "::notice::Skipping Claude: #${NUMBER} is a fork PR."
+            echo "trusted=false" >> "${GITHUB_OUTPUT}"
           fi
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
-        if: steps.trust.outputs.run_tests == 'true'
+        if: steps.trust.outputs.trusted == 'true'
         with:
           python-version: "3.12"
       - name: Install dev dependencies
-        if: steps.trust.outputs.run_tests == 'true'
+        if: steps.trust.outputs.trusted == 'true'
         run: python -m venv .venv && .venv/bin/pip install --quiet -e '.[dev]'
       - uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064 # v1.0.265
+        if: steps.trust.outputs.trusted == 'true'
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           additional_permissions: |
             actions: read
-          # pytest still runs repository code by design; the trust step above gates it.
+          # pytest runs repository code by design; the trust step above gates it.
           claude_args: >-
-            ${{ steps.trust.outputs.run_tests == 'true'
-            && '--allowedTools "Bash(.venv/bin/pytest:*),Bash(.venv/bin/ruff check:*),Bash(.venv/bin/ruff format:*)"'
-            || '' }}
+            --allowedTools "Bash(.venv/bin/pytest:*),Bash(.venv/bin/ruff check:*),Bash(.venv/bin/ruff format:*)"
