@@ -18,7 +18,8 @@
   ],
   "packages": {
     ".": {
-      "package-name": "kubedelos"
+      "package-name": "kubedelos",
+      "initial-version": "0.1.0"
     }
   }
 }
