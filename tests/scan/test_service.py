@@ -141,3 +141,14 @@ def test_service_failed_on_exception(env, monkeypatch):
     with pytest.raises(RuntimeError, match="boom"):
         service.run_scan(settings, api=_api(), repo=repo)
     assert _status(repo, repo.latest_run_id()) == "failed"
+
+
+def test_cached_result_stores_current_ref(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    pods = [pod("p1", image="reg.io/a:2", image_id=f"reg.io/a@{D1}", container="c1")]
+    api = FakeKubeApi(namespaces=[V1Namespace(metadata=V1ObjectMeta(name="default"))], pods={"default": pods})
+    out = service.run_scan(settings, api=api, repo=repo)
+    row = repo._conn.execute("SELECT ref, tag, status FROM image_result WHERE run_id = ?", (out.run_id,)).fetchone()
+    assert (row["ref"], row["tag"], row["status"]) == (f"reg.io/a@{D1}", "2", "cached")
