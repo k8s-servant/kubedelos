@@ -209,3 +209,11 @@ def test_library_run_waits_then_downloads_java_db_behind_os_only_run(tmp_path, m
     worker.join(5)
     assert "--download-java-db-only" in _downloads(log)
     assert "waiting for another kubedelos run" in capfd.readouterr().err
+
+
+def test_no_wait_message_when_nobody_else_holds_the_cache(tmp_path, capfd):
+    (tmp_path / "trivy-cache" / "db").mkdir(parents=True)
+    (tmp_path / "trivy-cache" / "db" / "metadata.json").write_text("{}")  # an os-only run left no java-db
+    with TrivyCache(FAKE_TRIVY, tmp_path, java_db=True):
+        pass
+    assert "waiting" not in capfd.readouterr().err

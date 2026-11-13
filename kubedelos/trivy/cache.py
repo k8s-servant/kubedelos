@@ -48,9 +48,12 @@ class TrivyCache:
                     return self
                 # That run's download failed, it was killed, or it scans OS packages only and never fetched the Java
                 # DB: wait for the readers to finish, then download. Say so, since the wait can last a whole scan.
-                sys.stderr.write("waiting for another kubedelos run to finish with the Trivy DB cache...\n")
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
-                fcntl.flock(self._fd, fcntl.LOCK_EX)
+                try:
+                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:  # only say it when it really waits
+                    sys.stderr.write("waiting for another kubedelos run to finish with the Trivy DB cache...\n")
+                    fcntl.flock(self._fd, fcntl.LOCK_EX)
             for flag in ("--download-db-only", "--download-java-db-only")[: 2 if self.java_db else 1]:
                 self._download(flag)
             fcntl.flock(self._fd, fcntl.LOCK_SH)
