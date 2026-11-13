@@ -62,6 +62,14 @@ def test_runner_builds_expected_args(tmp_path, monkeypatch):
     assert result.platform == "linux/arm64"
 
 
+def test_runner_inherits_docker_config_from_env(tmp_path, monkeypatch):
+    record = tmp_path / "record.json"
+    monkeypatch.setenv("FAKE_TRIVY_RECORD", str(record))
+    monkeypatch.setenv("DOCKER_CONFIG", "/x/docker")  # e.g. a CI job's own login
+    scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
+    assert json.loads(record.read_text())["FakeEnv"]["DOCKER_CONFIG"] == "/x/docker"
+
+
 def test_runner_sets_docker_config_only_when_given(tmp_path, monkeypatch):
     record = tmp_path / "record.json"
     monkeypatch.setenv("FAKE_TRIVY_RECORD", str(record))

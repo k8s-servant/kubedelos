@@ -64,6 +64,11 @@ class ImageRef(BaseModel):
         return self.digest or self.ref
 
 
+def registry_host(image: ImageRef) -> str:
+    """The registry host of ``image``, e.g. ``docker.io`` or ``registry.example:5000``, from its normalised repo."""
+    return image.repo.split("/", 1)[0]
+
+
 class Workload(BaseModel):
     model_config = ConfigDict(frozen=True)
 

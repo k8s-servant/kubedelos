@@ -1,6 +1,12 @@
+import os
 import pathlib
+import signal
+import subprocess
+import sys
+import time
 import tomllib
 
+import pytest
 from typer.testing import CliRunner
 
 from kubedelos.cli import app
@@ -15,3 +21,80 @@ def test_version_prints_package_version():
 def test_kubedelos_is_the_only_console_script():
     scripts = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["scripts"]
     assert scripts == {"kubedelos": "kubedelos.cli:app"}
+
+
+FAKE_TRIVY = pathlib.Path(__file__).parent / "trivy" / "fake_trivy.py"
+
+
+@pytest.fixture
+def fake_env(tmp_path, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("KUBEDELOS_DATA_DIR", str(tmp_path / "data"))
+    monkeypatch.setenv("FAKE_TRIVY_RECORD", str(tmp_path / "record.json"))
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(tmp_path / "downloads.jsonl"))
+    return tmp_path
+
+
+def _registry_test(*args: str):
+    return CliRunner().invoke(app, ["registry", "test", "--trivy-path", str(FAKE_TRIVY), *args])
+
+
+def test_registry_test_ok(fake_env):
+    r = _registry_test("nginx:1.19")
+    assert r.exit_code == 0, r.output
+    assert r.stdout.startswith("ok: docker.io/library/nginx:1.19 is readable")
+
+
+def test_registry_test_auth_failure_prints_hint(fake_env, monkeypatch):
+    monkeypatch.setenv("FAKE_TRIVY_STDERR", "UNAUTHORIZED: authentication required")
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    r = _registry_test("registry.example/team/app:1")
+    assert r.exit_code == 1
+    assert "authentication failed on registry.example" in r.stderr
+    assert "hint: log in to registry.example first" in r.stderr
+
+
+def test_registry_test_not_found(fake_env, monkeypatch):
+    monkeypatch.setenv("FAKE_TRIVY_STDERR", "MANIFEST_UNKNOWN: manifest unknown")
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    r = _registry_test("registry.example/team/app:1")
+    assert r.exit_code == 1
+    assert "not found on registry.example" in r.stderr
+
+
+def test_registry_test_rejects_invalid_ref(fake_env):
+    r = _registry_test("--", "-oyaml")
+    assert r.exit_code == 2
+    assert "invalid image reference" in r.stderr
+    assert not (fake_env / "record.json").exists()
+    assert not (fake_env / "downloads.jsonl").exists()
+
+
+def _gone(pid: int) -> bool:
+    for _ in range(50):
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return True
+        time.sleep(0.1)
+    return False
+
+
+def test_registry_test_cancel_exits_130(fake_env):
+    pid_file = fake_env / "scan.pid"
+    env = {**os.environ, "FAKE_TRIVY_SLEEP": "30", "FAKE_TRIVY_PID_FILE": str(pid_file)}
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "from kubedelos.cli import app; app(prog_name='kubedelos')",
+         "registry", "test", "--trivy-path", str(FAKE_TRIVY), "nginx:1.19"],
+        env=env,
+    )  # fmt: skip
+    try:
+        for _ in range(100):
+            if pid_file.exists():
+                break
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGTERM)
+        assert proc.wait(timeout=10) == 130
+    finally:
+        proc.kill()
+    assert _gone(int(pid_file.read_text()))

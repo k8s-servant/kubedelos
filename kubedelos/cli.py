@@ -19,13 +19,16 @@ from rich.progress import Progress as RichProgress
 from kubedelos import __version__
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
-from kubedelos.models import Severity
+from kubedelos.kube.inventory import parse_image_id
+from kubedelos.models import Severity, is_valid_ref, registry_host
 from kubedelos.output import RENDERERS
 from kubedelos.scan.service import Progress, run_scan
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
+from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
+from kubedelos.trivy.runner import scan_image
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -43,6 +46,13 @@ def version() -> None:
 
 trivy_app = typer.Typer(help="Manage the pinned Trivy binary.", no_args_is_help=True)
 app.add_typer(trivy_app, name="trivy")
+registry_app = typer.Typer(help="Check access to container registries.", no_args_is_help=True)
+app.add_typer(registry_app, name="registry")
+
+_LOGIN_HINT = (
+    "log in to {host} first, for example `docker login {host}`, `az acr login --name <registry>`, "
+    "`gcloud auth configure-docker {host}` or an ECR credential helper; kubedelos uses the same Docker credentials"
+)
 
 
 @trivy_app.command("install")
@@ -239,3 +249,43 @@ def scan(
         if hidden:
             typer.echo(f"{hidden} finding(s) at or above --fail-on are hidden by --severity", err=True)
         raise typer.Exit(1)
+
+
+@registry_app.command("test")
+def registry_test(
+    image: Annotated[str, typer.Argument(help="Image to check, e.g. registry.example/team/app:1.")],
+    platform: Annotated[str, typer.Option(help="Platform to resolve, as os/arch.")] = "linux/amd64",
+    trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
+) -> None:
+    """Check that kubedelos can read IMAGE with your current registry login, by scanning it once."""
+    ref = parse_image_id(image, "")
+    if not is_valid_ref(ref.ref):
+        typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
+        raise typer.Exit(2)
+    host = registry_host(ref)
+    try:
+        with _signals_as_interrupt():
+            settings = Settings(**({"trivy_path": trivy_path} if trivy_path else {}))
+            trivy = ensure_trivy(settings)
+            with TrivyCache(trivy, settings.cache_dir) as cache:
+                result = scan_image(trivy, ref, platform, settings.scan_timeout_s, cache_dir=cache.dir)
+    except KeyboardInterrupt:
+        typer.echo("cancelled", err=True)
+        raise typer.Exit(130) from None
+    except Exception as exc:
+        typer.echo(f"error: {exc}", err=True)
+        raise typer.Exit(2) from exc
+
+    if result.status == "ok":
+        typer.echo(f"ok: {ref.ref} is readable ({len(result.findings)} findings)")
+        return
+    detail = _one_line(result.error)
+    if result.error_kind == "auth":
+        typer.echo(f"error: {ref.ref}: authentication failed on {host}: {detail}", err=True)
+        typer.echo("hint: " + _LOGIN_HINT.format(host=host), err=True)
+        raise typer.Exit(1)
+    if result.error_kind == "not_found":
+        typer.echo(f"error: {ref.ref}: not found on {host}: {detail}", err=True)
+        raise typer.Exit(1)
+    typer.echo(f"error: {ref.ref}: {result.error_kind}: {detail}", err=True)
+    raise typer.Exit(2)
