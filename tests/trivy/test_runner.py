@@ -91,6 +91,7 @@ def test_runner_sets_docker_config_only_when_given(tmp_path, monkeypatch):
             'error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH',
             "auth",
         ),
+        ("anonymous access, no credentials used: MANIFEST_UNKNOWN: manifest unknown", "not_found"),
         ("FATAL image scan error: something exploded", "trivy"),
     ],
 )

@@ -93,6 +93,7 @@ def test_registry_test_cancel_exits_130(fake_env):
             if pid_file.exists():
                 break
             time.sleep(0.1)
+        assert pid_file.exists(), "the fake Trivy scan never started"
         proc.send_signal(signal.SIGTERM)
         assert proc.wait(timeout=10) == 130
     finally:
