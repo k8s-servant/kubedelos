@@ -229,6 +229,10 @@ def scan(
             f"error: {_one_line(row['ref'], 512)} [{row['platform']}] {row['error_kind']}: {_one_line(row['error'])}",
             err=True,
         )
+    for host in sorted(
+        {registry_host(parse_image_id(row["ref"], "")) for row in failed if row["error_kind"] == "auth"}
+    ):
+        typer.echo("hint: " + _LOGIN_HINT.format(host=host), err=True)
     errors = run["images_error"] or 0
     if errors:
         typer.echo(f"{errors} image(s) failed to scan", err=True)

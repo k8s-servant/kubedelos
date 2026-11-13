@@ -45,7 +45,7 @@ def make_run(tmp_path, monkeypatch):
     monkeypatch.setenv("KUBEDELOS_DATA_DIR", str(tmp_path / "data"))
     seen = {}
 
-    def build(findings, *, error=False, error_msg="x", status=None, raises=None, warnings=()):
+    def build(findings, *, error=False, error_msg="x", status=None, raises=None, warnings=(), failures=()):
         with contextlib.closing(connect(Settings().db_path)) as conn:
             repo = Repo(conn)
             run_id = repo.start_run("ctx", "cli", "0.76.1")
@@ -59,7 +59,16 @@ def make_run(tmp_path, monkeypatch):
                     image=bad.image, platform="linux/amd64", status="error", error_kind="auth", error=error_msg
                 )
                 repo.add_result(run_id, bad, result)
-            repo.finish_run(run_id, status or ("partial" if error else "ok"))
+            for ref, kind in failures:  # (ref, error_kind) of more failed images
+                failed = InventoryItem(
+                    image=ImageRef(ref=ref, repo=ref.rsplit(":", 1)[0], tag="1"), platform="linux/amd64"
+                )
+                repo.add_result(
+                    run_id,
+                    failed,
+                    ImageResult(image=failed.image, platform="linux/amd64", status="error", error_kind=kind, error="x"),
+                )
+            repo.finish_run(run_id, status or ("partial" if error or failures else "ok"))
 
         def fake_run_scan(settings, **kw):
             seen["settings"] = settings
@@ -89,6 +98,34 @@ def test_cli_scan_exit_codes(make_run, fail_on, error, code):
     assert r.exit_code == code
     if error:
         assert "1 image(s) failed to scan" in r.stderr
+
+
+def test_scan_prints_one_auth_hint_per_host(make_run):
+    make_run(
+        [],
+        failures=[
+            ("registry.example/team/a:1", "auth"),
+            ("registry.example/team/b:1", "auth"),
+            ("other.example/c:1", "auth"),
+        ],
+    )
+    r = _run()
+    hints = [line for line in r.stderr.splitlines() if line.startswith("hint: ")]
+    assert hints == [
+        "hint: log in to other.example first, for example `docker login other.example`, `az acr login --name "
+        "<registry>`, `gcloud auth configure-docker other.example` or an ECR credential helper; kubedelos uses the "
+        "same Docker credentials",
+        "hint: log in to registry.example first, for example `docker login registry.example`, `az acr login --name "
+        "<registry>`, `gcloud auth configure-docker registry.example` or an ECR credential helper; kubedelos uses the "
+        "same Docker credentials",
+    ]
+
+
+def test_scan_no_hint_without_auth_errors(make_run):
+    make_run([], failures=[("registry.example/team/a:1", "not_found")])
+    r = _run()
+    assert "error: registry.example/team/a:1" in r.stderr
+    assert "hint:" not in r.stderr
 
 
 def test_fail_on_uses_all_findings_not_filtered(make_run):
