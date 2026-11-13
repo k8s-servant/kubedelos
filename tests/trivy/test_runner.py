@@ -87,6 +87,10 @@ def test_runner_sets_docker_config_only_when_given(tmp_path, monkeypatch):
         ("MANIFEST_UNKNOWN: manifest unknown", "not_found"),
         ("NAME_UNKNOWN: repository name not known to registry; name unknown", "not_found"),
         ("FATAL scan error: rpc error: context deadline exceeded", "timeout"),
+        (
+            'error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH',
+            "auth",
+        ),
         ("FATAL image scan error: something exploded", "trivy"),
     ],
 )

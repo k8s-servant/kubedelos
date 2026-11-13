@@ -49,10 +49,20 @@ app.add_typer(trivy_app, name="trivy")
 registry_app = typer.Typer(help="Check access to container registries.", no_args_is_help=True)
 app.add_typer(registry_app, name="registry")
 
-_LOGIN_HINT = (
-    "log in to {host} first, for example `docker login {host}`, `az acr login --name <registry>`, "
-    "`gcloud auth configure-docker {host}` or an ECR credential helper; kubedelos uses the same Docker credentials"
-)
+
+def _login_hint(host: str) -> str:
+    """How to log in to ``host`` so that Docker, and with it kubedelos, can read it."""
+    name = host.split(":", 1)[0]
+    if name.endswith(".azurecr.io"):
+        command = f"az acr login --name {name.split('.', 1)[0]}"
+    elif name == "gcr.io" or name.endswith((".gcr.io", "-docker.pkg.dev")):
+        command = f"gcloud auth configure-docker {host}"
+    elif ".dkr.ecr." in name and name.endswith(".amazonaws.com"):
+        region = name.split(".dkr.ecr.", 1)[1].removesuffix(".amazonaws.com")
+        command = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {host}"
+    else:
+        command = f"docker login {host}"
+    return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
 
 
 @trivy_app.command("install")
@@ -232,7 +242,7 @@ def scan(
     for host in sorted(
         {registry_host(parse_image_id(row["ref"], "")) for row in failed if row["error_kind"] == "auth"}
     ):
-        typer.echo("hint: " + _LOGIN_HINT.format(host=host), err=True)
+        typer.echo("hint: " + _login_hint(host), err=True)
     errors = run["images_error"] or 0
     if errors:
         typer.echo(f"{errors} image(s) failed to scan", err=True)
@@ -257,13 +267,14 @@ def scan(
 
 @registry_app.command("test")
 def registry_test(
-    image: Annotated[str, typer.Argument(help="Image to check, e.g. registry.example/team/app:1.")],
+    image: Annotated[str, typer.Argument(help="Image to check, e.g. registry.example/team/app:1")],
     platform: Annotated[str, typer.Option(help="Platform to resolve, as os/arch.")] = "linux/amd64",
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
 ) -> None:
     """Check that kubedelos can read IMAGE with your current registry login, by scanning it once."""
     ref = parse_image_id(image, "")
-    if not is_valid_ref(ref.ref):
+    # parse_image_id falls back to :latest when a digest is malformed; for a user's ref that would scan another image.
+    if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
         raise typer.Exit(2)
     host = registry_host(ref)
@@ -286,7 +297,7 @@ def registry_test(
     detail = _one_line(result.error)
     if result.error_kind == "auth":
         typer.echo(f"error: {ref.ref}: authentication failed on {host}: {detail}", err=True)
-        typer.echo("hint: " + _LOGIN_HINT.format(host=host), err=True)
+        typer.echo("hint: " + _login_hint(host), err=True)
         raise typer.Exit(1)
     if result.error_kind == "not_found":
         typer.echo(f"error: {ref.ref}: not found on {host}: {detail}", err=True)

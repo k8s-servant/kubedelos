@@ -28,7 +28,8 @@ _MAX_ERROR_CHARS = 2000
 
 # Checked in order, case-insensitively, against a failed client's stderr.
 _ERROR_PATTERNS: tuple[tuple[ErrorKind, tuple[str, ...]], ...] = (
-    ("auth", ("unauthorized", "denied", "authentication required")),
+    # "credential" also catches a missing or failing credential helper ("error getting credentials - ... not found").
+    ("auth", ("unauthorized", "denied", "authentication required", "credential")),
     ("not_found", ("manifest unknown", "not found", "name unknown")),
     ("timeout", ("context deadline exceeded",)),  # Trivy's own --timeout expiring
 )

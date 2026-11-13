@@ -98,3 +98,31 @@ def test_registry_test_cancel_exits_130(fake_env):
     finally:
         proc.kill()
     assert _gone(int(pid_file.read_text()))
+
+
+@pytest.mark.parametrize("image", ["nginx@sha256:dead", "nginx@sha512:" + "a" * 128, "nginx@"])
+def test_registry_test_rejects_bad_digest_instead_of_scanning_latest(fake_env, image):
+    r = _registry_test(image)
+    assert r.exit_code == 2
+    assert "invalid image reference" in r.stderr
+    assert not (fake_env / "record.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("image", "command"),
+    [
+        ("registry.example/team/app:1", "docker login registry.example"),
+        ("nginx:1.19", "docker login docker.io"),
+        ("myregistry.azurecr.io/app:1", "az acr login --name myregistry"),
+        ("europe-docker.pkg.dev/proj/repo/app:1", "gcloud auth configure-docker europe-docker.pkg.dev"),
+        ("gcr.io/proj/app:1", "gcloud auth configure-docker gcr.io"),
+        ("123456789012.dkr.ecr.eu-west-1.amazonaws.com/app:1", "aws ecr get-login-password --region eu-west-1"),
+    ],
+)
+def test_registry_test_hint_matches_the_registry(fake_env, monkeypatch, image, command):
+    monkeypatch.setenv("FAKE_TRIVY_STDERR", "UNAUTHORIZED: authentication required")
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    hint = [line for line in _registry_test(image).stderr.splitlines() if line.startswith("hint: ")]
+    assert len(hint) == 1 and command in hint[0]
+    if "docker login" in command:
+        assert "gcloud" not in hint[0] and "az acr" not in hint[0]

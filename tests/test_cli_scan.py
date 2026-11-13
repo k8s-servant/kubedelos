@@ -111,14 +111,9 @@ def test_scan_prints_one_auth_hint_per_host(make_run):
     )
     r = _run()
     hints = [line for line in r.stderr.splitlines() if line.startswith("hint: ")]
-    assert hints == [
-        "hint: log in to other.example first, for example `docker login other.example`, `az acr login --name "
-        "<registry>`, `gcloud auth configure-docker other.example` or an ECR credential helper; kubedelos uses the "
-        "same Docker credentials",
-        "hint: log in to registry.example first, for example `docker login registry.example`, `az acr login --name "
-        "<registry>`, `gcloud auth configure-docker registry.example` or an ECR credential helper; kubedelos uses the "
-        "same Docker credentials",
-    ]
+    assert len(hints) == 2
+    assert "docker login other.example" in hints[0]
+    assert "docker login registry.example" in hints[1]
 
 
 def test_scan_no_hint_without_auth_errors(make_run):
