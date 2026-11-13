@@ -1,0 +1,291 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.1"
+  },
+  "ReportID": "01a1d4a2-e79b-7664-bd26-e80ef8fc8d9f",
+  "CreatedAt": "2026-11-13T13:20:08.347421+02:00",
+  "ArtifactID": "sha256:a254a0d1a2f0721d4f42cd04f75a1fcfe264b47f3624622e32c39d130ea7c2fc",
+  "ArtifactName": "alpine:3.17",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "alpine",
+      "Name": "3.17.10",
+      "EOSL": true
+    }
+  },
+  "Results": [
+    {
+      "Target": "alpine:3.17 (alpine 3.17.10)",
+      "Class": "os-pkgs",
+      "Type": "alpine",
+      "Vulnerabilities": [
+        {
+          "VulnerabilityID": "CVE-2025-15467",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-15467",
+          "Title": "openssl: OpenSSL: Remote code execution or Denial of Service via oversized Initialization Vector in CMS parsing",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69421",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69421",
+          "Title": "openssl: OpenSSL: Denial of Service via malformed PKCS#12 file processing",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69419",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69419",
+          "Title": "openssl: OpenSSL: Arbitrary code execution due to out-of-bounds write in PKCS#12 processing",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9230",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-9230",
+          "Title": "openssl: Out-of-bounds read & write in RFC 3211 KEK Unwrap",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-13176",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-13176",
+          "Title": "openssl: Timing side-channel in ECDSA signature computation",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-9143",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.15-r1",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-9143",
+          "Title": "openssl: Low-level invalid GF(2^m) parameters lead to OOB memory access",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-68160",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-68160",
+          "Title": "openssl: OpenSSL: Denial of Service due to out-of-bounds write in BIO filter",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69418",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69418",
+          "Title": "openssl: OpenSSL: Information disclosure and data tampering via specific low-level OCB encryption/decryption calls",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69420",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69420",
+          "Title": "openssl: OpenSSL: Denial of Service via malformed TimeStamp Response",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9232",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-9232",
+          "Title": "openssl: Out-of-bounds read in HTTP client no_proxy handling",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-22795",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-22795",
+          "Title": "openssl: OpenSSL: Denial of Service due to type confusion in PKCS#12 file processing",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-22796",
+          "PkgName": "libcrypto3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-22796",
+          "Title": "openssl: OpenSSL: Denial of Service via type confusion in PKCS#7 signature verification",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-15467",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-15467",
+          "Title": "openssl: OpenSSL: Remote code execution or Denial of Service via oversized Initialization Vector in CMS parsing",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69421",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69421",
+          "Title": "openssl: OpenSSL: Denial of Service via malformed PKCS#12 file processing",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69419",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69419",
+          "Title": "openssl: OpenSSL: Arbitrary code execution due to out-of-bounds write in PKCS#12 processing",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9230",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-9230",
+          "Title": "openssl: Out-of-bounds read & write in RFC 3211 KEK Unwrap",
+          "Severity": "MEDIUM"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-13176",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-13176",
+          "Title": "openssl: Timing side-channel in ECDSA signature computation",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2024-9143",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.15-r1",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2024-9143",
+          "Title": "openssl: Low-level invalid GF(2^m) parameters lead to OOB memory access",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-68160",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-68160",
+          "Title": "openssl: OpenSSL: Denial of Service due to out-of-bounds write in BIO filter",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69418",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69418",
+          "Title": "openssl: OpenSSL: Information disclosure and data tampering via specific low-level OCB encryption/decryption calls",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-69420",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-69420",
+          "Title": "openssl: OpenSSL: Denial of Service via malformed TimeStamp Response",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-9232",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-9232",
+          "Title": "openssl: Out-of-bounds read in HTTP client no_proxy handling",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-22795",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-22795",
+          "Title": "openssl: OpenSSL: Denial of Service due to type confusion in PKCS#12 file processing",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2026-22796",
+          "PkgName": "libssl3",
+          "InstalledVersion": "3.0.15-r0",
+          "FixedVersion": "3.0.19-r0",
+          "Status": "fixed",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2026-22796",
+          "Title": "openssl: OpenSSL: Denial of Service via type confusion in PKCS#7 signature verification",
+          "Severity": "LOW"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-26519",
+          "PkgName": "musl",
+          "InstalledVersion": "1.2.3-r5",
+          "FixedVersion": "1.2.3-r6",
+          "Status": "fixed",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-26519",
+          "Title": "musl libc 0.9.13 through 1.2.5 before 1.2.6 has an out-of-bounds write ...",
+          "Severity": "HIGH"
+        },
+        {
+          "VulnerabilityID": "CVE-2025-26519",
+          "PkgName": "musl-utils",
+          "InstalledVersion": "1.2.3-r5",
+          "FixedVersion": "1.2.3-r6",
+          "Status": "fixed",
+          "SeveritySource": "nvd",
+          "PrimaryURL": "https://avd.aquasec.com/nvd/cve-2025-26519",
+          "Title": "musl libc 0.9.13 through 1.2.5 before 1.2.6 has an out-of-bounds write ...",
+          "Severity": "HIGH"
+        }
+      ]
+    }
+  ]
+}
