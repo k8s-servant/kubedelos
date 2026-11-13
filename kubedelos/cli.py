@@ -125,8 +125,15 @@ def scan(
     ] = None,
     exclude_namespace: Annotated[list[str] | None, typer.Option(help="Namespace to skip (repeatable).")] = None,
     output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format.")] = OutputFormat.table,
-    severity: Annotated[str, typer.Option(help="Comma-separated severities to output.")] = "CRITICAL,HIGH",
-    fail_on: Annotated[FailOn, typer.Option(help="Exit 1 when a finding is at or above this severity.")] = FailOn.none,
+    severity: Annotated[
+        str, typer.Option(help="Comma-separated severities to output. Does not limit what --fail-on checks.")
+    ] = "CRITICAL,HIGH",
+    fail_on: Annotated[
+        FailOn,
+        typer.Option(
+            help="Exit 1 when any finding is at or above this severity, including findings hidden by --severity."
+        ),
+    ] = FailOn.none,
     parallelism: Annotated[int | None, typer.Option(min=1, max=32, help="Images scanned at once.")] = None,
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cached scan results.")] = False,
@@ -226,7 +233,11 @@ def scan(
     if errors or (gaps and not allow_partial):
         raise typer.Exit(2)  # fail closed: image errors or incomplete inventory must not pass as clean
     threshold = Severity(fail_on.value.upper()).rank
-    if any(Severity(r["severity"]).rank >= threshold for r in findings):
+    hits = [r for r in findings if Severity(r["severity"]).rank >= threshold]
+    if hits:
+        hidden = sum(r["severity"] not in wanted for r in hits)
+        if hidden:
+            typer.echo(f"{hidden} finding(s) at or above --fail-on are hidden by --severity", err=True)
         raise typer.Exit(1)
 
 

@@ -92,10 +92,17 @@ def test_cli_scan_exit_codes(make_run, fail_on, error, code):
 
 
 def test_fail_on_uses_all_findings_not_filtered(make_run):
-    make_run([_finding("CVE-1", Severity.MEDIUM)])
-    r = _run("--fail-on", "medium", "--severity", "CRITICAL", "-o", "json")
+    make_run([_finding("CVE-1", Severity.MEDIUM), _finding("CVE-2", Severity.LOW)])
+    r = _run("--fail-on", "low", "--severity", "CRITICAL", "-o", "json")
     assert r.exit_code == 1
     assert json.loads(r.stdout) == []
+    assert "2 finding(s) at or above --fail-on are hidden by --severity" in r.stderr
+
+
+def test_no_hidden_line_when_the_gate_fires_on_shown_findings(make_run):
+    make_run([_finding("CVE-1", Severity.CRITICAL)])
+    r = _run("--fail-on", "high")
+    assert r.exit_code == 1 and "hidden by --severity" not in r.stderr
 
 
 def test_fail_on_below_threshold_passes(make_run):

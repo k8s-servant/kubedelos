@@ -99,6 +99,7 @@ def test_run_findings_joins_workloads_and_orders(tmp_path):
     first = rows[1]
     assert first["workload"] == "b" and first["owner"] == "o@x" and first["team"] == "t"
     assert first["image"] == "reg.io/app:1" and first["digest"] == DIGEST and first["platform"] == "linux/amd64"
+    assert first["repo"] == "reg.io/app" and first["tag"] == "1"
     assert first["severity"] == "CRITICAL" and first["pkg_type"] == "os" and first["target"] == "debian"
 
 

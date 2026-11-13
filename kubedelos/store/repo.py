@@ -20,7 +20,7 @@ _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _RUN_FINDINGS_SQL = """
 SELECT w.namespace, w.kind, w.name AS workload, w.container, w.owner, w.team,
-       r.ref AS image, r.digest, r.platform,
+       r.ref AS image, r.repo, r.tag, r.digest, r.platform,
        f.vuln_id, f.severity, f.pkg_name, f.installed_version, f.fixed_version,
        f.title, f.primary_url, f.target, f.pkg_type
 FROM image_result r

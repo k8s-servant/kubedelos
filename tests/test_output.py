@@ -15,6 +15,8 @@ def _row(**kw):
         "owner": None,
         "team": "core",
         "image": "reg.io/a:1",
+        "repo": "reg.io/a",
+        "tag": "1",
         "digest": None,
         "platform": "linux/amd64",
         "vuln_id": "CVE-1",
@@ -75,7 +77,7 @@ def test_render_table_plain_and_empty():
 
 
 def test_render_table_does_not_parse_markup():
-    out = render_table([_row(image="reg.io/[bold]x[/bold]:1", installed_version="[/x]")])
+    out = render_table([_row(repo="reg.io/[bold]x[/bold]", installed_version="[/x]")])
     assert "[bold]x[/bold]" in out and "[/x]" in out
 
 
@@ -91,3 +93,16 @@ def test_render_csv_escapes_formula_cells_only_in_csv():
 
 def test_render_table_handles_none_cells():
     assert "CVE-1" in render_table([_row(installed_version=None)])
+
+
+def test_render_table_shows_tag_and_short_digest_but_other_formats_keep_full_ref():
+    digest = "sha256:" + "c" * 64
+    row = _row(image=f"reg.io/a@{digest}", repo="reg.io/a", tag="1.19", digest=digest)
+    out = render_table([row])
+    assert "reg.io/a:1.19@sha256:cccccccc" in out and "c" * 9 not in out
+    assert "reg.io/a@sha256:cccccccc" in render_table([row | {"tag": None}])
+    assert "reg.io/a:1" in render_table([_row()])  # no digest: repo:tag
+    assert json.loads(render_json([row]))[0]["image"] == f"reg.io/a@{digest}"
+    assert next(csv.DictReader(io.StringIO(render_csv([row]))))["image"] == f"reg.io/a@{digest}"
+    uri = json.loads(render_sarif([row]))["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
+    assert uri["artifactLocation"]["uri"] == f"reg.io/a@{digest}"

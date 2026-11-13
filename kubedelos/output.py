@@ -26,6 +26,14 @@ def _plain(rows: Sequence[Row]) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
+def _table_image(r: Row) -> str:
+    """``repo:tag`` plus a short digest: what people recognise, where the full ref is 64 hex characters long."""
+    if not r["repo"]:
+        return r["image"]
+    name = f"{r['repo']}:{r['tag']}" if r["tag"] else r["repo"]
+    return f"{name}@{r['digest'][:15]}" if r["digest"] else name  # "sha256:" + 8 hex
+
+
 def render_table(rows: Sequence[Row]) -> str:
     table = Table()
     for col in ("Namespace/Workload", "Image", "Vulnerability", "Severity", "Installed", "Fixed"):
@@ -33,7 +41,7 @@ def render_table(rows: Sequence[Row]) -> str:
     for r in rows:
         cells = (
             f"{r['namespace']}/{r['workload']}",
-            r["image"],
+            _table_image(r),
             r["vuln_id"],
             r["severity"],
             r["installed_version"],
