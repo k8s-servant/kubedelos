@@ -62,6 +62,8 @@ defaults:
 | `pod-pull-secrets` | Reads the pod's and ServiceAccount's `imagePullSecrets` and uses them for that pod's images. | on-prem, generic |
 | `anonymous` | No credentials. | public registries |
 
+**Laptop vs in-cluster (decided 2026-11-13):** on a laptop the existing Docker login and credential helpers are enough, so the providers below are the in-cluster mode and ship in Phase 3.
+
 **Design details:**
 - `kubedelos/registry/` has a `CredentialProvider` protocol, a provider for each auth type, and a resolver that matches hosts.
 - For each scan, the resolver builds a short-lived `DOCKER_CONFIG` in a temporary directory with 0700 permissions. It is passed only to that Trivy client process and deleted afterwards. kubedelos's own exchanged tokens are cached in memory until they expire. Credentials are never stored in SQLite and never logged.
@@ -160,11 +162,11 @@ Every phase ends green in CI. Tests are written first for the pure logic (TDD).
 
 **Phase 1: core scanning plus the `kubedelos scan` CLI.** config, kube inventory, trivy binary and runner, parsing, store, scan service. Unit tests use recorded Trivy JSON fixtures and a fake kube client.
 
-**Phase 1b: registry auth.** Build `kubedelos/registry/` with the providers and resolver. Unit tests cover host matching, `DOCKER_CONFIG` generation and cleanup, and the ACR exchange against a mocked endpoint. A local `registry:2` with htpasswd covers the basic, dockerconfig and pod-pull-secrets types in kind.
+**Phase 1b: laptop registry access (re-scoped 2026-11-13).** On a laptop, kubedelos relies on the Docker credentials the user already has (`DOCKER_CONFIG` or `~/.docker/config.json`, including credential helpers), which Trivy reads itself. This phase adds `kubedelos registry test <image>` and a login hint for registries that refuse access, and checks both against a local `registry:2` with htpasswd. The registry providers, the `registries:` config and the opt-in Secret-backed auth move to Phase 3.
 
 **Phase 2: laptop UI (`kubedelos ui`).** FastAPI app, dashboard, findings, images, namespaces, run history, diff, exceptions, CSV. The scan is started from the UI with live HTMX progress. The browser opens automatically.
 
-**Phase 3: in-cluster mode.** `serve`, scheduler and lease, Helm chart with cloud profiles, NetworkPolicy, read-only root filesystem, non-root user, and the Dockerfile (python-alpine, pinned Trivy verified by checksum, Trivy cache on the PVC).
+**Phase 3: in-cluster mode.** `serve`, scheduler and lease, registry auth providers with the `registries:` config and opt-in Secret-backed auth (`secretRef`, `pod-pull-secrets`, which relaxes the "never read Secrets" rule to named, opt-in Secrets only), Helm chart with cloud profiles, NetworkPolicy, read-only root filesystem, non-root user, and the Dockerfile (python-alpine, pinned Trivy verified by checksum, Trivy cache on the PVC).
 
 **Phase 4: owners and notifications.** Owner rules, notifier plugins (SMTP, M365, Slack, Teams), preview in the UI, `report send|preview`, and the three notify modes.
 
