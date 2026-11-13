@@ -40,7 +40,7 @@ def render_table(rows: Sequence[Row]) -> str:
             r["fixed_version"] or "",
         )
         table.add_row(
-            *(Text(c) for c in cells)
+            *(Text("" if c is None else str(c)) for c in cells)
         )  # Text, not str: cluster-controlled values must not be parsed as markup
     buf = io.StringIO()
     Console(file=buf, color_system=None, force_terminal=False, width=160).print(table)
@@ -51,12 +51,18 @@ def render_json(rows: Sequence[Row]) -> str:
     return json.dumps(_plain(rows), indent=2)
 
 
+def _csv_safe(value: Any) -> str:
+    """Neutralise spreadsheet formulas (CWE-1236) in cells that come from cluster and Trivy data."""
+    text = "" if value is None else str(value)
+    return "'" + text if text[:1] in ("=", "+", "-", "@", "\t", "\r") else text
+
+
 def render_csv(rows: Sequence[Row]) -> str:
     buf = io.StringIO()
     writer = csv.writer(buf, lineterminator="\n")
     writer.writerow(CSV_COLUMNS)
     for r in rows:
-        writer.writerow(["" if r[c] is None else r[c] for c in CSV_COLUMNS])
+        writer.writerow([_csv_safe(r[c]) for c in CSV_COLUMNS])
     return buf.getvalue()
 
 

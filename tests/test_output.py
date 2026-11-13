@@ -77,3 +77,17 @@ def test_render_table_plain_and_empty():
 def test_render_table_does_not_parse_markup():
     out = render_table([_row(image="reg.io/[bold]x[/bold]:1", installed_version="[/x]")])
     assert "[bold]x[/bold]" in out and "[/x]" in out
+
+
+def test_render_csv_escapes_formula_cells_only_in_csv():
+    rows = [_row(pkg_name='=HYPERLINK("x")', workload="-cmd", team="@t", owner="\tx", installed_version="1.0")]
+    cells = next(csv.DictReader(io.StringIO(render_csv(rows))))
+    assert cells["pkg_name"] == '\'=HYPERLINK("x")'
+    assert cells["workload"] == "'-cmd" and cells["team"] == "'@t" and cells["owner"] == "'\tx"
+    assert cells["installed_version"] == "1.0" and cells["image"] == "reg.io/a:1"
+    assert json.loads(render_json(rows))[0]["pkg_name"] == '=HYPERLINK("x")'
+    assert json.loads(render_sarif(rows))["runs"][0]["results"][0]["message"]["text"].startswith('=HYPERLINK("x")')
+
+
+def test_render_table_handles_none_cells():
+    assert "CVE-1" in render_table([_row(installed_version=None)])

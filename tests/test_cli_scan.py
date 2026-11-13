@@ -137,3 +137,20 @@ def test_unwritable_output_file_is_fatal_exit_2(make_run, tmp_path):
     r = _run("-o", "json", "--output-file", str(tmp_path / "missing-dir" / "o.json"), "--fail-on", "high")
     assert r.exit_code == 2
     assert "error: cannot write" in r.stderr and "Traceback" not in r.stderr
+
+
+@pytest.mark.parametrize(
+    ("args", "code"),
+    [(["--fail-on", "high"], 2), (["--fail-on", "high", "--allow-partial"], 1), ([], 0)],
+)
+def test_inventory_warnings_fail_closed(make_run, args, code):
+    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=["namespace x forbidden"])
+    r = _run(*args)
+    assert r.exit_code == code
+    assert "warning: namespace x forbidden" in r.stderr
+
+
+def test_warnings_without_findings_and_allow_partial_is_clean(make_run):
+    make_run([], warnings=["w"])
+    assert _run("--fail-on", "high", "--allow-partial").exit_code == 0
+    assert _run("--fail-on", "high").exit_code == 2

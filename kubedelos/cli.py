@@ -94,11 +94,20 @@ def scan(
     parallelism: Annotated[int | None, typer.Option(min=1, max=32, help="Images scanned at once.")] = None,
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cached scan results.")] = False,
+    allow_partial: Annotated[
+        bool,
+        typer.Option(
+            "--allow-partial",
+            help="With --fail-on, do not exit 2 when inventory warnings (skipped namespaces or resources) "
+            "mean coverage was incomplete.",
+        ),
+    ] = False,
     output_file: Annotated[Path | None, typer.Option(help="Write results here instead of stdout.")] = None,
 ) -> None:
     """Scan the images running in the current kube-context.
 
-    Exit codes: 0 ok, 1 findings at or above --fail-on, 2 error (image failures with --fail-on, or fatal), 130 cancelled.
+    Exit codes: 0 ok, 1 findings at or above --fail-on, 2 error (fatal, or with --fail-on: image failures or
+    inventory warnings unless --allow-partial), 130 cancelled.
     """
     wanted = _parse_severities(severity)
     passed: dict[str, Any] = {
@@ -162,8 +171,8 @@ def scan(
         typer.echo(f"{errors} image(s) failed to scan", err=True)
     if fail_on is FailOn.none:
         return
-    if errors:
-        raise typer.Exit(2)
+    if errors or (outcome.warnings and not allow_partial):
+        raise typer.Exit(2)  # fail closed: image errors or incomplete inventory must not pass as clean
     threshold = Severity(fail_on.value.upper()).rank
     if any(Severity(r["severity"]).rank >= threshold for r in findings):
         raise typer.Exit(1)
