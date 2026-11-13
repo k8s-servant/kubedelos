@@ -36,9 +36,9 @@ dependencies = [
 dev = ["pytest>=9,<10", "pytest-cov>=7,<8", "ruff>=0.17", "pre-commit>=4"]
 
 [project.urls]
-Homepage = "https://github.com/kubedelos/kubedelos"
-Issues = "https://github.com/kubedelos/kubedelos/issues"
-Changelog = "https://github.com/kubedelos/kubedelos/blob/main/CHANGELOG.md"
+Homepage = "https://github.com/k8s-servant/kubedelos"
+Issues = "https://github.com/k8s-servant/kubedelos/issues"
+Changelog = "https://github.com/k8s-servant/kubedelos/blob/main/CHANGELOG.md"
 
 [project.scripts]
 kubedelos = "kubedelos.cli:app"
