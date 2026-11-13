@@ -6,7 +6,7 @@ import pytest
 from kubernetes.client import V1Namespace, V1ObjectMeta
 
 from kubedelos.config import Settings
-from kubedelos.models import Finding, ImageResult, Severity
+from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity
 from kubedelos.scan import service
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
@@ -93,7 +93,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     assert FakeServer.started == 1
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
-    assert calls[1] == [] and FakeServer.started == 1
+    assert len(calls) == 1 and FakeServer.started == 1  # nothing left to scan: no scan_many, no server
     assert _status(repo, out.run_id) == "ok"
     assert len(repo.run_findings(out.run_id)) == 2  # stored findings kept
     assert (
@@ -152,3 +152,31 @@ def test_cached_result_stores_current_ref(env, monkeypatch):
     out = service.run_scan(settings, api=api, repo=repo)
     row = repo._conn.execute("SELECT ref, tag, status FROM image_result WHERE run_id = ?", (out.run_id,)).fetchone()
     assert (row["ref"], row["tag"], row["status"]) == (f"reg.io/a@{D1}", "2", "cached")
+
+
+@pytest.mark.parametrize("bad", ["-oyaml", "nginx --help", "reg.io/a:1\nx", "reg.io/" + "a" * 600])
+def test_service_rejects_invalid_refs(env, monkeypatch, bad):
+    settings, repo, calls = env
+    good = InventoryItem(image=ImageRef(ref="reg.io/a:1", repo="reg.io/a", tag="1"), platform="linux/amd64")
+    evil = InventoryItem(image=ImageRef(ref=bad, repo=bad), platform="linux/amd64")
+    monkeypatch.setattr(service, "collect", lambda api, settings: ([good, evil], []))
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    progress = []
+    out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert [[i.image.ref for i in batch] for batch in calls] == [["reg.io/a:1"]]
+    rows = repo._conn.execute(
+        "SELECT ref, status, error_kind, error FROM image_result WHERE run_id = ? ORDER BY id", (out.run_id,)
+    ).fetchall()
+    assert [tuple(r) for r in rows if r["ref"] == bad] == [(bad, "error", "unknown", "invalid image reference")]
+    assert progress[-1].errors == 1
+    assert _status(repo, out.run_id) == "partial"
+
+
+def test_service_skips_server_when_only_invalid_refs(env, monkeypatch):
+    settings, repo, calls = env
+    evil = InventoryItem(image=ImageRef(ref="-oyaml", repo="-oyaml"), platform="linux/amd64")
+    monkeypatch.setattr(service, "collect", lambda api, settings: ([evil], []))
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert calls == [] and FakeServer.started == 0
+    assert _status(repo, out.run_id) == "partial"

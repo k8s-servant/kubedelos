@@ -7,11 +7,32 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
+_MAX_REF_LEN = 512
+# A conservative OCI reference: optional host[:port], lowercase path components, optional tag and/or digest.
+_REF_RE = re.compile(
+    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"  # host (or first path component), optional port
+    r"(?:/[a-z0-9]+(?:[._-]+[a-z0-9]+)*)*"  # further path components
+    r"(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?"  # tag
+    r"(?:@sha256:[0-9a-f]{64})?"  # digest
+)
 
 
 def is_digest(value: str) -> bool:
     """True only for a complete ``sha256:<64 lowercase hex>`` digest."""
     return _DIGEST_RE.fullmatch(value) is not None
+
+
+def is_valid_ref(ref: str) -> bool:
+    """True for a plausible image reference that is safe to hand to Trivy as an argument.
+
+    Refs come from cluster-controlled pod specs, so anything with whitespace, control characters or a leading ``-``
+    (which a CLI could read as a flag) is rejected, as is anything over 512 characters.
+    """
+    if not ref or len(ref) > _MAX_REF_LEN or ref.startswith("-"):
+        return False
+    if any(ch.isspace() or not ch.isprintable() for ch in ref):
+        return False
+    return _REF_RE.fullmatch(ref) is not None
 
 
 class Severity(StrEnum):

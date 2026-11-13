@@ -10,7 +10,7 @@ from kubedelos.models import ImageResult, InventoryItem
 from kubedelos.trivy.pins import TRIVY_VERSION
 
 # A cache key is either a bare digest or "<repo>@<digest>"; anything else is a mutable tag ref.
-_DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}$")
+_DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}\Z")  # \Z: unlike $, no match before a trailing newline
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _RUN_FINDINGS_SQL = """

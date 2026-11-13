@@ -61,6 +61,7 @@ def test_runner_builds_expected_args(tmp_path, monkeypatch):
         str(tmp_path / "trivy-cache"),
         "--skip-db-update",
         "--skip-java-db-update",
+        "--",
         REF.ref,
     ]
     assert echoed["FakeEnv"] == {"TRIVY_TOKEN": "s3cret", "DOCKER_CONFIG": None}
@@ -254,3 +255,12 @@ def test_scan_many_propagates_on_result_errors(tmp_path):
         scan_many(
             _items(3), server=server, trivy=FAKE_TRIVY, settings=settings, on_result=on_result, cancel=threading.Event()
         )
+
+
+def test_scan_many_returns_immediately_for_no_items(tmp_path):
+    results: list[ImageResult] = []
+    scan_many(
+        [], server=None, trivy=FAKE_TRIVY, settings=Settings(cache_dir=tmp_path), on_result=results.append,
+        cancel=threading.Event(),
+    )  # fmt: skip
+    assert results == []

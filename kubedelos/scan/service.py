@@ -9,7 +9,7 @@ from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
 from kubedelos.kube.inventory import collect
-from kubedelos.models import ImageResult, InventoryItem
+from kubedelos.models import ImageResult, InventoryItem, is_valid_ref
 from kubedelos.store import db
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import ensure_trivy
@@ -84,6 +84,18 @@ def _scan(
 
     todo: list[InventoryItem] = []
     for item in items:
+        if not is_valid_ref(item.image.ref):  # never hand a malformed, cluster-supplied ref to Trivy
+            record(
+                item,
+                ImageResult(
+                    image=item.image,
+                    platform=item.platform,
+                    status="error",
+                    error_kind="unknown",
+                    error="invalid image reference",
+                ),
+            )
+            continue
         cached = repo.get_cached(item.image.key, item.platform, cache_max_age)
         if cached is None:
             todo.append(item)
@@ -103,8 +115,7 @@ def _scan(
         if result.status == "ok":
             repo.put_cache(result.image.key, result.platform, result.model_dump(mode="json"))
 
-    if not todo:
-        scan_many([], server=None, trivy=None, settings=settings, on_result=on_result, cancel=cancel)  # type: ignore[arg-type]
+    if not todo:  # everything cached or rejected: no Trivy server needed
         return errors
 
     trivy = ensure_trivy(settings)

@@ -142,7 +142,7 @@ def test_finish_run_rejects_bad_status(tmp_path, status):
 @pytest.mark.parametrize(
     "key",
     ["sha256:5000/app:latest", "sha256:abc", "reg.io/app@sha256:" + "A" * 64, "reg.io/app@sha256:" + "a" * 63,
-     "x@sha256:" + "a" * 64 + "/y"],
+     "x@sha256:" + "a" * 64 + "/y", DIGEST + "\n", "reg.io/app@" + DIGEST + "\n"],
 )  # fmt: skip
 def test_non_digest_keys_not_cached(tmp_path, key):
     repo = Repo(connect(tmp_path / "k.db"))

@@ -259,7 +259,8 @@ def scan_image(
     ]
     if cache_dir is not None:
         argv += ["--cache-dir", str(cache_dir)]
-    argv += ["--skip-db-update", "--skip-java-db-update", item_ref.ref]
+    # "--" ends flag parsing, so a ref from a pod spec can never be read as a flag.
+    argv += ["--skip-db-update", "--skip-java-db-update", "--", item_ref.ref]
 
     env = dict(os.environ)
     if token is not None:
@@ -305,6 +306,8 @@ def scan_many(
     Once ``cancel`` is set no new image starts; scans already running finish and are reported. An exception from
     ``on_result`` (or an interrupt) kills the running scans and propagates.
     """
+    if not items:
+        return
     workers = settings.parallelism
     groups = _ClientGroups()
     url, token, cache_dir = server.url, server.token, server.cache_dir
