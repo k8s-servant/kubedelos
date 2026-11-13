@@ -9,6 +9,7 @@
 - `kubedelos scan` inventories a kube-context and scans every unique image with Trivy.
 - Output formats: table, JSON, CSV (formula-safe) and SARIF, with `--fail-on` exit codes and `--allow-partial`.
 - Digest cache so unchanged images are not rescanned.
+- `--namespace-selector` and `-l/--selector` narrow a scan by namespace or pod/workload labels (kubectl syntax, applied by the API server), and `--exclude-image` skips images by glob before scanning. Each run records its scope.
 - `--pkg-types` (`KUBEDELOS_PKG_TYPES`) chooses OS packages, application libraries or both (the default). Each finding records its package class, the CSV output gains a `pkg_class` column, OS-only scans skip the Java DB, and cached results are kept per scan level.
 - `kubedelos registry test <image>` checks that an image is readable with your current registry login, and scans print a login hint for registries that refuse access.
 - Parallel scans and concurrent `kubedelos scan` runs share one Trivy DB cache safely; no local Trivy server or port is used.

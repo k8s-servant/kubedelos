@@ -17,6 +17,22 @@ digest once, and prints a table. Other formats: `-o json`, `-o csv`, `-o sarif`.
 `--kubeconfig`, `--namespace` and `--exclude-namespace` to narrow what is scanned. Owners are read
 from the `kubedelos.io/owner-email` namespace annotation.
 
+Narrow a scan by labels or skip images:
+
+```bash
+kubedelos scan --namespace-selector team=payments,env!=dev   # namespaces by label
+kubedelos scan -l app=web                                     # pods and workloads by label, in every namespace
+kubedelos scan --exclude-image 'registry.k8s.io/*' --exclude-image 'nginx:*'
+```
+
+Selectors use kubectl syntax and are applied by the API server. Deployments, StatefulSets and CronJobs that are scanned
+as templates (scaled to zero, or not running) match `-l` on their own labels, which can differ from their pod
+template labels. `--exclude-image` globs match the normalised image name and the short Docker Hub forms, so `nginx:*`
+skips `nginx:1.19` and `docker.io/library/nginx:1.19` alike; excluded images are never scanned and are counted on
+stderr. Exclusions are deliberate, so excluded images never count towards `--fail-on`: anchor patterns on the
+registry and repository (`registry.example/vendor/*`, not `*vendor*`), because `*` also matches across `/` and `:`,
+and a broad pattern could match an image someone named to fit it. Each run records its scope, so runs that covered different things are never compared as if they were the same.
+
 By default both OS packages and application libraries are scanned. `--pkg-types os` scans OS packages only and
 skips the 1.5 GB Trivy Java DB; `--pkg-types library` scans application dependencies only. Each finding records its
 class (`pkg_class`: `os` or `library`), and cached results are kept per level, so a narrower scan never answers
@@ -47,6 +63,9 @@ Every setting can also come from an environment variable. A command line flag wi
 | `KUBEDELOS_CONTEXT` | `--context` | the current context |
 | `KUBEDELOS_NAMESPACES` | `--namespace` | all namespaces |
 | `KUBEDELOS_EXCLUDE_NAMESPACES` | `--exclude-namespace` | none |
+| `KUBEDELOS_NAMESPACE_SELECTOR` | `--namespace-selector` | none |
+| `KUBEDELOS_SELECTOR` | `-l`, `--selector` | none |
+| `KUBEDELOS_EXCLUDE_IMAGES` | `--exclude-image` | none (JSON list of globs) |
 | `KUBEDELOS_PARALLELISM` | `--parallelism` | `4` images at once (1 to 32) |
 | `KUBEDELOS_PKG_TYPES` | `--pkg-types` | `os,library` (comma-separated: `os`, `library` or both) |
 | `KUBEDELOS_SCAN_TIMEOUT_S` | | `600` seconds per image |
