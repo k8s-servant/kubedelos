@@ -59,3 +59,8 @@ def test_selectors_default_none_and_blank_is_none():
     assert Settings().selector is None and Settings().namespace_selector is None
     assert Settings(selector="  ", namespace_selector="").selector is None
     assert Settings(namespace_selector=" team=x ").namespace_selector == "team=x"
+
+
+def test_exclude_images_from_env_json(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_EXCLUDE_IMAGES", '["a/*","b:*"]')
+    assert Settings().exclude_images == ["a/*", "b:*"]

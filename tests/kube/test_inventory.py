@@ -305,3 +305,36 @@ def test_invalid_selector_is_a_clear_error():
     api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
     with pytest.raises(ValueError, match=r"invalid label selector 'app in \('"):
         collect(api, Settings(selector="app in ("))
+
+
+@pytest.mark.parametrize("pattern", ["nginx:*", "library/nginx:*", "docker.io/library/nginx:*"])
+def test_exclude_image_matches_any_docker_hub_spelling(pattern):
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("short", "a", image="nginx:1.19"), pod("long", "a", image="docker.io/library/nginx:1.19")]},
+    )
+    items, _ = collect(api, Settings(exclude_images=[pattern]))
+    assert items == []
+
+
+def test_exclude_image_keeps_others_and_warns():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("pause", "a", image="registry.k8s.io/pause:3.9"), pod("web", "a", image="nginx:1.19")]},
+    )
+    items, warnings = collect(api, Settings(exclude_images=["registry.k8s.io/*"]))
+    assert _refs(items) == ["docker.io/library/nginx:1.19"]
+    assert InventoryWarning("excluded 1 image(s) matching --exclude-image", coverage=False) in warnings
+
+
+def test_exclude_image_digest_only_ref():
+    image = f"registry.example/team/app@{DIGEST}"
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a", image=image)]})
+    assert collect(api, Settings(exclude_images=["*:1.19"]))[0] != []
+    assert collect(api, Settings(exclude_images=["registry.example/team/*"]))[0] == []
+
+
+def test_no_exclusion_no_warning():
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
+    _, warnings = collect(api, Settings())
+    assert not any("--exclude-image" in w.text for w in warnings)

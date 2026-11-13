@@ -28,6 +28,7 @@ class Settings(BaseSettings):
     exclude_namespaces: list[str] = []
     namespace_selector: str | None = None  # kubectl label-selector syntax, applied by the API server
     selector: str | None = None  # pod and workload labels, same syntax
+    exclude_images: list[str] = []  # globs matched against the normalised image name, see kube.inventory.image_names
     cache_dir: Path = Field(default_factory=_default_cache_dir)
     data_dir: Path = Field(default_factory=_default_data_dir)
     trivy_path: Path | None = None

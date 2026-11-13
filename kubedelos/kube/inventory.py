@@ -2,6 +2,7 @@
 
 from collections import Counter
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubernetes.client.rest import ApiException
@@ -108,6 +109,30 @@ def _pod_owner(pod) -> tuple[str, str]:
 
 def _is_forbidden(exc: ApiException) -> bool:
     return exc.status == 403
+
+
+def image_names(image: ImageRef) -> set[str]:
+    """Every name an ``--exclude-image`` pattern may match for ``image``, whatever spelling the pod spec used.
+
+    ``repo``, ``repo:tag`` and ``repo@digest`` on the normalised repo, plus the short Docker Hub forms people type
+    (``nginx:1.19`` and ``library/nginx:1.19`` for ``docker.io/library/nginx:1.19``).
+    """
+    repos = {image.repo}
+    if image.repo.startswith("docker.io/library/"):
+        repos |= {image.repo.removeprefix("docker.io/library/"), image.repo.removeprefix("docker.io/")}
+    elif image.repo.startswith("docker.io/"):
+        repos.add(image.repo.removeprefix("docker.io/"))
+    names = set(repos)
+    for repo in repos:
+        if image.tag:
+            names.add(f"{repo}:{image.tag}")
+        if image.digest:
+            names.add(f"{repo}@{image.digest}")
+    return names
+
+
+def is_excluded(image: ImageRef, patterns: list[str]) -> bool:
+    return any(fnmatchcase(name, pattern) for name in image_names(image) for pattern in patterns)
 
 
 def _with_selector(list_fn, selector: str | None, *args: str) -> list:
@@ -224,7 +249,10 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
                 add, name, "CronJob", cj.metadata.name, cj.spec.job_template.spec.template.spec, owner, team, fallback
             )
 
-    return list(items.values()), warnings
+    kept = [item for item in items.values() if not is_excluded(item.image, settings.exclude_images)]
+    if excluded := len(items) - len(kept):
+        warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching --exclude-image", coverage=False))
+    return kept, warnings
 
 
 def _add_template(add, ns: str, kind: str, name: str, pod_spec, owner, team, platform: str) -> None:
