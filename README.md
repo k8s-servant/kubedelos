@@ -64,7 +64,7 @@ Inside a pod with no kubeconfig, kubedelos uses the in-cluster service account. 
 
 ## Trivy
 
-kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. `kubedelos trivy install` downloads it
+kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64); Windows is not supported. `kubedelos trivy install` downloads it
 and checks it against an embedded SHA-256. It never resolves "latest". Use `--trivy-path` to bring your own binary. Results from your own binary are
 not cached and the run records its Trivy version as `custom`.
 
