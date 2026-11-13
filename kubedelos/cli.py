@@ -66,10 +66,29 @@ def _login_hint(host: str) -> str:
     return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
 
 
+def _load_settings(**flags: Any) -> Settings:
+    """Settings from the flags that were passed (``None`` means not passed) and ``KUBEDELOS_*`` variables.
+
+    A bad value exits 2 with one line per problem, naming the flag or the variable it came from.
+    """
+    passed = {k: v for k, v in flags.items() if v is not None}
+    try:
+        return Settings(**passed)
+    except ValidationError as exc:
+        for problem in exc.errors():
+            field = str(problem["loc"][0]) if problem["loc"] else ""
+            if field in passed:
+                source = "--" + field.replace("_", "-")
+            else:
+                source = f"KUBEDELOS_{field.upper()}" if field else "settings"
+            typer.echo(f"error: {source}: {problem['msg']}", err=True)
+        raise typer.Exit(2) from exc
+
+
 @trivy_app.command("install")
 def trivy_install() -> None:
     """Download and verify the pinned Trivy release, unless it is already installed."""
-    settings = Settings()
+    settings = _load_settings()
     try:
         path = ensure_trivy(settings)
     except (TrivyVerificationError, RuntimeError, OSError, httpx.HTTPError) as exc:
@@ -187,13 +206,7 @@ def scan(
         "pkg_types": pkg_types,
         "trivy_path": trivy_path,
     }
-    try:
-        settings = Settings(**{k: v for k, v in passed.items() if v is not None})
-    except ValidationError as exc:
-        for problem in exc.errors():
-            flag = "--" + str(problem["loc"][0]).replace("_", "-") if problem["loc"] else "settings"
-            typer.echo(f"error: {flag}: {problem['msg']}", err=True)
-        raise typer.Exit(2) from exc
+    settings = _load_settings(**passed)
     err = Console(stderr=True)
     cancel = threading.Event()
     try:
@@ -290,9 +303,9 @@ def registry_test(
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
         raise typer.Exit(2)
     host = registry_host(ref)
+    settings = _load_settings(trivy_path=trivy_path)
     try:
         with _signals_as_interrupt():
-            settings = Settings(**({"trivy_path": trivy_path} if trivy_path else {}))
             trivy = ensure_trivy(settings)
             # Only access is checked, so scan the smallest level and skip the Java DB.
             with TrivyCache(trivy, settings.cache_dir, java_db=False) as cache:

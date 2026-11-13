@@ -136,3 +136,18 @@ def test_registry_test_scans_os_only(fake_env):
     argv = json.loads((fake_env / "record.json").read_text())["FakeArgv"]
     assert argv[argv.index("--pkg-types") + 1] == "os"
     assert "--download-java-db-only" not in (fake_env / "downloads.jsonl").read_text()
+
+
+def test_registry_test_bad_env_setting_exits_2_without_traceback(fake_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_PKG_TYPES", "foo")
+    r = _registry_test("nginx:1.19")
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_PKG_TYPES:" in r.stderr
+    assert r.exception is None or isinstance(r.exception, SystemExit)
+
+
+def test_trivy_install_bad_env_setting_exits_2(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_PARALLELISM", "0")
+    r = CliRunner().invoke(app, ["trivy", "install"])
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_PARALLELISM:" in r.stderr

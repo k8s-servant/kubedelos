@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from kubedelos import cli
@@ -333,14 +334,19 @@ def test_cli_scan_pkg_types_rejects_unknown(make_run):
 
 
 def test_cli_scan_late_validation_error_is_not_named_as_a_flag(make_run):
-    from pydantic import ValidationError
-
-    try:
+    with pytest.raises(ValidationError) as late:
         ImageRef(ref="x")  # missing repo: the kind of error odd cluster data could raise mid-scan
-    except ValidationError as exc:
-        late = exc
-    make_run([], raises=late)
+    make_run([], raises=late.value)
     r = _run()
     assert r.exit_code == 2
     assert "--repo" not in r.stderr
     assert "error:" in r.stderr
+
+
+def test_cli_scan_bad_env_value_names_the_variable(make_run, monkeypatch):
+    make_run([])  # the fixture reads Settings itself, so break the variable afterwards
+    monkeypatch.setenv("KUBEDELOS_PKG_TYPES", "secrets")
+    r = _run()
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_PKG_TYPES:" in r.stderr
+    assert "--pkg-types" not in r.stderr
