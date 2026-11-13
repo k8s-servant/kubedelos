@@ -29,7 +29,10 @@ cleanup() {
   fi
 }
 trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
+# Set before create so a half-created cluster is still deleted by the EXIT trap.
 CREATED=1
 kind create cluster --name "$NAME" --kubeconfig "$KCFG" --wait 120s
 

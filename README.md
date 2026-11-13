@@ -30,6 +30,8 @@ from the `kubedelos.io/owner-email` namespace annotation.
 | 2 | With `--fail-on`: an image failed to scan or inventory was incomplete (for example a namespace you may not list), or a fatal error |
 | 130 | Cancelled |
 
+With `--fail-on` unset, image scan errors are only reported on stderr and the exit code stays 0, so check stderr before treating 0 as fully scanned.
+
 Pass `--allow-partial` to accept an incomplete scan instead of exiting 2.
 
 ## Trivy

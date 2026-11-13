@@ -1,8 +1,10 @@
 """End-to-end scan of a throwaway kind cluster. Needs kind, docker and network access."""
 
+import contextlib
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -22,9 +24,32 @@ def _docker_running() -> bool:
         return False
 
 
+def _run_script(out: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+    """Run the script in its own process group; on timeout or Ctrl-C let its EXIT trap delete the cluster."""
+    proc = subprocess.Popen(
+        [str(SCRIPT), str(out)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout)
+    except (subprocess.TimeoutExpired, KeyboardInterrupt):
+        os.killpg(proc.pid, signal.SIGTERM)
+        try:
+            proc.wait(timeout=60)
+        except subprocess.TimeoutExpired:
+            os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait()
+        raise
+    return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+
+
 def test_kind_scan(tmp_path: Path) -> None:
-    if shutil.which("kind") is None or shutil.which("docker") is None:
-        pytest.skip("kind and docker are required")
+    if any(shutil.which(tool) is None for tool in ("kind", "docker", "kubectl")):
+        pytest.skip("kind, docker and kubectl are required")
     if not _docker_running():
         pytest.skip("docker is not running")
 
@@ -34,7 +59,7 @@ def test_kind_scan(tmp_path: Path) -> None:
     env["KUBEDELOS_DATA_DIR"] = str(tmp_path / "data")
     env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env['PATH']}"
 
-    proc = subprocess.run([str(SCRIPT), str(out)], env=env, capture_output=True, text=True, timeout=1800, check=False)
+    proc = _run_script(out, env, timeout=1800)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 
     rows = json.loads(out.read_text())
@@ -44,12 +69,11 @@ def test_kind_scan(tmp_path: Path) -> None:
     assert web
     assert all(r["owner"] == "web@example.com" for r in web)
 
-    # busybox:1.36 has no CRITICAL/HIGH findings, so it never appears in the JSON rows. Check that it was scanned.
-    with sqlite3.connect(tmp_path / "data" / "kubedelos.db") as db:
+    # busybox:1.36 has zero findings, so it never appears in the JSON rows. Check that it was scanned.
+    with contextlib.closing(sqlite3.connect(tmp_path / "data" / "kubedelos.db")) as db:
         busybox = db.execute(
             "SELECT i.status FROM image_result i JOIN workload w ON w.image_result_id = i.id "
             "WHERE w.namespace = 'jobs' AND i.ref LIKE '%busybox%'"
         ).fetchall()
-    db.close()
     assert busybox
     assert {status for (status,) in busybox} == {"ok"}
