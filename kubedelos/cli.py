@@ -1,7 +1,10 @@
 """Command line entrypoints: `kubedelos` (the Typer app) and `delos` (the UI launcher)."""
 
+import contextlib
+import signal
 import sys
 import threading
+from collections.abc import Iterator
 from datetime import timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -15,6 +18,7 @@ from rich.progress import Progress as RichProgress
 
 from kubedelos import __version__
 from kubedelos.config import Settings
+from kubedelos.kube import client as kube_client
 from kubedelos.models import Severity
 from kubedelos.output import RENDERERS
 from kubedelos.scan.service import Progress, run_scan
@@ -80,6 +84,38 @@ def _parse_severities(value: str) -> set[str]:
     return names
 
 
+_ERROR_LINE_CHARS = 200
+
+
+@contextlib.contextmanager
+def _signals_as_interrupt() -> Iterator[None]:
+    """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` so they stop Trivy like Ctrl-C does.
+
+    Trivy runs in its own process groups, so without this a ``timeout``, a CI cancel or a closed terminal would end
+    Python without unwinding and leave the server and its clients running. Signal handlers can only be set on the
+    main thread; elsewhere this does nothing.
+    """
+    if threading.current_thread() is not threading.main_thread():
+        yield
+        return
+
+    def interrupt(signum: int, frame: object) -> None:
+        raise KeyboardInterrupt
+
+    previous = {sig: signal.signal(sig, interrupt) for sig in (signal.SIGTERM, getattr(signal, "SIGHUP", None)) if sig}
+    try:
+        yield
+    finally:
+        for sig, handler in previous.items():
+            signal.signal(sig, handler)
+
+
+def _one_line(text: str | None, limit: int = _ERROR_LINE_CHARS) -> str:
+    """First line of ``text``, cut to ``limit`` characters, with control characters replaced."""
+    first = (text or "").strip().splitlines()[:1]
+    return "".join(ch if ch.isprintable() else "?" for ch in (first[0] if first else ""))[:limit]
+
+
 @app.command()
 def scan(
     context: Annotated[str | None, typer.Option(help="Kubeconfig context to scan.")] = None,
@@ -121,28 +157,33 @@ def scan(
     err = Console(stderr=True)
     cancel = threading.Event()
     try:
-        settings = Settings(**{k: v for k, v in passed.items() if v is not None})
-        repo = Repo(connect(settings.db_path))
-        with RichProgress(
-            TextColumn("{task.description}"),
-            BarColumn(),
-            MofNCompleteColumn(),
-            console=err,
-            disable=not sys.stderr.isatty(),
-        ) as bar:
-            task = bar.add_task("scanning", total=None)
+        with _signals_as_interrupt():
+            settings = Settings(**{k: v for k, v in passed.items() if v is not None})
+            api = kube_client.load(settings)
+            typer.echo(f"scanning context {_one_line(api.current_context())}", err=True)
+            with contextlib.closing(connect(settings.db_path)) as conn:
+                repo = Repo(conn)
+                with RichProgress(
+                    TextColumn("{task.description}"),
+                    BarColumn(),
+                    MofNCompleteColumn(),
+                    console=err,
+                    disable=not sys.stderr.isatty(),
+                ) as bar:
+                    task = bar.add_task("scanning", total=None)
 
-            def on_progress(p: Progress) -> None:
-                bar.update(task, total=p.total, completed=p.done, description=f"scanning ({p.errors} errors)")
+                    def on_progress(p: Progress) -> None:
+                        bar.update(task, total=p.total, completed=p.done, description=f"scanning ({p.errors} errors)")
 
-            kwargs: dict[str, Any] = {"on_progress": on_progress, "cancel": cancel}
-            if no_cache:
-                kwargs["cache_max_age"] = timedelta(0)
-            outcome = run_scan(settings, repo=repo, **kwargs)
-        run = repo.get_run(outcome.run_id)
-        if run is None or run["status"] == "failed":
-            raise RuntimeError("scan run failed")
-        findings = repo.run_findings(outcome.run_id)
+                    kwargs: dict[str, Any] = {"api": api, "on_progress": on_progress, "cancel": cancel}
+                    if no_cache:
+                        kwargs["cache_max_age"] = timedelta(0)
+                    outcome = run_scan(settings, repo=repo, **kwargs)
+                run = repo.get_run(outcome.run_id)
+                if run is None or run["status"] == "failed":
+                    raise RuntimeError("scan run failed")
+                findings = repo.run_findings(outcome.run_id)
+                failed = repo.run_errors(outcome.run_id)
     except KeyboardInterrupt:
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None
@@ -166,6 +207,11 @@ def scan(
     else:
         typer.echo(rendered, nl=not rendered.endswith("\n"))
 
+    for row in failed:
+        typer.echo(
+            f"error: {_one_line(row['ref'], 512)} [{row['platform']}] {row['error_kind']}: {_one_line(row['error'])}",
+            err=True,
+        )
     errors = run["images_error"] or 0
     if errors:
         typer.echo(f"{errors} image(s) failed to scan", err=True)

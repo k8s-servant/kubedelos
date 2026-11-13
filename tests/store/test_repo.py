@@ -10,6 +10,20 @@ from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 
 DIGEST = "sha256:" + "a" * 64
+_OPEN: list[sqlite3.Connection] = []
+
+
+@pytest.fixture(autouse=True)
+def _close_connections():
+    yield
+    while _OPEN:
+        _OPEN.pop().close()
+
+
+def _repo(tmp_path, **kw):
+    conn = connect(tmp_path / "k.db")
+    _OPEN.append(conn)
+    return Repo(conn, **kw)
 
 
 def _item(ref="reg.io/app:1", digest=DIGEST, workloads=None):
@@ -41,13 +55,14 @@ def test_migrations_idempotent(tmp_path):
     path = tmp_path / "d" / "k.db"
     connect(path).close()
     conn = connect(path)
+    _OPEN.append(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
 def test_run_roundtrip_counts(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1")
     assert repo.get_run(run)["status"] == "running"
     for i, status in enumerate(["ok", "ok", "error"]):
@@ -62,11 +77,11 @@ def test_run_roundtrip_counts(tmp_path):
 
 
 def test_latest_run_id_empty(tmp_path):
-    assert Repo(connect(tmp_path / "k.db")).latest_run_id() is None
+    assert _repo(tmp_path).latest_run_id() is None
 
 
 def test_run_findings_joins_workloads_and_orders(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1")
     wls = [
         Workload(namespace="zz", kind="Deployment", name="b", container="c", owner="o@x", team="t"),
@@ -88,7 +103,7 @@ def test_run_findings_joins_workloads_and_orders(tmp_path):
 
 
 def test_cached_status_stored_as_is(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1")
     item = _item()
     repo.add_result(run, item, _result(item, "cached", findings=[_finding()]))
@@ -97,7 +112,7 @@ def test_cached_status_stored_as_is(tmp_path):
 
 
 def test_add_result_is_atomic(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1")
     item = _item()
     with pytest.raises(sqlite3.IntegrityError):
@@ -107,7 +122,7 @@ def test_add_result_is_atomic(tmp_path):
 
 def test_cache_hit_and_expiry(tmp_path):
     now = [datetime(2026, 1, 1, tzinfo=UTC)]
-    repo = Repo(connect(tmp_path / "k.db"), clock=lambda: now[0])
+    repo = _repo(tmp_path, clock=lambda: now[0])
     item = _item()
     report = _result(item, findings=[_finding()]).model_dump(mode="json")
     repo.put_cache(DIGEST, "linux/amd64", report)
@@ -124,7 +139,7 @@ def test_cache_hit_and_expiry(tmp_path):
 
 
 def test_tag_refs_not_cached(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     repo.put_cache("reg.io/app:latest", "linux/amd64", {"a": 1})
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
     assert repo.get_cached("reg.io/app:latest", "linux/amd64", timedelta(days=1)) is None
@@ -132,7 +147,7 @@ def test_tag_refs_not_cached(tmp_path):
 
 @pytest.mark.parametrize("status", ["running", "bogus", ""])
 def test_finish_run_rejects_bad_status(tmp_path, status):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1")
     with pytest.raises(ValueError):
         repo.finish_run(run, status)
@@ -145,7 +160,7 @@ def test_finish_run_rejects_bad_status(tmp_path, status):
      "x@sha256:" + "a" * 64 + "/y", DIGEST + "\n", "reg.io/app@" + DIGEST + "\n"],
 )  # fmt: skip
 def test_non_digest_keys_not_cached(tmp_path, key):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     repo.put_cache(key, "linux/amd64", {"a": 1})
     assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
     assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) is None
@@ -153,13 +168,13 @@ def test_non_digest_keys_not_cached(tmp_path, key):
 
 @pytest.mark.parametrize("key", [DIGEST, "reg.io/app@" + DIGEST])
 def test_valid_digest_keys_cached(tmp_path, key):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     repo.put_cache(key, "linux/amd64", {"a": 1})
     assert repo.get_cached(key, "linux/amd64", timedelta(days=1)) == {"a": 1}
 
 
 def test_cache_miss_on_other_trivy_version(tmp_path):
-    repo = Repo(connect(tmp_path / "k.db"))
+    repo = _repo(tmp_path)
     repo.put_cache(DIGEST, "linux/amd64", {"a": 1})
     repo._conn.execute("UPDATE image_cache SET trivy_db_version = '0.0.1'")
     assert repo.get_cached(DIGEST, "linux/amd64", timedelta(days=1)) is None
@@ -168,6 +183,7 @@ def test_cache_miss_on_other_trivy_version(tmp_path):
 def test_db_files_are_private(tmp_path):
     path = tmp_path / "kubedelos" / "k.db"
     conn = connect(path)
+    _OPEN.append(conn)
     Repo(conn).start_run("c", "cli", "v")
     for f in (path, path.with_name("k.db-wal"), path.with_name("k.db-shm")):
         if f.exists():
@@ -187,3 +203,17 @@ def test_existing_kubedelos_dir_is_tightened(tmp_path):
     (tmp_path / "kubedelos").chmod(0o755)
     connect(tmp_path / "kubedelos" / "k.db").close()
     assert stat.S_IMODE((tmp_path / "kubedelos").stat().st_mode) == 0o700
+
+
+def test_run_errors_lists_failed_images_only(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1")
+    ok, bad = _item(), _item(ref="reg.io/bad:1", digest=None)
+    repo.add_result(run, ok, _result(ok))
+    repo.add_result(run, bad, _result(bad, status="error", error_kind="not_found", error="manifest unknown"))
+    other = repo.start_run("ctx", "cli", "0.76.1")
+    repo.add_result(other, bad, _result(bad, status="error", error_kind="auth", error="denied"))
+    rows = [dict(r) for r in repo.run_errors(run)]
+    assert rows == [
+        {"ref": "reg.io/bad:1", "platform": "linux/amd64", "error_kind": "not_found", "error": "manifest unknown"}
+    ]

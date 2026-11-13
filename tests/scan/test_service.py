@@ -48,8 +48,9 @@ def env(tmp_path, monkeypatch):
     calls: list[list] = []
     monkeypatch.setattr(service, "TrivyServer", FakeServer)
     monkeypatch.setattr(service, "ensure_trivy", lambda settings: Path("/fake/trivy"))
-    repo = Repo(connect(tmp_path / "t.db"))
-    return _settings(tmp_path), repo, calls
+    conn = connect(tmp_path / "t.db")
+    yield _settings(tmp_path), Repo(conn), calls
+    conn.close()
 
 
 def _fake_scan(calls, fail_ref=None):

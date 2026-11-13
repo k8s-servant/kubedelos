@@ -125,5 +125,12 @@ class Repo:
                 (image_key, platform, TRIVY_VERSION, self._now(), json.dumps(report)),
             )
 
+    def run_errors(self, run_id: int) -> list[sqlite3.Row]:
+        """The images of a run that failed to scan, with Trivy's (token-masked) error."""
+        return self._conn.execute(
+            "SELECT ref, platform, error_kind, error FROM image_result WHERE run_id = ? AND status = 'error' ORDER BY ref",
+            (run_id,),
+        ).fetchall()
+
     def run_findings(self, run_id: int) -> list[sqlite3.Row]:
         return self._conn.execute(_RUN_FINDINGS_SQL, (run_id,)).fetchall()
