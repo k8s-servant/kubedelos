@@ -2,7 +2,7 @@
 
 ## Context
 An earlier internal tool proved the idea but was tied to one company's environment: its owner lookup, secret store, mail setup, label conventions, registry and ingress were all specific to that setup. We want a community open-source tool built from the same idea that works on any cluster, in two modes that matter equally:
-1. **Laptop:** type `delos` and a local web UI opens against the current kube-context, as in skyhook-io/radar.
+1. **Laptop:** type `kubedelos ui` and a local web UI opens against the current kube-context, as in skyhook-io/radar.
 2. **In-cluster:** `helm install` runs scheduled scans, keeps history and sends reports (email or webhooks).
 
 **Market gap:** no existing tool lets you run a single command against your current context and get a Trivy-focused UI. trivy-operator-dashboard needs an in-cluster install, and the Headlamp, Lens and Argo CD plugins need a host app.
@@ -11,11 +11,11 @@ An earlier internal tool proved the idea but was tied to one company's environme
 | Topic | Decision |
 |---|---|
 | Name | **kubedelos**. PyPI, GitHub `k8s-servant/kubedelos` and Homebrew are all free (checked 2026-11-13). Bare "delos" clashes with Delos Cloud (SAP sovereign cloud), and the PyPI name `delos` is taken. |
-| Command | The package `kubedelos` installs both `kubedelos` and `delos`. |
+| Command | The package `kubedelos` installs one command, `kubedelos`. There is no separate `delos` command (decided 2026-11-13). |
 | Org | `k8s-servant` GitHub org, reusing its release GitHub App and its `maintainers` team. |
 | Code origin | **Clean rewrite.** No code is copied from the earlier tool. It serves only as a reference for features and UX. |
 | Language | Python 3.12+ |
-| Scan source | Trivy CLI only. delos lists pod images and runs `trivy image`. No Trivy Operator. |
+| Scan source | Trivy CLI only. kubedelos lists pod images and runs `trivy image`. No Trivy Operator. |
 | UI | FastAPI + Jinja2 + HTMX, with no Node build. Static assets ship in the wheel. |
 | Trivy on a laptop | Auto-download a pinned Trivy release into `~/.cache/kubedelos`, verified against the release checksums file. `--trivy-path` overrides it. |
 | Storage | SQLite only (`~/.local/share/kubedelos/` locally; PVC with a single replica in-cluster). All SQL goes through a repository layer so Postgres can be added later. |
@@ -64,7 +64,7 @@ defaults:
 
 **Design details:**
 - `kubedelos/registry/` has a `CredentialProvider` protocol, a provider for each auth type, and a resolver that matches hosts.
-- For each scan, the resolver builds a short-lived `DOCKER_CONFIG` in a temporary directory with 0700 permissions. It is passed only to that Trivy client process and deleted afterwards. delos's own exchanged tokens are cached in memory until they expire. Credentials are never stored in SQLite and never logged.
+- For each scan, the resolver builds a short-lived `DOCKER_CONFIG` in a temporary directory with 0700 permissions. It is passed only to that Trivy client process and deleted afterwards. kubedelos's own exchanged tokens are cached in memory until they expire. Credentials are never stored in SQLite and never logged.
 - Helm `cloud.provider` presets the ServiceAccount annotations and pod labels that WI, IRSA and GKE WI need. `registries:` decides which auth goes with which host. On mixed clusters the two can be combined, for example AKS pulling from both ACR and Harbor.
 - **The UI shows auth status:**
   - a "Registries" page lists each configured host, its auth type, and the result of the last token check
@@ -74,9 +74,9 @@ defaults:
 
 ## Corrections from the builder review (my calls)
 - **Scan by digest.** Use `repo@sha256:…` from `containerStatuses[].imageID`, and fall back to the tag for templates. Always pass `--image-src remote` and `--platform linux/<node arch>`, so an arm64 Mac neither scans its local Docker copy nor picks the wrong arch.
-- **Trivy concurrency.** delos starts a local `trivy server` (one DB download) and runs the parallel scans as clients. This avoids the BoltDB lock fight. It is decided in Phase 1, before the UI's progress and cancel are built on top.
+- **Trivy concurrency.** kubedelos starts a local `trivy server` (one DB download) and runs the parallel scans as clients. This avoids the BoltDB lock fight. It is decided in Phase 1, before the UI's progress and cancel are built on top.
 - **Trivy pinning.** Pin the version and a per-platform SHA-256 inside the package. A checksums file from the same release only proves integrity. Never use "latest". In CI, pin Trivy by SHA, not `trivy-action` tags (there was a supply-chain incident in 2026).
-- **Registry auth.** Trivy's built-in cloud support only triggers on matching hostnames, so delos does the ACR token exchange itself (see above) rather than relying on Trivy. Pull secrets need `secrets:get` and `serviceaccounts:get` (opt-in).
+- **Registry auth.** Trivy's built-in cloud support only triggers on matching hostnames, so kubedelos does the ACR token exchange itself (see above) rather than relying on Trivy. Pull secrets need `secrets:get` and `serviceaccounts:get` (opt-in).
 - **M365.** Call the Graph `users/{sender}/sendMail` endpoint (POST) through `httpx` with an `azure-identity` token, not msgraph-sdk. Document how to scope `Mail.Send` with Exchange RBAC for Applications, and the 4 MB request limit, which means a large CSV becomes a UI link. Workload identity works on any cluster with an OIDC issuer.
 - **Teams.** Use Workflows webhooks with an Adaptive Card payload. The old O365 connector webhooks are being retired.
 - **APScheduler.** Pin `>=3.11,<4`. Run `AsyncIOScheduler` in the FastAPI lifespan with an in-memory job store, and the DB lease guards against double runs.
@@ -91,7 +91,7 @@ defaults:
 - **Proxy-header trust.** With `trustProxyHeaders` on, the app binds to 127.0.0.1 in the pod and the Service targets only the oauth2-proxy port.
 - **Laptop hardening.** Check the Host header (DNS-rebinding defence) and put a random startup token in the URL that opens, as Jupyter does.
 - **Data paths.** Use `platformdirs`, which handles macOS, Linux and Windows correctly.
-- **Console scripts.** `kubedelos = "kubedelos.cli:app"`. `delos = "kubedelos.cli:delos_main"` is a single-command app that takes only the UI flags, so `delos --port 9000` works.
+- **Console scripts.** Only `kubedelos = "kubedelos.cli:app"`. The UI is a subcommand: `kubedelos ui --port 9000`.
 - **krew.** Dropped for v0.1, because it needs native binaries.
 - **Owner and team fields** go in the schema from Phase 1, to avoid a migration in Phase 4.
 - **Release-please.** Set `initial-version: 0.1.0` and seed the manifest. Add `# x-release-please-version` markers in `Chart.yaml`. Gate the publish jobs until Phase 5, and keep the release PR unmerged until then.
@@ -99,7 +99,7 @@ defaults:
 
 ## My calls (please check these)
 - **CLI framework:** Typer. Commands:
-  - `delos`, which is the same as `kubedelos ui`
+  - `kubedelos ui` (local web UI)
   - `kubedelos scan` (output `table|json|csv|sarif`, with `--fail-on` for CI)
   - `kubedelos serve` (in-cluster: web plus scheduler)
   - `kubedelos report send|preview`
@@ -117,7 +117,7 @@ defaults:
 ## Architecture
 ```
 kubedelos/
-  cli.py            Typer app; entrypoints kubedelos + delos
+  cli.py            Typer app; the kubedelos entrypoint
   config.py         pydantic-settings: env / file / CLI flags, one Settings model
   kube/inventory.py namespaces, pods → unique (image, digest, namespace, workload, owners)
   kube/owners.py    annotation/label → owner/team rules + fallback
@@ -162,20 +162,20 @@ Every phase ends green in CI. Tests are written first for the pure logic (TDD).
 
 **Phase 1b: registry auth.** Build `kubedelos/registry/` with the providers and resolver. Unit tests cover host matching, `DOCKER_CONFIG` generation and cleanup, and the ACR exchange against a mocked endpoint. A local `registry:2` with htpasswd covers the basic, dockerconfig and pod-pull-secrets types in kind.
 
-**Phase 2: laptop UI (`delos`).** FastAPI app, dashboard, findings, images, namespaces, run history, diff, exceptions, CSV. The scan is started from the UI with live HTMX progress. The browser opens automatically.
+**Phase 2: laptop UI (`kubedelos ui`).** FastAPI app, dashboard, findings, images, namespaces, run history, diff, exceptions, CSV. The scan is started from the UI with live HTMX progress. The browser opens automatically.
 
 **Phase 3: in-cluster mode.** `serve`, scheduler and lease, Helm chart with cloud profiles, NetworkPolicy, read-only root filesystem, non-root user, and the Dockerfile (python-alpine, pinned Trivy verified by checksum, Trivy cache on the PVC).
 
 **Phase 4: owners and notifications.** Owner rules, notifier plugins (SMTP, M365, Slack, Teams), preview in the UI, `report send|preview`, and the three notify modes.
 
 **Phase 5: docs and v0.1.0.**
-- README in the k8s-servant structure: badges, a 60-second quickstart (`pipx install kubedelos && delos`), and a kind demo.
+- README in the k8s-servant structure: badges, a 60-second quickstart (`pipx install kubedelos && kubedelos ui`), and a kind demo.
 - Docs site pages: cloud setup guides for AKS (WI), EKS (IRSA/Pod Identity), GKE (WI) and on-prem; notifications; security model; verifying releases.
 - Merge the release-please PR to cut 0.1.0.
 
 ## Verification
 - `pytest` with coverage of at least 80% on the pure modules. `ruff check` and `ruff format --check` pass.
-- **Laptop end to end:** create a `kind` cluster with some vulnerable images (for example `nginx:1.19`), run `delos` on a clean machine with no trivy installed, and check that Trivy downloads and verifies, the browser opens, a scan finishes, and findings and a diff show up.
+- **Laptop end to end:** create a `kind` cluster with some vulnerable images (for example `nginx:1.19`), run `kubedelos ui` on a clean machine with no trivy installed, and check that Trivy downloads and verifies, the browser opens, a scan finishes, and findings and a diff show up.
 - **CLI:** `kubedelos scan -o sarif --fail-on critical` returns a non-zero exit code on kind.
 - **In-cluster:** `helm install` into kind, trigger a sweep through the UI, and have Mailpit (in-cluster SMTP) receive per-owner emails. Run a webhook test against a local echo server.
 - **Registry auth on real clusters (done by you, before 0.1.0):**

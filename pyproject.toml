@@ -42,7 +42,6 @@ Changelog = "https://github.com/k8s-servant/kubedelos/blob/main/CHANGELOG.md"
 
 [project.scripts]
 kubedelos = "kubedelos.cli:app"
-delos = "kubedelos.cli:delos_main"
 
 [tool.setuptools.packages.find]
 include = ["kubedelos*"]

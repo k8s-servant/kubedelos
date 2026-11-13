@@ -1,4 +1,4 @@
-"""Command line entrypoints: `kubedelos` (the Typer app) and `delos` (the UI launcher)."""
+"""The `kubedelos` command line, a Typer app."""
 
 import contextlib
 import signal
@@ -239,8 +239,3 @@ def scan(
         if hidden:
             typer.echo(f"{hidden} finding(s) at or above --fail-on are hidden by --severity", err=True)
         raise typer.Exit(1)
-
-
-def delos_main() -> None:
-    """Entrypoint of the `delos` command."""
-    typer.echo("UI coming in Phase 2")

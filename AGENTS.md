@@ -8,8 +8,8 @@ working in this repository. Human contributors: see [CONTRIBUTING.md](CONTRIBUTI
 
 kubedelos is a Kubernetes image vulnerability scanner with a local web UI and scheduled
 reports. It lists the container images running in a cluster (read-only), scans them with
-a pinned Trivy, and stores the findings in SQLite. Commands: `kubedelos` (CLI) and
-`delos` (local UI, coming in Phase 2).
+a pinned Trivy, and stores the findings in SQLite. There is one command, `kubedelos`;
+the local UI will be `kubedelos ui` (Phase 2).
 
 ## Commands
 

@@ -4,7 +4,7 @@
 
 ### Features
 
-- Package skeleton with the `kubedelos` and `delos` entrypoints.
+- Package skeleton with the `kubedelos` entrypoint.
 - `kubedelos trivy install` downloads the pinned Trivy v0.76.1 release and checks it against an embedded, Sigstore-verified SHA-256. `kubedelos scan` runs it in server mode and stops it on exit, Ctrl-C, SIGTERM or SIGHUP.
 - `kubedelos scan` inventories a kube-context and scans every unique image with Trivy.
 - Output formats: table, JSON, CSV (formula-safe) and SARIF, with `--fail-on` exit codes and `--allow-partial`.
