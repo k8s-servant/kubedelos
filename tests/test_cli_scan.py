@@ -12,10 +12,12 @@ from typer.testing import CliRunner
 
 from kubedelos import cli
 from kubedelos.config import Settings
+from kubedelos.kube.inventory import InventoryWarning, collect
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
 from kubedelos.scan.service import ScanOutcome
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
+from tests.kube.fakes import FakeKubeApi, pod
 
 D = "sha256:" + "a" * 64
 FAKE_TRIVY = Path(__file__).parent / "trivy" / "fake_trivy.py"
@@ -135,12 +137,16 @@ def test_cancelled_and_fatal(make_run):
     assert _run().exit_code == 130
 
 
+GAP = InventoryWarning("skipped namespace x: forbidden", coverage=True)
+INFO = InventoryWarning("cannot list nodes: HTTP 403; assuming a default platform", coverage=False)
+
+
 def test_warnings_and_output_file(make_run, tmp_path):
-    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=["namespace x forbidden"])
+    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=[GAP])
     out = Path(tmp_path / "o.sarif")
     r = _run("-o", "sarif", "--output-file", str(out))
     assert r.exit_code == 0
-    assert "warning: namespace x forbidden" in r.stderr
+    assert "warning: skipped namespace x: forbidden" in r.stderr
     assert json.loads(out.read_text())["version"] == "2.1.0"
     assert r.stdout == ""
 
@@ -157,16 +163,41 @@ def test_unwritable_output_file_is_fatal_exit_2(make_run, tmp_path):
     [(["--fail-on", "high"], 2), (["--fail-on", "high", "--allow-partial"], 1), ([], 0)],
 )
 def test_inventory_warnings_fail_closed(make_run, args, code):
-    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=["namespace x forbidden"])
+    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=[GAP])
     r = _run(*args)
     assert r.exit_code == code
-    assert "warning: namespace x forbidden" in r.stderr
+    assert "warning: skipped namespace x: forbidden" in r.stderr
+    reason = "error: inventory incomplete (1 namespaces/resources skipped); pass --allow-partial to accept"
+    assert (reason in r.stderr) == (code == 2)
 
 
 def test_warnings_without_findings_and_allow_partial_is_clean(make_run):
-    make_run([], warnings=["w"])
+    make_run([], warnings=[GAP])
     assert _run("--fail-on", "high", "--allow-partial").exit_code == 0
     assert _run("--fail-on", "high").exit_code == 2
+
+
+def test_informational_warnings_do_not_fail_closed(make_run):
+    make_run([], warnings=[INFO])
+    r = _run("--fail-on", "high")
+    assert r.exit_code == 0
+    assert "warning: cannot list nodes" in r.stderr and "inventory incomplete" not in r.stderr
+
+
+def test_namespace_scoped_identity_can_pass_or_fail_on_findings(make_run):
+    api = FakeKubeApi(pods={"team": [pod("p", "team")]}, namespaces_forbidden=True, nodes_forbidden=True)
+    _, warnings = collect(api, Settings(namespaces=["team"]))
+    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=warnings)
+    assert _run("-n", "team", "--fail-on", "high").exit_code == 1
+
+
+def test_skipped_namespace_still_exits_2(make_run):
+    api = FakeKubeApi(namespaces=[], pods={"team": [pod("p", "team")]}, forbidden={"team"}, namespaces_forbidden=True)
+    _, warnings = collect(api, Settings(namespaces=["team"]))
+    make_run([_finding("CVE-1", Severity.CRITICAL)], warnings=warnings)
+    r = _run("-n", "team", "--fail-on", "high")
+    assert r.exit_code == 2
+    assert "inventory incomplete (1 namespaces/resources skipped)" in r.stderr
 
 
 def test_scan_names_the_context_and_passes_the_api(make_run):

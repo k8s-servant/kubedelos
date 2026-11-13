@@ -114,6 +114,7 @@ class FakeKubeApi:
         forbidden: set[str] | None = None,
         namespaces_forbidden: bool = False,
         forbidden_resources: set[tuple[str, str]] | None = None,  # (resource, namespace)
+        nodes_forbidden: bool = False,
     ) -> None:
         self.namespaces = namespaces or []
         self.pods = pods or {}
@@ -124,6 +125,7 @@ class FakeKubeApi:
         self.forbidden = forbidden or set()
         self.namespaces_forbidden = namespaces_forbidden
         self.forbidden_resources = forbidden_resources or set()
+        self.nodes_forbidden = nodes_forbidden
 
     def _check(self, ns: str, resource: str) -> None:
         if ns in self.forbidden or (resource, ns) in self.forbidden_resources:
@@ -151,6 +153,8 @@ class FakeKubeApi:
         return self.cronjobs.get(ns, [])
 
     def list_nodes(self):
+        if self.nodes_forbidden:
+            raise ApiException(status=403, reason="Forbidden")
         return self.nodes
 
     def current_context(self) -> str:

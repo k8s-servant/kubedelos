@@ -134,8 +134,8 @@ def scan(
         bool,
         typer.Option(
             "--allow-partial",
-            help="With --fail-on, do not exit 2 when inventory warnings (skipped namespaces or resources) "
-            "mean coverage was incomplete.",
+            help="With --fail-on, do not exit 2 when skipped namespaces or resources mean coverage was incomplete. "
+            "Warnings that lose only detail (owner info, node platform) never cause exit 2.",
         ),
     ] = False,
     output_file: Annotated[Path | None, typer.Option(help="Write results here instead of stdout.")] = None,
@@ -143,7 +143,7 @@ def scan(
     """Scan the images running in the current kube-context.
 
     Exit codes: 0 ok, 1 findings at or above --fail-on, 2 error (fatal, or with --fail-on: image failures or
-    inventory warnings unless --allow-partial), 130 cancelled.
+    skipped namespaces/resources unless --allow-partial), 130 cancelled (Ctrl-C, SIGTERM or SIGHUP).
     """
     wanted = _parse_severities(severity)
     passed: dict[str, Any] = {
@@ -191,8 +191,8 @@ def scan(
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc
 
-    for text in outcome.warnings:
-        typer.echo(f"warning: {text}", err=True)
+    for warning in outcome.warnings:
+        typer.echo(f"warning: {_one_line(warning.text, 512)}", err=True)
     if run["status"] == "cancelled":
         typer.echo("cancelled", err=True)
         raise typer.Exit(130)
@@ -217,7 +217,13 @@ def scan(
         typer.echo(f"{errors} image(s) failed to scan", err=True)
     if fail_on is FailOn.none:
         return
-    if errors or (outcome.warnings and not allow_partial):
+    gaps = [w for w in outcome.warnings if w.coverage]
+    if gaps and not allow_partial:
+        typer.echo(
+            f"error: inventory incomplete ({len(gaps)} namespaces/resources skipped); pass --allow-partial to accept",
+            err=True,
+        )
+    if errors or (gaps and not allow_partial):
         raise typer.Exit(2)  # fail closed: image errors or incomplete inventory must not pass as clean
     threshold = Severity(fail_on.value.upper()).rank
     if any(Severity(r["severity"]).rank >= threshold for r in findings):

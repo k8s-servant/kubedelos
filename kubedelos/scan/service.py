@@ -8,7 +8,7 @@ from datetime import timedelta
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
-from kubedelos.kube.inventory import collect
+from kubedelos.kube.inventory import InventoryWarning, collect
 from kubedelos.models import ImageResult, InventoryItem, is_valid_ref
 from kubedelos.store import db
 from kubedelos.store.repo import Repo
@@ -28,7 +28,7 @@ class Progress:
 @dataclass
 class ScanOutcome:
     run_id: int
-    warnings: list[str]
+    warnings: list[InventoryWarning]
 
 
 def run_scan(

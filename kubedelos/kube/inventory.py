@@ -1,6 +1,7 @@
 """Collect the container images running in a cluster, with their workloads and owners."""
 
 from collections import Counter
+from dataclasses import dataclass
 
 from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubernetes.client.rest import ApiException
@@ -12,6 +13,22 @@ from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest
 
 DEFAULT_PLATFORM = "linux/amd64"
 _PREFIXES = ("docker-pullable://", "docker://")
+
+
+@dataclass(frozen=True)
+class InventoryWarning:
+    """Something the inventory could not see.
+
+    ``coverage`` is True when images may be missing from the scan (a skipped namespace or resource). It is False when
+    every image is still found and only extra detail is lost (owner info, the node platform), so that a namespace-scoped
+    identity without cluster-wide list rights can still pass ``--fail-on``.
+    """
+
+    text: str
+    coverage: bool
+
+    def __str__(self) -> str:
+        return self.text
 
 
 def _normalise(name: str) -> str:
@@ -93,34 +110,38 @@ def _is_forbidden(exc: ApiException) -> bool:
     return exc.status == 403
 
 
-def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[str]) -> list:
+def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarning]) -> list:
     try:
         return list_fn(ns)
     except ApiException as exc:
         if not _is_forbidden(exc):
             raise
-        warnings.append(f"skipped {resource} in namespace {ns}: forbidden")
+        warnings.append(InventoryWarning(f"skipped {resource} in namespace {ns}: forbidden", coverage=True))
         return []
 
 
-def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[str]) -> list[V1Namespace]:
+def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[InventoryWarning]) -> list[V1Namespace]:
     wanted = set(settings.namespaces)
     try:
         found = api.list_namespaces()
     except ApiException as exc:
         if not (_is_forbidden(exc) and wanted):
             raise
-        warnings.append("cannot list namespaces: forbidden; owner info unavailable for the selected namespaces")
+        warnings.append(
+            InventoryWarning(
+                "cannot list namespaces: forbidden; owner info unavailable for the selected namespaces", coverage=False
+            )
+        )
         found = [V1Namespace(metadata=V1ObjectMeta(name=name)) for name in settings.namespaces]
     for missing in sorted(wanted - {ns.metadata.name for ns in found}):
-        warnings.append(f"namespace {missing} not found")
+        warnings.append(InventoryWarning(f"namespace {missing} not found", coverage=True))
     excluded = set(settings.exclude_namespaces)
     return [ns for ns in found if (not wanted or ns.metadata.name in wanted) and ns.metadata.name not in excluded]
 
 
-def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list[str]]:
+def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list[InventoryWarning]]:
     """Return the inventory (grouped by image key and platform) and any warnings."""
-    warnings: list[str] = []
+    warnings: list[InventoryWarning] = []
     namespaces = _select_namespaces(api, settings, warnings)
 
     node_arch: dict[str, str] = {}
@@ -130,7 +151,9 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
             if info and info.architecture:
                 node_arch[node.metadata.name] = info.architecture
     except ApiException as exc:
-        warnings.append(f"cannot list nodes: HTTP {exc.status}; assuming a default platform")
+        warnings.append(
+            InventoryWarning(f"cannot list nodes: HTTP {exc.status}; assuming a default platform", coverage=False)
+        )
     common = Counter(node_arch.values()).most_common(1)
     fallback = f"linux/{common[0][0]}" if common else DEFAULT_PLATFORM
 
@@ -149,7 +172,7 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
         except ApiException as exc:
             if not _is_forbidden(exc):
                 raise
-            warnings.append(f"skipped namespace {name}: forbidden")
+            warnings.append(InventoryWarning(f"skipped namespace {name}: forbidden", coverage=True))
             continue
         deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings)
         statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings)

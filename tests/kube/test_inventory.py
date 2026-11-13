@@ -2,7 +2,7 @@ import pytest
 from fakes import FakeKubeApi, cronjob, deployment, namespace, node, pod
 
 from kubedelos.config import Settings
-from kubedelos.kube.inventory import collect, parse_image_id
+from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id
 from kubedelos.models import ImageRef
 
 DIGEST = "sha256:" + "a" * 64
@@ -117,7 +117,7 @@ def test_inventory_forbidden_namespace_skipped():
     )
     items, warnings = collect(api, Settings())
     assert [w.namespace for i in items for w in i.workloads] == ["ok"]
-    assert warnings == ["skipped namespace secret: forbidden"]
+    assert warnings == [InventoryWarning("skipped namespace secret: forbidden", coverage=True)]
 
 
 def test_inventory_namespace_list_forbidden_with_explicit_namespaces():
@@ -126,7 +126,8 @@ def test_inventory_namespace_list_forbidden_with_explicit_namespaces():
     assert len(items) == 1
     assert items[0].workloads[0].owner is None
     assert len(warnings) == 1
-    assert "owner info unavailable" in warnings[0]
+    assert "owner info unavailable" in warnings[0].text
+    assert warnings[0].coverage is False  # every selected namespace is still scanned
 
 
 def test_inventory_namespace_list_forbidden_without_selection_raises():
@@ -173,14 +174,14 @@ def test_inventory_forbidden_resource_skips_only_that_resource():
     )
     items, warnings = collect(api, Settings())
     assert {i.image.ref for i in items} == {"docker.io/library/nginx:1.25", "docker.io/library/idle:1"}
-    assert warnings == ["skipped cronjobs in namespace d: forbidden"]
+    assert warnings == [InventoryWarning("skipped cronjobs in namespace d: forbidden", coverage=True)]
 
 
 def test_inventory_missing_selected_namespace_warns():
     api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
     items, warnings = collect(api, Settings(namespaces=["a", "ghost"]))
     assert len(items) == 1
-    assert warnings == ["namespace ghost not found"]
+    assert warnings == [InventoryWarning("namespace ghost not found", coverage=True)]
 
 
 def test_inventory_platform_defaults_to_amd64_without_nodes():
@@ -226,3 +227,20 @@ def test_parse_image_id_other_repo_falls_back_to_spec_digest():
     spec_digest = "sha256:" + "d" * 64
     parsed = parse_image_id(f"reg.example.com/app@{spec_digest}", "docker.io/library/import-x@sha256:" + "c" * 64)
     assert parsed.ref == f"reg.example.com/app@{spec_digest}" and parsed.digest == spec_digest
+
+
+def test_inventory_nodes_forbidden_is_informational():
+    api = FakeKubeApi(namespaces=[namespace("d")], pods={"d": [pod("p", "d")]}, nodes_forbidden=True)
+    items, warnings = collect(api, Settings())
+    assert items[0].platform == "linux/amd64"
+    assert [(w.text, w.coverage) for w in warnings] == [
+        ("cannot list nodes: HTTP 403; assuming a default platform", False)
+    ]
+
+
+def test_inventory_namespace_scoped_identity_has_no_coverage_gaps():
+    api = FakeKubeApi(pods={"team": [pod("p", "team")]}, namespaces_forbidden=True, nodes_forbidden=True)
+    items, warnings = collect(api, Settings(namespaces=["team"]))
+    assert len(items) == 1
+    assert len(warnings) == 2
+    assert not any(w.coverage for w in warnings)
