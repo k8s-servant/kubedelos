@@ -70,7 +70,7 @@ not cached and the run records its Trivy version as `custom`.
 
 ## Coming soon
 
-`delos`, a web UI on top of the same scan data, is not available yet.
+`kubedelos ui`, a local web UI on top of the same scan data, is not available yet.
 
 ## License
 

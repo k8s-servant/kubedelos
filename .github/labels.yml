@@ -22,7 +22,7 @@
   description: The kubedelos command line
 - name: area/ui
   color: c5def5
-  description: The local web UI (delos)
+  description: The local web UI (kubedelos ui)
 - name: area/reports
   color: c5def5
   description: Scheduled reports and notifications

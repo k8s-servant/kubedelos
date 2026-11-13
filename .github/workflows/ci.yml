@@ -72,13 +72,12 @@ jobs:
       - run: pip install build==1.6.1 twine==7.0.0
       - run: python -m build
       - run: twine check --strict dist/*
-      - name: Install the wheel in a clean environment and run the entrypoints
+      - name: Install the wheel in a clean environment and run the entrypoint
         run: |
           python -m venv "${RUNNER_TEMP}/wheel"
           "${RUNNER_TEMP}/wheel/bin/pip" install dist/*.whl
           cd "${RUNNER_TEMP}"
           wheel/bin/kubedelos version
-          wheel/bin/delos
 
   result:
     # The one check the branch ruleset requires, so jobs can be added or renamed freely.
