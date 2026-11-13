@@ -1,0 +1,95 @@
+name: Release
+
+# release-please keeps a release PR open from Conventional Commit history. Merging it
+# tags vX.Y.Z and creates the GitHub release; the jobs below then publish the
+# Python package to PyPI (only when the PUBLISH_ENABLED repository variable is 'true').
+#
+# release-please runs with a GitHub App token, not GITHUB_TOKEN: GitHub does not start
+# workflows on its own for events that GITHUB_TOKEN creates, so the release PR's checks
+# would wait for a maintainer to approve them. The App needs Contents, Pull requests and
+# Issues (read and write) on this repository; its Client ID is the repository variable
+# RELEASE_APP_CLIENT_ID and its private key the secret RELEASE_APP_PRIVATE_KEY. The
+# publish jobs keep GITHUB_TOKEN, and the signing identity stays this workflow file.
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    permissions: {} # release-please uses the App token
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ steps.app-token.outputs.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # The signed image and chart jobs are added in Phase 3.
+
+  pypi-build:
+    # Built in its own job, without id-token, so the build steps cannot sign anything.
+    name: build python package
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true' && vars.PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.release-please.outputs.tag_name }}
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.14"
+      - run: pip install build==1.6.1 twine==7.0.0
+      - run: python -m build
+      - run: twine check --strict dist/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: python-dist
+          path: dist/
+          retention-days: 7
+
+  pypi:
+    # Trusted publishing: PyPI accepts this workflow's OIDC token for the pypi
+    # environment, so no API token is stored. The action also uploads the PEP 740
+    # attestations, signed as this workflow.
+    name: publish to PyPI
+    needs: [release-please, pypi-build]
+    if: needs.release-please.outputs.release_created == 'true' && vars.PUBLISH_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/kubedelos/${{ needs.release-please.outputs.version }}/
+    permissions:
+      id-token: write # trusted publishing and attestations
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: python-dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
+        with:
+          attestations: true
