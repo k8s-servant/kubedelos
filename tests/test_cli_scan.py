@@ -330,3 +330,17 @@ def test_cli_scan_pkg_types_rejects_unknown(make_run):
     r = _run("--pkg-types", "secrets")
     assert r.exit_code == 2
     assert "error: --pkg-types:" in r.stderr
+
+
+def test_cli_scan_late_validation_error_is_not_named_as_a_flag(make_run):
+    from pydantic import ValidationError
+
+    try:
+        ImageRef(ref="x")  # missing repo: the kind of error odd cluster data could raise mid-scan
+    except ValidationError as exc:
+        late = exc
+    make_run([], raises=late)
+    r = _run()
+    assert r.exit_code == 2
+    assert "--repo" not in r.stderr
+    assert "error:" in r.stderr

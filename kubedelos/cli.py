@@ -187,11 +187,17 @@ def scan(
         "pkg_types": pkg_types,
         "trivy_path": trivy_path,
     }
+    try:
+        settings = Settings(**{k: v for k, v in passed.items() if v is not None})
+    except ValidationError as exc:
+        for problem in exc.errors():
+            flag = "--" + str(problem["loc"][0]).replace("_", "-") if problem["loc"] else "settings"
+            typer.echo(f"error: {flag}: {problem['msg']}", err=True)
+        raise typer.Exit(2) from exc
     err = Console(stderr=True)
     cancel = threading.Event()
     try:
         with _signals_as_interrupt():
-            settings = Settings(**{k: v for k, v in passed.items() if v is not None})
             api = kube_client.load(settings)
             typer.echo(f"scanning context {_one_line(api.current_context())}", err=True)
             with contextlib.closing(connect(settings.db_path)) as conn:
@@ -220,11 +226,6 @@ def scan(
     except KeyboardInterrupt:
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None
-    except ValidationError as exc:
-        for problem in exc.errors():
-            flag = "--" + str(problem["loc"][0]).replace("_", "-") if problem["loc"] else "settings"
-            typer.echo(f"error: {flag}: {problem['msg']}", err=True)
-        raise typer.Exit(2) from exc
     except Exception as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(2) from exc

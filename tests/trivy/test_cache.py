@@ -187,3 +187,25 @@ def test_busy_os_only_cache_does_not_need_java_db(tmp_path, monkeypatch):
         with TrivyCache(FAKE_TRIVY, tmp_path, java_db=False) as cache:
             assert cache.updated is False
     assert _downloads(log) == []
+
+
+def test_library_run_waits_then_downloads_java_db_behind_os_only_run(tmp_path, monkeypatch, capfd):
+    log = tmp_path / "downloads.jsonl"
+    monkeypatch.setenv("FAKE_TRIVY_DOWNLOAD_LOG", str(log))
+    (tmp_path / "trivy-cache" / "db").mkdir(parents=True)
+    (tmp_path / "trivy-cache" / "db" / "metadata.json").write_text("{}")  # an os-only run left no java-db
+    entered = threading.Event()
+
+    def run() -> None:
+        with TrivyCache(FAKE_TRIVY, tmp_path, java_db=True):
+            entered.set()
+
+    with open(_lock_path(tmp_path), "a") as other:
+        fcntl.flock(other, fcntl.LOCK_SH)  # the os-only run is still scanning
+        worker = threading.Thread(target=run)
+        worker.start()
+        assert not entered.wait(0.3)
+    assert entered.wait(5)
+    worker.join(5)
+    assert "--download-java-db-only" in _downloads(log)
+    assert "waiting for another kubedelos run" in capfd.readouterr().err

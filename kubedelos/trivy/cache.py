@@ -12,6 +12,7 @@ import contextlib
 import fcntl
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -45,7 +46,9 @@ class TrivyCache:
                 fcntl.flock(self._fd, fcntl.LOCK_SH)
                 if self._dbs_present():
                     return self
-                # That run's download failed or it was killed: wait for the readers to finish, then download.
+                # That run's download failed, it was killed, or it scans OS packages only and never fetched the Java
+                # DB: wait for the readers to finish, then download. Say so, since the wait can last a whole scan.
+                sys.stderr.write("waiting for another kubedelos run to finish with the Trivy DB cache...\n")
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
                 fcntl.flock(self._fd, fcntl.LOCK_EX)
             for flag in ("--download-db-only", "--download-java-db-only")[: 2 if self.java_db else 1]:
