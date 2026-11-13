@@ -1,0 +1,10 @@
+.venv/
+.superpowers/
+__pycache__/
+*.egg-info/
+dist/
+build/
+.coverage
+coverage.xml
+.pytest_cache/
+.ruff_cache/

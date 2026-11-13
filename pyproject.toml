@@ -1,0 +1,72 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kubedelos"
+version = "0.0.0" # x-release-please-version
+description = "Scan the container images running in a Kubernetes cluster with Trivy"
+readme = "README.pypi.md" # the PyPI page; README.md may use relative links that break there
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "The kubedelos Authors" }]
+keywords = ["kubernetes", "trivy", "security", "vulnerability", "container-images", "cli"]
+classifiers = [
+  "Development Status :: 2 - Pre-Alpha",
+  "Intended Audience :: System Administrators",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Security",
+]
+requires-python = ">=3.12"
+dependencies = [
+  "typer>=0.29,<1",             # CLI framework
+  "pydantic>=2.14,<3",          # data models
+  "pydantic-settings>=2.16,<3", # settings from environment variables
+  "kubernetes>=37,<38",         # cluster inventory
+  "httpx>=0.28,<1",             # Trivy download and registry calls
+  "platformdirs>=4.14,<5",      # cache and data directories
+  "rich>=15,<16",               # terminal output
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=9,<10", "pytest-cov>=7,<8", "ruff>=0.17,<1", "pre-commit>=4,<5"]
+
+[project.urls]
+Homepage = "https://github.com/k8s-servant/kubedelos"
+Issues = "https://github.com/k8s-servant/kubedelos/issues"
+Changelog = "https://github.com/k8s-servant/kubedelos/blob/main/CHANGELOG.md"
+
+[project.scripts]
+kubedelos = "kubedelos.cli:app"
+delos = "kubedelos.cli:delos_main"
+
+[tool.setuptools.packages.find]
+include = ["kubedelos*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = ["e2e: needs kind + network"]
+addopts = "-m 'not e2e'"
+
+[tool.coverage.report]
+omit = ["kubedelos/cli.py"] # the plan's 80% floor covers the library; the CLI is exercised through CliRunner tests
+
+[tool.ruff]
+line-length = 120
+target-version = "py312"
+extend-exclude = ["docs"] # plans and design notes hold illustrative code blocks, not project code
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "SIM", "RUF"]
+ignore = [
+  "E501", # line length is the formatter's job; long strings and comments are left as they are
+  "S603", # subprocess without shell: the Trivy runner executes a fixed argument list by design
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108", "S607"] # asserts and dummy credentials are fine in tests

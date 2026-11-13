@@ -1,0 +1,49 @@
+name: Feature request
+description: Suggest a new capability or an improvement.
+title: "feat: "
+labels: ["type/feature", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: How should it work? Flags, config, output, UI...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      multiple: true
+      options:
+        - Cluster inventory
+        - Scanning (Trivy)
+        - CLI
+        - Web UI
+        - Scheduled reports
+        - Docs
+        - Other
+  - type: checkboxes
+    id: readonly
+    attributes:
+      label: Read-only guarantee
+      options:
+        - label: This feature keeps cluster access read-only. It does not change cluster objects or read Secrets.
+          required: true
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to open a PR for this.

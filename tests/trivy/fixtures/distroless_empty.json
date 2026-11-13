@@ -1,0 +1,24 @@
+{
+  "SchemaVersion": 2,
+  "Trivy": {
+    "Version": "0.76.1"
+  },
+  "ReportID": "01a1d4a2-8698-7d00-8ea6-3ccd383651bc",
+  "CreatedAt": "2026-11-13T13:19:43.512853+02:00",
+  "ArtifactID": "sha256:e93ce95375ec866a593dfb33964962ff8d8e6fa324be51470cf3bcb52d59e026",
+  "ArtifactName": "gcr.io/distroless/static",
+  "ArtifactType": "container_image",
+  "Metadata": {
+    "OS": {
+      "Family": "debian",
+      "Name": "13.7"
+    }
+  },
+  "Results": [
+    {
+      "Target": "gcr.io/distroless/static (debian 13.7)",
+      "Class": "os-pkgs",
+      "Type": "debian"
+    }
+  ]
+}

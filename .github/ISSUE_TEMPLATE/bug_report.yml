@@ -1,0 +1,63 @@
+name: Bug report
+description: Something does not work as documented.
+title: "bug: "
+labels: ["type/bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting! **Do not paste secrets, kubeconfigs, tokens or internal
+        hostnames.** Redact cluster names, registries and namespaces if needed.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the bug and what you expected instead.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Run `kubedelos scan ...`
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: Redacted log output (stderr). Rendered as code, no backticks needed.
+      render: shell
+  - type: input
+    id: version
+    attributes:
+      label: kubedelos version
+      placeholder: "0.1.0 / commit"
+    validations:
+      required: true
+  - type: input
+    id: trivy
+    attributes:
+      label: Trivy version
+      placeholder: "0.76.1"
+  - type: input
+    id: platform
+    attributes:
+      label: OS, architecture and Python version
+      placeholder: "macOS arm64, Python 3.13"
+  - type: input
+    id: kubernetes
+    attributes:
+      label: Kubernetes version and distribution
+      placeholder: "1.33, AKS / EKS / GKE / kind / ..."
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and this is not a duplicate.
+          required: true
+        - label: I removed secrets and sensitive cluster data from this report.
+          required: true
