@@ -204,11 +204,10 @@ class TrivyServer:
                         f"trivy server exited with code {code} before it was ready: "
                         f"{_short(_tail(self._stderr), self.token)}"
                     )
-                try:
+                # Connection errors are expected until the server listens; keep polling until the deadline.
+                with contextlib.suppress(httpx.HTTPError):
                     if client.get(f"{self._url}/healthz").status_code == 200:
                         return
-                except httpx.HTTPError:
-                    pass
                 if time.monotonic() > deadline:
                     raise RuntimeError(f"trivy server did not become ready within {_READY_TIMEOUT_S:.0f}s")
                 time.sleep(0.1)
