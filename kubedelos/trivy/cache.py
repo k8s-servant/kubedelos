@@ -12,6 +12,7 @@ import contextlib
 import fcntl
 import os
 import subprocess
+import sys
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -20,14 +21,16 @@ from kubedelos.trivy.runner import _run_group, _short
 
 _DB_DOWNLOAD_TIMEOUT_S = 1800
 _LOCK_FILE = ".kubedelos.lock"
-_DB_METADATA = ("db/metadata.json", "java-db/metadata.json")  # written by Trivy once a download finished
+_DB_METADATA = "db/metadata.json"  # written by Trivy once a download finished
+_JAVA_DB_METADATA = "java-db/metadata.json"
 
 
 class TrivyCache:
     """``<cache_dir>/trivy-cache`` with up-to-date DBs, share-locked for the lifetime of a ``with`` block."""
 
-    def __init__(self, trivy: Path, cache_dir: Path) -> None:
+    def __init__(self, trivy: Path, cache_dir: Path, *, java_db: bool = True) -> None:
         self.trivy = trivy
+        self.java_db = java_db  # the Java DB (about 1.5 GB) is only needed when libraries are scanned
         self.dir = cache_dir / "trivy-cache"
         self.updated = False
         self._fd: int | None = None
@@ -43,10 +46,15 @@ class TrivyCache:
                 fcntl.flock(self._fd, fcntl.LOCK_SH)
                 if self._dbs_present():
                     return self
-                # That run's download failed or it was killed: wait for the readers to finish, then download.
+                # That run's download failed, it was killed, or it scans OS packages only and never fetched the Java
+                # DB: wait for the readers to finish, then download. Say so, since the wait can last a whole scan.
                 fcntl.flock(self._fd, fcntl.LOCK_UN)
-                fcntl.flock(self._fd, fcntl.LOCK_EX)
-            for flag in ("--download-db-only", "--download-java-db-only"):
+                try:
+                    fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:  # only say it when it really waits
+                    sys.stderr.write("waiting for another kubedelos run to finish with the Trivy DB cache...\n")
+                    fcntl.flock(self._fd, fcntl.LOCK_EX)
+            for flag in ("--download-db-only", "--download-java-db-only")[: 2 if self.java_db else 1]:
                 self._download(flag)
             fcntl.flock(self._fd, fcntl.LOCK_SH)
             self.updated = True
@@ -61,7 +69,8 @@ class TrivyCache:
         self._close()
 
     def _dbs_present(self) -> bool:
-        return all((self.dir / name).is_file() for name in _DB_METADATA)
+        needed = (_DB_METADATA, _JAVA_DB_METADATA) if self.java_db else (_DB_METADATA,)
+        return all((self.dir / name).is_file() for name in needed)
 
     def _download(self, flag: str) -> None:
         argv = [str(self.trivy), "image", flag, "--cache-dir", str(self.dir)]

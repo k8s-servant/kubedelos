@@ -15,7 +15,7 @@ from kubedelos import __version__
 Row = Mapping[str, Any]
 
 CSV_COLUMNS = [
-    "namespace", "kind", "workload", "container", "image", "vuln_id", "severity", "pkg_name",
+    "namespace", "kind", "workload", "container", "image", "vuln_id", "severity", "pkg_name", "pkg_class",
     "installed_version", "fixed_version", "owner", "team",
 ]  # fmt: skip
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"

@@ -21,6 +21,11 @@ digest once, and prints a table. Other formats: `-o json`, `-o csv`, `-o sarif`.
 `--kubeconfig`, `--namespace` and `--exclude-namespace` to narrow what is scanned. Owners are read
 from the `kubedelos.io/owner-email` namespace annotation.
 
+By default both OS packages and application libraries are scanned. `--pkg-types os` scans OS packages only and
+skips the 1.5 GB Trivy Java DB; `--pkg-types library` scans application dependencies only. Each finding records its
+class (`pkg_class`: `os` or `library`), and cached results are kept per level, so a narrower scan never answers
+for a wider one.
+
 ## Exit codes
 
 | Code | Meaning |
@@ -47,6 +52,7 @@ Every setting can also come from an environment variable. A command line flag wi
 | `KUBEDELOS_NAMESPACES` | `--namespace` | all namespaces |
 | `KUBEDELOS_EXCLUDE_NAMESPACES` | `--exclude-namespace` | none |
 | `KUBEDELOS_PARALLELISM` | `--parallelism` | `4` images at once (1 to 32) |
+| `KUBEDELOS_PKG_TYPES` | `--pkg-types` | `os,library` (comma-separated: `os`, `library` or both) |
 | `KUBEDELOS_SCAN_TIMEOUT_S` | | `600` seconds per image |
 | `KUBEDELOS_TRIVY_PATH` | `--trivy-path` | the pinned Trivy |
 | `KUBEDELOS_CACHE_DIR` | | the user cache dir (`~/.cache/kubedelos` on Linux, `~/Library/Caches/kubedelos` on macOS): Trivy binary and DB |
@@ -54,7 +60,7 @@ Every setting can also come from an environment variable. A command line flag wi
 | `KUBEDELOS_OWNER_ANNOTATION` | | `kubedelos.io/owner-email` |
 | `KUBEDELOS_TEAM_LABEL` | | `kubedelos.io/team` |
 
-List variables take a JSON list, not a comma-separated string:
+List variables take a JSON list, not a comma-separated string (`KUBEDELOS_PKG_TYPES` is the exception: `os,library`):
 
 ```bash
 KUBEDELOS_NAMESPACES='["team-a","team-b"]' kubedelos scan

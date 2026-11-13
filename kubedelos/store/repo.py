@@ -22,7 +22,7 @@ _RUN_FINDINGS_SQL = """
 SELECT w.namespace, w.kind, w.name AS workload, w.container, w.owner, w.team,
        r.ref AS image, r.repo, r.tag, r.digest, r.platform,
        f.vuln_id, f.severity, f.pkg_name, f.installed_version, f.fixed_version,
-       f.title, f.primary_url, f.target, f.pkg_type
+       f.title, f.primary_url, f.target, f.pkg_type, f.pkg_class
 FROM image_result r
 JOIN finding f ON f.image_result_id = r.id
 JOIN workload w ON w.image_result_id = r.id
@@ -48,11 +48,12 @@ class Repo:
     def _now(self) -> str:
         return self._clock().isoformat()
 
-    def start_run(self, context: str | None, trigger: str | None, trivy_version: str) -> int:
+    def start_run(self, context: str | None, trigger: str | None, trivy_version: str, *, scan_level: str) -> int:
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version) VALUES (?, 'running', ?, ?, ?)",
-                (self._now(), context, trigger, trivy_version),
+                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types)"
+                " VALUES (?, 'running', ?, ?, ?, ?)",
+                (self._now(), context, trigger, trivy_version, scan_level),
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
@@ -74,11 +75,11 @@ class Repo:
             )
             self._conn.executemany(
                 "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, fixed_version, severity,"
-                " title, primary_url, target, pkg_type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " title, primary_url, target, pkg_type, pkg_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         result_id, f.vuln_id, f.pkg_name, f.installed_version, f.fixed_version, f.severity.value,
-                        f.title, f.primary_url, f.target, f.pkg_type,
+                        f.title, f.primary_url, f.target, f.pkg_type, f.pkg_class,
                     )
                     for f in result.findings
                 ],
@@ -103,14 +104,14 @@ class Repo:
         row = self._conn.execute("SELECT MAX(id) FROM scan_run").fetchone()
         return row[0]
 
-    def get_cached(self, image_key: str, platform: str, max_age: timedelta) -> ImageResult | None:
-        """A fresh cached result, or None. A row that no longer parses or validates is a miss and is deleted."""
+    def get_cached(self, image_key: str, platform: str, max_age: timedelta, *, scan_level: str) -> ImageResult | None:
+        """A fresh cached result scanned at ``scan_level``, or None. A row that no longer validates is deleted."""
         if not _is_digest_key(image_key):
             return None
         row = self._conn.execute(
             "SELECT scanned_at, report_json FROM image_cache WHERE image_key = ? AND platform = ?"
-            " AND trivy_db_version = ?",
-            (image_key, platform, CACHE_VERSION),
+            " AND scan_level = ? AND trivy_db_version = ?",
+            (image_key, platform, scan_level, CACHE_VERSION),
         ).fetchone()
         if row is None:
             return None
@@ -121,21 +122,22 @@ class Repo:
         except ValidationError:  # covers invalid JSON too
             with self._conn:
                 self._conn.execute(
-                    "DELETE FROM image_cache WHERE image_key = ? AND platform = ?", (image_key, platform)
+                    "DELETE FROM image_cache WHERE image_key = ? AND platform = ? AND scan_level = ?",
+                    (image_key, platform, scan_level),
                 )
             return None
 
-    def put_cache(self, image_key: str, platform: str, result: ImageResult) -> None:
+    def put_cache(self, image_key: str, platform: str, result: ImageResult, *, scan_level: str) -> None:
         if not _is_digest_key(image_key):
             return
         with self._conn:
             self._conn.execute(
-                "INSERT INTO image_cache (image_key, platform, trivy_db_version, scanned_at, report_json)"
-                " VALUES (?, ?, ?, ?, ?)"
-                " ON CONFLICT(image_key, platform) DO UPDATE SET"
+                "INSERT INTO image_cache (image_key, platform, scan_level, trivy_db_version, scanned_at, report_json)"
+                " VALUES (?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(image_key, platform, scan_level) DO UPDATE SET"
                 " trivy_db_version = excluded.trivy_db_version, scanned_at = excluded.scanned_at,"
                 " report_json = excluded.report_json",
-                (image_key, platform, CACHE_VERSION, self._now(), result.model_dump_json()),
+                (image_key, platform, scan_level, CACHE_VERSION, self._now(), result.model_dump_json()),
             )
 
     def run_errors(self, run_id: int) -> list[sqlite3.Row]:

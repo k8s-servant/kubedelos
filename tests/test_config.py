@@ -23,3 +23,33 @@ def test_parallelism_bounds():
         Settings(parallelism=0)
     with pytest.raises(ValidationError):
         Settings(parallelism=33)
+
+
+def test_pkg_types_default_is_os_and_library():
+    settings = Settings()
+    assert settings.pkg_types == ("library", "os")
+    assert settings.scan_level == "library,os"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("library,os", ("library", "os")),
+        ("OS, Library", ("library", "os")),
+        (["os", "os", "library"], ("library", "os")),
+        ("os", ("os",)),
+    ],
+)
+def test_pkg_types_normalised(value, expected):
+    assert Settings(pkg_types=value).pkg_types == expected
+
+
+@pytest.mark.parametrize("value", ["", "secrets", [], "os,,"])
+def test_pkg_types_rejects_unknown_and_empty(value):
+    with pytest.raises(ValidationError):
+        Settings(pkg_types=value)
+
+
+def test_pkg_types_from_env(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_PKG_TYPES", "os")
+    assert Settings().pkg_types == ("os",)

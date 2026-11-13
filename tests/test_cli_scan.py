@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from kubedelos import cli
@@ -48,7 +49,7 @@ def make_run(tmp_path, monkeypatch):
     def build(findings, *, error=False, error_msg="x", status=None, raises=None, warnings=(), failures=()):
         with contextlib.closing(connect(Settings().db_path)) as conn:
             repo = Repo(conn)
-            run_id = repo.start_run("ctx", "cli", "0.76.1")
+            run_id = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
             item = _item("reg.io/a:1")
             repo.add_result(
                 run_id, item, ImageResult(image=item.image, platform="linux/amd64", status="ok", findings=findings)
@@ -316,3 +317,36 @@ def test_sigterm_stops_running_scans(tmp_path):
     assert proc.returncode == 130
     assert _gone(int(pid_file.read_text()))
     assert _gone(int(child_file.read_text()))
+
+
+def test_cli_scan_pkg_types_passed(make_run):
+    make_run([])
+    r = _run("--pkg-types", "os")
+    assert r.exit_code == 0, r.output
+    assert make_run.seen["settings"].pkg_types == ("os",)
+
+
+def test_cli_scan_pkg_types_rejects_unknown(make_run):
+    make_run([])
+    r = _run("--pkg-types", "secrets")
+    assert r.exit_code == 2
+    assert "error: --pkg-types:" in r.stderr
+
+
+def test_cli_scan_late_validation_error_is_not_named_as_a_flag(make_run):
+    with pytest.raises(ValidationError) as late:
+        ImageRef(ref="x")  # missing repo: the kind of error odd cluster data could raise mid-scan
+    make_run([], raises=late.value)
+    r = _run()
+    assert r.exit_code == 2
+    assert "--repo" not in r.stderr
+    assert "error:" in r.stderr
+
+
+def test_cli_scan_bad_env_value_names_the_variable(make_run, monkeypatch):
+    make_run([])  # the fixture reads Settings itself, so break the variable afterwards
+    monkeypatch.setenv("KUBEDELOS_PKG_TYPES", "secrets")
+    r = _run()
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_PKG_TYPES:" in r.stderr
+    assert "--pkg-types" not in r.stderr

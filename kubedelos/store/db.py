@@ -69,6 +69,22 @@ MIGRATIONS: list[str] = [
     CREATE INDEX idx_workload_namespace ON workload(namespace);
     CREATE INDEX idx_workload_image_result ON workload(image_result_id);
     """,
+    # 2: the scan level (Trivy --pkg-types). Old cache rows have no level, so they are dropped rather than guessed:
+    # an OS-only result served to an os,library run would read as "no library vulnerabilities". Runs and findings stay.
+    """
+    ALTER TABLE scan_run ADD COLUMN pkg_types TEXT;
+    ALTER TABLE finding ADD COLUMN pkg_class TEXT;
+    DROP TABLE image_cache;
+    CREATE TABLE image_cache (
+        image_key TEXT NOT NULL,
+        platform TEXT NOT NULL,
+        scan_level TEXT NOT NULL,
+        trivy_db_version TEXT,
+        scanned_at TEXT NOT NULL,
+        report_json BLOB NOT NULL,
+        PRIMARY KEY (image_key, platform, scan_level)
+    );
+    """,
 ]
 
 

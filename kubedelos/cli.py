@@ -12,6 +12,7 @@ from typing import Annotated, Any
 
 import httpx
 import typer
+from pydantic import ValidationError
 from rich.console import Console
 from rich.progress import BarColumn, MofNCompleteColumn, TextColumn
 from rich.progress import Progress as RichProgress
@@ -65,10 +66,29 @@ def _login_hint(host: str) -> str:
     return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
 
 
+def _load_settings(**flags: Any) -> Settings:
+    """Settings from the flags that were passed (``None`` means not passed) and ``KUBEDELOS_*`` variables.
+
+    A bad value exits 2 with one line per problem, naming the flag or the variable it came from.
+    """
+    passed = {k: v for k, v in flags.items() if v is not None}
+    try:
+        return Settings(**passed)
+    except ValidationError as exc:
+        for problem in exc.errors():
+            field = str(problem["loc"][0]) if problem["loc"] else ""
+            if field in passed:
+                source = "--" + field.replace("_", "-")
+            else:
+                source = f"KUBEDELOS_{field.upper()}" if field else "settings"
+            typer.echo(f"error: {source}: {problem['msg']}", err=True)
+        raise typer.Exit(2) from exc
+
+
 @trivy_app.command("install")
 def trivy_install() -> None:
     """Download and verify the pinned Trivy release, unless it is already installed."""
-    settings = Settings()
+    settings = _load_settings()
     try:
         path = ensure_trivy(settings)
     except (TrivyVerificationError, RuntimeError, OSError, httpx.HTTPError) as exc:
@@ -155,6 +175,10 @@ def scan(
         ),
     ] = FailOn.none,
     parallelism: Annotated[int | None, typer.Option(min=1, max=32, help="Images scanned at once.")] = None,
+    pkg_types: Annotated[
+        str | None,
+        typer.Option(help="Package types to scan: os, library or both, comma-separated. Default: os,library."),
+    ] = None,
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
     no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cached scan results.")] = False,
     allow_partial: Annotated[
@@ -179,13 +203,14 @@ def scan(
         "namespaces": namespace,
         "exclude_namespaces": exclude_namespace,
         "parallelism": parallelism,
+        "pkg_types": pkg_types,
         "trivy_path": trivy_path,
     }
+    settings = _load_settings(**passed)
     err = Console(stderr=True)
     cancel = threading.Event()
     try:
         with _signals_as_interrupt():
-            settings = Settings(**{k: v for k, v in passed.items() if v is not None})
             api = kube_client.load(settings)
             typer.echo(f"scanning context {_one_line(api.current_context())}", err=True)
             with contextlib.closing(connect(settings.db_path)) as conn:
@@ -278,12 +303,15 @@ def registry_test(
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
         raise typer.Exit(2)
     host = registry_host(ref)
+    settings = _load_settings(trivy_path=trivy_path)
     try:
         with _signals_as_interrupt():
-            settings = Settings(**({"trivy_path": trivy_path} if trivy_path else {}))
             trivy = ensure_trivy(settings)
-            with TrivyCache(trivy, settings.cache_dir) as cache:
-                result = scan_image(trivy, ref, platform, settings.scan_timeout_s, cache_dir=cache.dir)
+            # Only access is checked, so scan the smallest level and skip the Java DB.
+            with TrivyCache(trivy, settings.cache_dir, java_db=False) as cache:
+                result = scan_image(
+                    trivy, ref, platform, settings.scan_timeout_s, cache_dir=cache.dir, pkg_types=("os",)
+                )
     except KeyboardInterrupt:
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None

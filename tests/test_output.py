@@ -28,6 +28,7 @@ def _row(**kw):
         "primary_url": None,
         "target": "debian",
         "pkg_type": "os",
+        "pkg_class": "os",
     }
     return base | kw
 
@@ -60,7 +61,8 @@ def test_render_sarif_schema_shape():
 def test_render_csv_header():
     out = render_csv(ROWS)
     assert out.splitlines()[0] == (
-        "namespace,kind,workload,container,image,vuln_id,severity,pkg_name,installed_version,fixed_version,owner,team"
+        "namespace,kind,workload,container,image,vuln_id,severity,pkg_name,pkg_class,installed_version,fixed_version,"
+        "owner,team"
     )
     assert len(list(csv.reader(io.StringIO(out)))) == 5
 
