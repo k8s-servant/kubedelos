@@ -47,8 +47,10 @@ kc -n web wait --for=condition=Ready pod -l app=web --timeout=300s
 kc -n jobs create cronjob cleanup --image=busybox:1.36 --schedule "0 0 1 1 *" -- true
 
 set +e
-# kube-system is left out: kind's control-plane pods report an imageID ("import-<date>@sha256:...")
-# that does not exist in any registry, so those images cannot be scanned remotely.
+# kube-system is left out. kind preloads its control-plane images into the node image, so their imageID is a
+# local "import-<date>@sha256:..." that kubedelos now ignores in favour of the spec tag. Whether every one of those
+# tags (kind builds some of them itself) exists in a public registry is not guaranteed, and a single not_found
+# would turn the expected exit 1 into exit 2.
 KUBEDELOS_CACHE_DIR="$CACHE_DIR" KUBEDELOS_DATA_DIR="$DATA_DIR" kubedelos scan --kubeconfig "$KCFG" \
   --context "kind-$NAME" --namespace web --namespace jobs \
   -o json --output-file "$OUT" --fail-on critical

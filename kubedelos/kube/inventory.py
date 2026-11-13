@@ -18,7 +18,7 @@ def _normalise(name: str) -> str:
     """Return ``name`` (no tag or digest) with an explicit registry host, adding ``library/`` on Docker Hub."""
     first, sep, rest = name.partition("/")
     if sep and ("." in first or ":" in first or first == "localhost"):
-        host, path = first, rest
+        host, path = first.lower(), rest  # registry hosts are case-insensitive
     else:
         host, path = "docker.io", name
     if host in ("docker.io", "index.docker.io"):
@@ -43,10 +43,11 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
     for prefix in _PREFIXES:
         image_id = image_id.removeprefix(prefix)
     spec_repo, spec_tag, spec_digest = _split(image)
+    repo, digest = "", None
     if "@sha256:" in image_id:
         repo, _, digest = _split(image_id)
-    else:
-        repo, digest = "", None
+        if repo != spec_repo:  # e.g. kind's "import-<date>" repo for a locally loaded image: not this image's digest
+            repo, digest = "", None
     if digest and is_digest(digest):
         return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=spec_tag, digest=digest)
     if spec_digest and is_digest(spec_digest):

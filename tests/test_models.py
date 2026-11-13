@@ -39,7 +39,9 @@ def test_finding_fixable():
 @pytest.mark.parametrize(
     "ref",
     ["ghcr.io/a/b:1", f"localhost:5000/x@{D}", "docker.io/library/nginx:1.19", "nginx", "localhost/app",
-     f"reg.io/app:1.2@{D}", "reg.io/my_team/app__x:v1-rc.1"],
+     f"reg.io/app:1.2@{D}", "reg.io/my_team/app__x:v1-rc.1", "MyRegistry.example.com/app:1",
+     "reg.example.com/a__b:1", "a--b.example.com/x:1", "[::1]:5000/app:1", f"reg.example.com/app@sha512:{'b' * 128}",
+     "reg.example.com/app@sha256:" + "A" * 64],
 )  # fmt: skip
 def test_is_valid_ref_accepts(ref):
     assert is_valid_ref(ref)
@@ -48,7 +50,9 @@ def test_is_valid_ref_accepts(ref):
 @pytest.mark.parametrize(
     "ref",
     ["-oyaml", "nginx --help", "nginx:1\n", "nginx\n:1", "reg.io/" + "a" * 520, "", "Reg.io/App:1", "nginx\t",
-     "a/-b", "nginx:-tag", f"nginx@{D}\n", "nginx@sha256:abc", "nginx:" + "t" * 129, "nginx\x00"],
+     "a/-b", "nginx:-tag", f"nginx@{D}\n", "nginx@sha256:abc", "nginx:" + "t" * 129, "nginx\x00",
+     "reg.example.com/App:1", "[::1/app:1", "-reg.example.com/app:1", "reg.example.com/app@sha256:" + "g" * 64,
+     "reg.example.com/app@:" + "a" * 64],
 )  # fmt: skip
 def test_is_valid_ref_rejects(ref):
     assert not is_valid_ref(ref)

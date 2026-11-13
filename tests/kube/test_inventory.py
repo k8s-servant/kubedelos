@@ -89,6 +89,19 @@ def test_inventory_imageid_variants(image_id, expected):
         ("localhost:5000/app", "", "localhost:5000/app:latest", "latest"),
         ("ghcr.io/x/y:1", "docker://ghcr.io/x/y@sha256:" + "c" * 64, "ghcr.io/x/y@sha256:" + "c" * 64, "1"),
         ("nginx@sha256:" + "c" * 64, "", "docker.io/library/nginx@sha256:" + "c" * 64, None),
+        ("MyReg.Example.com/app:1", "", "myreg.example.com/app:1", "1"),
+        (
+            "nginx:1.19",
+            "docker.io/library/nginx@sha256:" + "c" * 64,
+            "docker.io/library/nginx@sha256:" + "c" * 64,
+            "1.19",
+        ),
+        (
+            "nginx:1.19",
+            "docker-pullable://index.docker.io/library/nginx@sha256:" + "c" * 64,
+            "docker.io/library/nginx@sha256:" + "c" * 64,
+            "1.19",
+        ),
     ],
 )
 def test_parse_image_id_registries_and_tags(image, image_id, ref, tag):
@@ -201,3 +214,15 @@ def test_parse_image_id_malformed_digest_is_tag_ref(bad):
     assert parsed.digest is None and parsed.ref == "docker.io/library/nginx:latest"
     spec = parse_image_id(f"nginx@{bad}", "")
     assert spec.digest is None and spec.ref == "docker.io/library/nginx:latest"
+
+
+def test_parse_image_id_ignores_local_import_image_id():
+    # kind and `ctr import` report a synthetic repo in imageID; its digest does not belong to the spec image
+    parsed = parse_image_id("myapp:dev", "docker.io/library/import-2024-01-01@sha256:" + "c" * 64)
+    assert parsed == ImageRef(ref="docker.io/library/myapp:dev", repo="docker.io/library/myapp", tag="dev")
+
+
+def test_parse_image_id_other_repo_falls_back_to_spec_digest():
+    spec_digest = "sha256:" + "d" * 64
+    parsed = parse_image_id(f"reg.example.com/app@{spec_digest}", "docker.io/library/import-x@sha256:" + "c" * 64)
+    assert parsed.ref == f"reg.example.com/app@{spec_digest}" and parsed.digest == spec_digest

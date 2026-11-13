@@ -8,13 +8,16 @@ from pydantic import BaseModel, ConfigDict
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _MAX_REF_LEN = 512
-# A conservative OCI reference: optional host[:port], lowercase path components, optional tag and/or digest.
-_REF_RE = re.compile(
-    r"[a-z0-9]+(?:[._-][a-z0-9]+)*(?::[0-9]+)?"  # host (or first path component), optional port
-    r"(?:/[a-z0-9]+(?:[._-]+[a-z0-9]+)*)*"  # further path components
-    r"(?::[A-Za-z0-9_][A-Za-z0-9._-]{0,127})?"  # tag
-    r"(?:@sha256:[0-9a-f]{64})?"  # digest
+# A conservative OCI reference: optional host[:port]/, lowercase path components, optional tag and/or digest.
+_HOST = (
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)*"  # DNS name
+    r"|\[[0-9A-Fa-f:]+\])"  # or a bracketed IPv6 address
+    r"(?::[0-9]+)?/"  # optional port; a host is always followed by a path
 )
+_PATH = r"[a-z0-9]+(?:[._-]+[a-z0-9]+)*(?:/[a-z0-9]+(?:[._-]+[a-z0-9]+)*)*"
+_TAG = r":[A-Za-z0-9_][A-Za-z0-9._-]{0,127}"
+_DIGEST = r"@[a-z0-9]+(?:[+._-][a-z0-9]+)*:[0-9a-fA-F]{32,}"  # OCI digest grammar: algorithm ":" hex
+_REF_RE = re.compile(rf"(?:{_HOST})?{_PATH}(?:{_TAG})?(?:{_DIGEST})?")
 
 
 def is_digest(value: str) -> bool:
