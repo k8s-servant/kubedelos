@@ -55,7 +55,7 @@ defaults:
 |---|---|---|
 | `azure-workload-identity` | `azure-identity` gets an Entra token, which is exchanged at ACR `/oauth2/exchange` for an ACR refresh token, then written to a temporary `DOCKER_CONFIG` for Trivy. In-cluster it uses the federated token the WI webhook injects (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_FEDERATED_TOKEN_FILE`). On a laptop the same code path uses `az login`. The identity needs the `AcrPull` role. Works on AKS and on any cluster with an OIDC issuer and the WI webhook. | AKS, self-managed |
 | `azure-managed-identity` | Same token exchange, using a managed identity (node or pod). | AKS |
-| `aws` | Trivy's built-in ECR support through the AWS SDK default credential chain (IRSA, Pod Identity, profile). If that doesn't work for a host, delos falls back to `ecr:GetAuthorizationToken` via boto3 (the `kubedelos[aws]` extra). | EKS, laptop |
+| `aws` | Trivy's built-in ECR support through the AWS SDK default credential chain (IRSA, Pod Identity, profile). If that doesn't work for a host, kubedelos falls back to `ecr:GetAuthorizationToken` via boto3 (the `kubedelos[aws]` extra). | EKS, laptop |
 | `gcp` | Trivy's built-in GCR/GAR support through Google ADC (GKE WI, `gcloud auth application-default login`). Fallback: an ADC access token as `oauth2accesstoken` (the `kubedelos[gcp]` extra). | GKE, laptop |
 | `basic` | Username and password from a Kubernetes Secret or environment variables. | Harbor, Nexus, Artifactory, Quay, GitLab |
 | `dockerconfig` | A mounted `dockerconfigjson` Secret, or the laptop's `~/.docker/config.json`, including credential helpers. | anywhere |
