@@ -1,0 +1,100 @@
+"""Render finding rows (as returned by ``Repo.run_findings``) as a table, JSON, CSV or SARIF."""
+
+import csv
+import io
+import json
+from collections.abc import Mapping, Sequence
+from typing import Any
+
+from rich.console import Console
+from rich.table import Table
+
+from kubedelos import __version__
+
+Row = Mapping[str, Any]
+
+CSV_COLUMNS = [
+    "namespace", "kind", "workload", "container", "image", "vuln_id", "severity", "pkg_name",
+    "installed_version", "fixed_version", "owner", "team",
+]  # fmt: skip
+SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
+_SARIF_LEVEL = {"CRITICAL": "error", "HIGH": "error", "MEDIUM": "warning"}
+
+
+def _plain(rows: Sequence[Row]) -> list[dict[str, Any]]:
+    return [dict(r) for r in rows]
+
+
+def render_table(rows: Sequence[Row]) -> str:
+    table = Table()
+    for col in ("Namespace/Workload", "Image", "Vulnerability", "Severity", "Installed", "Fixed"):
+        table.add_column(col, overflow="fold")
+    for r in rows:
+        table.add_row(
+            f"{r['namespace']}/{r['workload']}",
+            r["image"],
+            r["vuln_id"],
+            r["severity"],
+            r["installed_version"],
+            r["fixed_version"] or "",
+        )
+    buf = io.StringIO()
+    Console(file=buf, color_system=None, force_terminal=False, width=160).print(table)
+    return buf.getvalue()
+
+
+def render_json(rows: Sequence[Row]) -> str:
+    return json.dumps(_plain(rows), indent=2)
+
+
+def render_csv(rows: Sequence[Row]) -> str:
+    buf = io.StringIO()
+    writer = csv.writer(buf, lineterminator="\n")
+    writer.writerow(CSV_COLUMNS)
+    for r in rows:
+        writer.writerow(["" if r[c] is None else r[c] for c in CSV_COLUMNS])
+    return buf.getvalue()
+
+
+def render_sarif(rows: Sequence[Row]) -> str:
+    rules: dict[str, dict[str, Any]] = {}
+    results = []
+    for r in rows:
+        level = _SARIF_LEVEL.get(r["severity"], "note")
+        rule = rules.setdefault(
+            r["vuln_id"],
+            {
+                "id": r["vuln_id"],
+                "shortDescription": {"text": r["title"] or r["vuln_id"]},
+                "defaultConfiguration": {"level": level},
+            },
+        )
+        if r["primary_url"]:
+            rule["helpUri"] = r["primary_url"]
+        fixed = r["fixed_version"] or "none"
+        results.append(
+            {
+                "ruleId": r["vuln_id"],
+                "level": level,
+                "message": {
+                    "text": f"{r['pkg_name']} {r['installed_version']} is vulnerable (fixed: {fixed}) "
+                    f"in {r['namespace']}/{r['workload']}"
+                },
+                "locations": [{"physicalLocation": {"artifactLocation": {"uri": r["image"]}}}],
+                "properties": {"namespace": r["namespace"], "workload": r["workload"], "severity": r["severity"]},
+            }
+        )
+    doc = {
+        "$schema": SARIF_SCHEMA,
+        "version": "2.1.0",
+        "runs": [
+            {
+                "tool": {"driver": {"name": "kubedelos", "version": __version__, "rules": list(rules.values())}},
+                "results": results,
+            }
+        ],
+    }
+    return json.dumps(doc, indent=2)
+
+
+RENDERERS = {"table": render_table, "json": render_json, "csv": render_csv, "sarif": render_sarif}
