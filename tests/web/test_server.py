@@ -110,8 +110,13 @@ def test_serve_shuts_the_scan_runner_down_when_the_server_stops(monkeypatch):
             events.append("shutdown")
 
     monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    registered, unregistered = [], []
+    monkeypatch.setattr(server.atexit, "register", registered.append)
+    monkeypatch.setattr(server.atexit, "unregister", unregistered.append)
     app = FastAPI()
     app.state.scans = FakeRunner()
     with pytest.raises(KeyboardInterrupt):
         server.serve(app, object())  # type: ignore[arg-type]
     assert events == ["run", "shutdown"]
+    # The atexit backstop covers the run only, and is dropped once serve has shut the runner down itself.
+    assert registered == [app.state.scans.shutdown] and unregistered == registered

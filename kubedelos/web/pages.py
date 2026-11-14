@@ -14,7 +14,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import HTMLResponse
 
-from kubedelos.store.db import connect, connect_readonly
+from kubedelos.store import db  # through the module, so a test that patches db.connect reaches every caller
 
 MAX_ID = 2**63 - 1  # SQLite integers are signed 64-bit; a larger id would raise OverflowError
 NAV = (("Dashboard", "/"), ("Findings", "/findings"), ("Scans", "/scans"))
@@ -22,12 +22,12 @@ NAV = (("Dashboard", "/"), ("Findings", "/findings"), ("Scans", "/scans"))
 
 def open_db(request: Request) -> contextlib.closing[sqlite3.Connection]:
     """A read-only connection to the scan database, closed by the ``with`` block. Open it inside the endpoint."""
-    return contextlib.closing(connect_readonly(request.app.state.settings.db_path))
+    return contextlib.closing(db.connect_readonly(request.app.state.settings.db_path))
 
 
 def open_db_rw(request: Request) -> contextlib.closing[sqlite3.Connection]:
     """A read-write connection to the scan database, closed by the ``with`` block. For POST routes only."""
-    return contextlib.closing(connect(request.app.state.settings.db_path))
+    return contextlib.closing(db.connect(request.app.state.settings.db_path))
 
 
 def render(request: Request, name: str, ctx: dict[str, Any], status: int = 200) -> HTMLResponse:

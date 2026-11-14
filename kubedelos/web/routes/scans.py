@@ -13,6 +13,7 @@ alone, for polling, and ``POST /scans/cancel`` asks the running scan to stop.
 """
 
 import re
+import sqlite3
 from datetime import datetime, timedelta
 from math import ceil
 from urllib.parse import parse_qs, urlencode
@@ -20,6 +21,7 @@ from urllib.parse import parse_qs, urlencode
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ValidationError
+from starlette.concurrency import run_in_threadpool
 
 from kubedelos.config import Settings
 from kubedelos.output import short_image
@@ -50,6 +52,8 @@ FIELDS = {
 LIST_FIELDS = ("namespaces", "exclude_images")
 PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scanning", "saving": "saving"}
 _MAX_FORM_FIELDS = 100
+_MAX_BODY = 64 * 1024
+UNREADABLE = "the form could not be read"
 
 
 def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
@@ -190,10 +194,18 @@ def scans(request: Request, page: int = Query(1, ge=1, le=10**9)) -> HTMLRespons
 
 @router.post("/scans")
 async def start(request: Request) -> Response:
+    body = await request.body()  # the CSRF guard has read it already; the rest blocks, so it runs on a worker thread
+    return await run_in_threadpool(_start, request, body)
+
+
+def _start(request: Request, body: bytes) -> Response:
+    if len(body) > _MAX_BODY:
+        return _page(request, error=UNREADABLE, status=400)
     try:
-        fields = parse_qs((await request.body()).decode(), keep_blank_values=True, max_num_fields=_MAX_FORM_FIELDS)
+        # Strict both ways, as the guard parses: neither raw bytes nor a %-escape may be anything but UTF-8.
+        fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=_MAX_FORM_FIELDS, errors="strict")
     except ValueError:  # not UTF-8, or too many fields: possible when the CSRF token came in the header
-        return _page(request, error="the form could not be read", status=400)
+        return _page(request, error=UNREADABLE, status=400)
     text = {name: fields.get(name, [""])[0] for name in FIELDS if name != "pkg_types"}
     sent = {**text, "pkg_types": fields.get("pkg_types", [])}
     overrides = {
@@ -207,8 +219,11 @@ async def start(request: Request) -> Response:
         valid = Settings.model_validate({**settings.model_dump(), **overrides})
     except ValidationError as exc:
         return _page(request, error=_invalid(exc), sent=sent, status=400)
-    with open_db_rw(request) as conn:
-        runlock.close_stale_runs(conn, settings.data_dir)
+    try:
+        with open_db_rw(request) as conn:
+            runlock.close_stale_runs(conn, settings.data_dir)
+    except sqlite3.OperationalError:  # locked past the busy timeout, most likely by a CLI scan writing results
+        return _page(request, error="the database is busy; try again", sent=sent, status=503)
     try:
         request.app.state.scans.start({name: getattr(valid, name) for name in FIELDS})
     except ScanBusy as exc:

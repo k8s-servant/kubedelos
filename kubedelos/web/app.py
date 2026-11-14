@@ -3,10 +3,9 @@
 ``create_app`` wires the security middleware, the templates, the static files and the page routers. The helpers the
 pages and the security middleware share (``open_db``, ``render``) live in ``kubedelos.web.pages``, so that this module
 can import the routes at the top level without an import cycle. The app owns one ``ScanRunner`` for the scans page;
-``atexit`` shuts it down, cancelling a scan still running, should the process end without ``server.serve`` doing so.
+``server.serve`` shuts it down when the server stops.
 """
 
-import atexit
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,7 +82,6 @@ def create_app(
     app.state.guard = guard
     app.state.templates = _templates(guard)
     app.state.scans = ScanRunner(settings, context, clock=clock)
-    atexit.register(app.state.scans.shutdown)
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
     @app.exception_handler(RequestValidationError)

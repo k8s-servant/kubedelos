@@ -1,7 +1,9 @@
 """Tests for the scans page: the history, the start form, starting and cancelling a scan, and the progress fragment."""
 
 import contextlib
+import itertools
 import re
+import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from html import unescape
@@ -13,6 +15,7 @@ from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.scan.service import Progress, ScanOutcome
 from kubedelos.store import runlock
+from kubedelos.web import pages
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.routes import scans
 
@@ -251,16 +254,18 @@ def test_start_runs_with_the_form_overrides(client, app, fake):
 def test_second_start_is_refused(client, fake):
     assert _start(client).status_code == 303
     assert fake.entered.wait(5)
-    response = _start(client)
+    response = _start(client, namespaces="web")
     assert response.status_code == 409
     assert "a scan is already running" in response.text
+    assert re.search(r'name="namespaces"[^>]*value="web"', response.text)  # what was typed survives
     assert 'action="/scans"' in response.text  # the page itself, re-rendered
     assert len(fake.calls) == 1
 
 
 def test_invalid_pkg_types_rerenders_with_400(client, fake):
-    response = _start(client, pkg_types=["windows"])
+    response = _start(client, namespaces="web", pkg_types=["windows"])
     assert response.status_code == 400
+    assert re.search(r'name="namespaces"[^>]*value="web"', response.text)  # what was typed survives
     assert "Package types" in response.text and "must be a comma-separated list of library, os" in response.text
     assert 'action="/scans"' in response.text
     none_ticked = _start(client, pkg_types=[])
@@ -292,14 +297,16 @@ def test_progress_fragment_shows_counts_and_image(client, app, fake):
     assert "6 of 12 images" in html
     assert re.search(r"3</\w+>\s*scanned", html) and re.search(r"2</\w+>\s*cached", html)
     assert re.search(r"1</\w+>\s*failed", html)
-    assert "reg.example.com/app:1@sha256:aaaaaaaa" in html and "a" * 64 not in html
+    assert re.search(r"last finished: <code>reg\.example\.com/app:1@sha256:aaaaaaaa</code>", html)
+    assert "a" * 64 not in html
     assert 'name="csrf_token"' in html
     fake.on_progress(Progress(total=12, done=6, errors=1, current=None, phase="trivy-db", cached=2))
     assert "Trivy DB" in _progress(client)
 
 
 def test_progress_fragment_shows_the_eta(client, app, monkeypatch):
-    clock = iter(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=m) for m in (0, 5, 5, 5, 5, 5))
+    t0 = datetime(2026, 1, 1, tzinfo=UTC)
+    clock = itertools.chain([t0], itertools.repeat(t0 + timedelta(minutes=5)))
     scan = FakeScan()
     runner = ScanRunner(app.state.settings, app.state.context, scan=scan, clock=lambda: next(clock))
     app.state.scans = runner
@@ -378,6 +385,8 @@ def test_get_routes_stay_read_only(client, seed, fake, monkeypatch):
         raise AssertionError("a GET opened a read-write connection")
 
     monkeypatch.setattr(kubedelos.store.db, "connect", refuse)
+    # Neither module may hold its own reference to connect, which the patch would miss.
+    assert not hasattr(scans, "connect") and not hasattr(pages, "connect")
     assert client.get("/scans").status_code == 200
     assert client.get("/scans/progress").status_code == 200
 
@@ -396,4 +405,42 @@ def test_unreadable_form_is_400(client, fake):
     assert response.status_code == 400 and "the form could not be read" in response.text
     many = "&".join(f"f{i}=x" for i in range(200)).encode()
     assert client.post("/scans", headers=headers, content=many, follow_redirects=False).status_code == 400
+    bad_escape = client.post("/scans", headers=headers, content=b"namespaces=%ff&pkg_types=os", follow_redirects=False)
+    assert bad_escape.status_code == 400 and "the form could not be read" in bad_escape.text
+    huge = b"namespaces=" + b"a" * (64 * 1024) + b"&pkg_types=os"
+    too_big = client.post("/scans", headers=headers, content=huge, follow_redirects=False)
+    assert too_big.status_code == 400 and "the form could not be read" in too_big.text
     assert not fake.calls
+
+
+def test_busy_database_is_503(client, fake, monkeypatch):
+    def locked(conn, data_dir):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(scans.runlock, "close_stale_runs", locked)
+    response = _start(client, namespaces="web")
+    assert response.status_code == 503
+    assert "the database is busy; try again" in response.text
+    assert re.search(r'name="namespaces"[^>]*value="web"', response.text)
+    assert not fake.calls
+
+
+def test_start_runs_off_the_event_loop(client, fake, monkeypatch):
+    threads = []
+    sweep = scans.runlock.close_stale_runs
+
+    def recording(conn, data_dir):
+        threads.append(threading.current_thread())
+        return sweep(conn, data_dir)
+
+    monkeypatch.setattr(scans.runlock, "close_stale_runs", recording)
+    loop_thread = []
+
+    @client.app.get("/_loop_thread")
+    async def loop_thread_route():
+        loop_thread.append(threading.current_thread())
+        return {}
+
+    client.get("/_loop_thread")
+    assert _start(client).status_code == 303
+    assert threads and threads[0] is not loop_thread[0]

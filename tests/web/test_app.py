@@ -94,10 +94,8 @@ def test_validation_error_renders_400_page(client):
     assert response.headers["cache-control"] == "no-store"
 
 
-def test_app_has_a_scan_runner_shut_down_at_exit(seed, monkeypatch):
-    registered = []
-    monkeypatch.setattr(app_module.atexit, "register", registered.append)
+def test_app_has_an_idle_scan_runner(seed):
     app = app_module.create_app(seed.settings, context="my-cluster", token="t", port=9370)
     assert isinstance(app.state.scans, ScanRunner)
     assert app.state.scans.view() is None
-    assert registered == [app.state.scans.shutdown]
+    assert not hasattr(app_module, "atexit")  # the exit hook is server.serve's, once per process
