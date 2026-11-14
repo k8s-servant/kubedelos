@@ -84,7 +84,7 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     run = repo.get_run(out.run_id)
-    assert run["status"] == "partial"
+    assert run["status"] == "partial" and out.status == "partial"
     assert run["images_total"] == 2 and run["images_error"] == 1
     assert len(repo.run_findings(out.run_id)) == 1
     assert [(p.done, p.errors) for p in progress if p.current] == [(1, 0), (2, 1)]
@@ -101,7 +101,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     assert len(calls) == 1 and FakeCache.started == 1  # nothing left to scan: no scan_many, no Trivy
-    assert _status(repo, out.run_id) == "ok"
+    assert _status(repo, out.run_id) == "ok" and out.status == "ok"
     assert len(repo.run_findings(out.run_id)) == 2  # stored findings kept
     assert (
         repo._conn.execute(
@@ -121,7 +121,7 @@ def test_service_cancel(env, monkeypatch):
 
     monkeypatch.setattr(service, "scan_many", scan_many)
     out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel)
-    assert _status(repo, out.run_id) == "cancelled"
+    assert _status(repo, out.run_id) == "cancelled" and out.status == "cancelled"
 
 
 def test_service_keyboard_interrupt_marks_cancelled_and_reraises(env, monkeypatch):

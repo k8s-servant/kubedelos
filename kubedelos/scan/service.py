@@ -35,6 +35,7 @@ class Progress:
 class ScanOutcome:
     run_id: int
     warnings: list[InventoryWarning]
+    status: str  # the run's final status: ok, partial or cancelled (a failed run raises instead)
 
 
 def run_scan(
@@ -75,8 +76,9 @@ def run_scan(
         except BaseException:
             repo.finish_run(run_id, "failed")
             raise
-        repo.finish_run(run_id, "cancelled" if cancel.is_set() else "partial" if errors else "ok")
-    return ScanOutcome(run_id=run_id, warnings=warnings)
+        status = "cancelled" if cancel.is_set() else "partial" if errors else "ok"
+        repo.finish_run(run_id, status)
+    return ScanOutcome(run_id=run_id, warnings=warnings, status=status)
 
 
 def _scan(

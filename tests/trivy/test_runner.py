@@ -286,6 +286,12 @@ def test_error_cause_replaces_control_characters():
     assert error_cause("bad\x1b[31m\tthing") == "bad?[31m thing"
 
 
+def test_error_cause_redacts_an_authorization_header():
+    cause = error_cause("GET https://example.com/x?sig=SECRET Authorization: Bearer tok123")
+    assert "SECRET" not in cause and "tok123" not in cause
+    assert cause == "GET https://example.com/x?<redacted> Authorization: Bearer <redacted>"
+
+
 def test_runner_keeps_full_stderr_for_error_cause(monkeypatch):
     monkeypatch.setenv("FAKE_TRIVY_STDERR", _NO_HOST)
     monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")

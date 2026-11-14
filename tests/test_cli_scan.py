@@ -69,14 +69,15 @@ def make_run(tmp_path, monkeypatch):
                     failed,
                     ImageResult(image=failed.image, platform="linux/amd64", status="error", error_kind=kind, error="x"),
                 )
-            repo.finish_run(run_id, status or ("partial" if error or failures else "ok"))
+            final = status or ("partial" if error or failures else "ok")
+            repo.finish_run(run_id, final)
 
         def fake_run_scan(settings, **kw):
             seen["settings"] = settings
             seen["kw"] = kw
             if raises:
                 raise raises
-            return ScanOutcome(run_id=run_id, warnings=list(warnings))
+            return ScanOutcome(run_id=run_id, warnings=list(warnings), status=final)
 
         monkeypatch.setattr(cli, "run_scan", fake_run_scan)
         monkeypatch.setattr(cli.kube_client, "load", lambda settings: FakeApi())
