@@ -328,3 +328,18 @@ def test_cancel_during_inventory_never_reaches_trivy(env, monkeypatch):
     assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
     assert FakeCache.started == 0 and calls == []
     assert "trivy-db" not in phases
+
+
+def test_cancel_during_the_trivy_download_never_starts_the_db(env, monkeypatch):
+    settings, repo, calls = env
+    cancel = threading.Event()
+
+    def ensure_trivy(settings):
+        cancel.set()  # Ctrl-C on the UI while the Trivy binary downloads
+        return Path("/fake/trivy")
+
+    monkeypatch.setattr(service, "ensure_trivy", ensure_trivy)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel)
+    assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
+    assert FakeCache.started == 0 and calls == []

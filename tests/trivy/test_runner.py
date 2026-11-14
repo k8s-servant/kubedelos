@@ -434,7 +434,17 @@ def test_redaction_of_a_huge_input_is_fast(unit):
 
 def test_redaction_patterns_are_linear():
     """Even uncapped, a 64 KB input of the worst shapes redacts fast: no pattern rescans the text from every start."""
-    for unit in ("http://a", "eyJ-", "eyJa", "a-b.c", "a.eyJ-", "token:\n", "://"):
+    for unit in (
+        "http://a",
+        "eyJ-",
+        "eyJa",
+        "a-b.c",
+        "a.eyJ-",
+        "token:\n",
+        "Bearer\n",
+        "Authorization: Basic\n",
+        "://",
+    ):
         started = time.perf_counter()
         runner._redact(unit * (64 * 1024 // len(unit)))
         assert time.perf_counter() - started < 0.5, unit
@@ -506,9 +516,23 @@ def test_a_jwt_after_a_dash_or_underscore_is_redacted(prefix):
     assert runner._redact(f"{prefix}{JWT} rejected").endswith("<redacted> rejected")
 
 
-def test_a_cut_line_ending_in_a_marker_takes_the_next_line_with_it():
+@pytest.mark.parametrize("marker", [" token:", " Bearer", " Authorization: Basic"])
+def test_a_cut_line_ending_in_a_marker_takes_the_next_line_with_it(marker):
     """The cut can drop a line ending in ``token:`` but keep the token on the next line: that line goes too."""
-    text = "y\n" + "x" * 16350 + " token:\n" + TOKEN + "\nthe end"  # the cut falls in the x line
+    text = "y\n" + "x" * 16350 + marker + "\n" + TOKEN + "\nthe end"  # the cut falls in the x line
     for redact in (error_cause, runner._short):
         shown = redact(text)
         assert TOKEN not in shown and shown.endswith("the end")
+
+
+@pytest.mark.parametrize(
+    "text, shown",
+    [
+        (f"Authorization: Basic\n{TOKEN}", "Authorization: Basic\n<redacted>"),
+        (f"Authorization: Bearer\n  {TOKEN}", "Authorization: Bearer\n  <redacted>"),
+        (f"Bearer\n{TOKEN}", "Bearer\n<redacted>"),
+        ("Bearer\n* denied", "Bearer\n* denied"),  # a Trivy bullet is not token-shaped
+    ],
+)
+def test_a_scheme_word_at_a_line_end_redacts_the_next_lines_token(text, shown):
+    assert runner._redact(text) == shown

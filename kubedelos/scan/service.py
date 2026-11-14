@@ -145,8 +145,9 @@ def _scan(
     if todo and not cancel.is_set():
         emit("trivy-db")
         trivy = ensure_trivy(settings)
-        with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
-            emit("scanning")
-            scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
+        if not cancel.is_set():  # a shutdown during the binary download: no DB download either
+            with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
+                emit("scanning")
+                scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
     emit("saving")
     return errors
