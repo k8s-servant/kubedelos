@@ -9,7 +9,7 @@
 {% block run_line %}<div class="page-head"><h1>Scans</h1></div>{% endblock %}
 {% block content %}
   <section class="card scan-start" aria-labelledby="start-title">
-    <h2 class="card-title" id="start-title">Start a scan of {{ context }}</h2>
+    <h2 class="card-title" id="start-title">Start a scan of <code class="ctx">{{ context }}</code></h2>
     {%- if form_error %}
     <div class="callout" role="alert"><p>{{ form_error }}</p></div>
     {%- endif %}
@@ -46,7 +46,10 @@
     </form>
   </section>
 
+  {#- The live region stays put while htmx swaps the readout inside it, so screen readers announce each update. #}
+  <div class="scan-live" aria-live="polite">
   {% include "partials/scan_progress.html" %}
+  </div>
 
   <section class="card" aria-labelledby="history-title">
     <h2 class="card-title" id="history-title">Run history</h2>

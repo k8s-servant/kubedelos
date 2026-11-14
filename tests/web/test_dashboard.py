@@ -159,6 +159,16 @@ def test_sidebar_footer_names_the_shown_runs_trivy(client, seed):
     assert '<p class="sidebar-foot">Scanned with Trivy v0.76.1</p>' in sidebar
 
 
+def test_sidebar_footer_names_the_pinned_runs_trivy_not_the_newest(client, seed):
+    old = seed.repo.start_run(seed.context, "cli", "0.70.0", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(old, "ok")
+    _run(seed)  # newer, scanned with v0.76.1
+    assert "Trivy v0.76.1" in _sidebar(client.get("/").text)
+    pinned = _sidebar(client.get(f"/?run_id={old}").text)
+    assert '<p class="sidebar-foot">Scanned with Trivy v0.70.0</p>' in pinned
+    assert "v0.76.1" not in pinned
+
+
 def test_sidebar_footer_names_a_custom_trivy(client, seed):
     run_id = seed.repo.start_run(seed.context, "cli", "custom", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, "ok")

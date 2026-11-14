@@ -963,6 +963,29 @@ select {
   margin-bottom: 0.75rem;
 }
 
+/* The context name keeps its own case and spacing inside the uppercase card title. */
+
+.card-title .ctx {
+  font-family: var(--mono);
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+/* The scans page cards sit 0.75rem apart, as the dashboard's do. The progress box is empty before the first scan, so
+   the gap hangs off its card, not off the box. */
+
+.scan-start,
+.scan-progress > .card {
+  margin-bottom: 0.75rem;
+}
+
+/* A status chip in the history never breaks inside its word, even at 360 px. */
+
+.history .chip {
+  white-space: nowrap;
+  overflow-wrap: normal;
+}
+
 .filter-pkg {
   display: flex;
   flex-direction: column;

@@ -38,6 +38,7 @@ from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
 from kubedelos.web import server
 from kubedelos.web.app import create_app
+from kubedelos.web.pages import plural
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -388,7 +389,7 @@ def ui(
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
     if stale:
-        typer.echo(f"note: closed {len(stale)} interrupted run(s)")
+        typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     token = secrets.token_urlsafe(32)
     try:
         sock = server.bind(host, port)

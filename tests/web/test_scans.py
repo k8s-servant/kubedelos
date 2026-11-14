@@ -110,7 +110,7 @@ def test_scan_form_shows_saved_values(client, app):
     assert re.search(r'name="selector"[^>]*value="app=x"', form)
     assert re.search(r'name="pkg_types" value="os" checked', form)
     assert re.search(r'name="pkg_types" value="library">', form)
-    assert "saved: web" in form and "saved: app=x" in form and "saved: os" in form
+    assert "saved: web" in form and "saved: app=x" in form and "saved: OS packages only" in form
     token = re.search(r'name="csrf_token" value="([^"]+)"', form)
     assert token and token.group(1)
 
@@ -132,7 +132,10 @@ def test_scans_page_is_read_only(client, seed, monkeypatch):
     assert client.get("/scans").status_code == 200
 
 
-@pytest.mark.parametrize("seconds, text", [(0, "0 min 0 s"), (59, "0 min 59 s"), (3725, "62 min 5 s")])
+@pytest.mark.parametrize(
+    "seconds, text",
+    [(0, "0 s"), (13, "13 s"), (59, "59 s"), (60, "1 min 0 s"), (125, "2 min 5 s"), (3725, "62 min 5 s")],
+)
 def test_duration_text(seconds, text):
     start = datetime(2026, 1, 1, tzinfo=UTC)
     assert scans.duration_text(start, start + timedelta(seconds=seconds)) == text
@@ -281,7 +284,7 @@ def test_cancel_switches_readout_at_once(client, app, fake):
     response = client.post("/scans/cancel", data={"csrf_token": _csrf(client)}, headers=ORIGIN, follow_redirects=False)
     assert response.status_code == 303 and response.headers["location"] == "/scans"
     html = _progress(client)
-    assert "stopping after the current image" in html
+    assert "stopping once the images in flight finish" in html
     assert 'action="/scans/cancel"' not in html
     assert client.post("/scans/cancel", headers=ORIGIN, follow_redirects=False).status_code == 403  # CSRF
 
@@ -514,3 +517,38 @@ def test_htmx_poll_refreshes_the_page_once_the_scan_ends(client, app, fake):
     assert "HX-Refresh" not in client.get("/scans/progress").headers  # a plain GET just gets the fragment
     page = client.get("/scans")
     assert "HX-Refresh" not in page.headers and "hx-trigger" not in page.text  # the reload can't loop
+
+
+@pytest.mark.parametrize(
+    "seconds, text",
+    [
+        (1, "less than a minute left"),
+        (59, "less than a minute left"),
+        (60, "about 1 min left"),
+        (61, "about 2 min left"),
+    ],
+)
+def test_eta_text(seconds, text):
+    assert scans.eta_text(timedelta(seconds=seconds)) == text
+
+
+def test_saved_pkg_types_hint_reads_as_words(client, app):
+    html = client.get("/scans").text
+    assert "saved: os + library packages" in html and "saved: library,os" not in html
+    app.state.settings = app.state.settings.model_copy(update={"pkg_types": ("library",)})
+    assert "saved: library packages only" in client.get("/scans").text
+
+
+def test_start_title_keeps_the_context_case(client, app):
+    html = client.get("/scans").text
+    assert f'Start a scan of <code class="ctx">{app.state.context}</code>' in html
+
+
+def test_live_region_is_a_stable_ancestor_of_the_swapped_box(client, fake):
+    """htmx replaces #scan-progress on every poll, so the live region must sit outside it to be announced."""
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=2, done=1, errors=0, current="a", phase="scanning"))
+    page = client.get("/scans").text
+    assert re.search(r'<div class="scan-live" aria-live="polite">\s*<div id="scan-progress"', page)
+    assert "aria-live" not in _progress(client)  # the swapped fragment carries none of its own

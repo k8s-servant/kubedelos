@@ -55,7 +55,11 @@ def _utcnow() -> datetime:
 def describe_error(exc: BaseException) -> str:
     """One redacted, printable line for ``exc``, safe to show on a page."""
     if isinstance(exc, ApiException):  # its str() dumps the response headers and body: show neither
-        return error_cause(f"Kubernetes API error {exc.status}: {exc.reason}", limit=_ERROR_LIMIT)
+        status = f" {exc.status}" if exc.status else ""
+        reason = f": {exc.reason}" if exc.reason else ""
+        if not (status or reason):  # raised before any response, e.g. by the client itself
+            return f"Kubernetes API error ({type(exc).__name__})"
+        return error_cause(f"Kubernetes API error{status}{reason}", limit=_ERROR_LIMIT)
     if isinstance(exc, ConfigException):
         return error_cause(str(exc), limit=_ERROR_LIMIT) or type(exc).__name__
     prefix = f"{type(exc).__name__}: "

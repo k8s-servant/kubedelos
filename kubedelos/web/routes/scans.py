@@ -24,6 +24,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
+from kubedelos.analytics import describe_pkg_types
 from kubedelos.config import Settings
 from kubedelos.output import short_image
 from kubedelos.store import runlock
@@ -59,11 +60,11 @@ UNREADABLE = "the form could not be read"
 
 
 def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
-    """How long a run took, as "m min s s", or "—" while it has no end."""
+    """How long a run took, as "s s" under a minute and "m min s s" above, or "—" while it has no end."""
     if finished_at is None:
         return "—"
     minutes, seconds = divmod(max(0, int((finished_at - started_at).total_seconds())), 60)
-    return f"{minutes} min {seconds} s"
+    return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
 
 
 def scans_href(page: int) -> str:
@@ -100,14 +101,16 @@ def _form(request: Request, sent: dict | None = None) -> dict:
         "exclude_images": ", ".join(s.exclude_images),
         "exclude_images_saved": ", ".join(s.exclude_images) or "none",
         "pkg_types": s.pkg_types,
-        "pkg_types_saved": s.scan_level,
+        "pkg_types_saved": describe_pkg_types(s.scan_level),
     }
     return form if sent is None else {**form, **sent}
 
 
 def eta_text(left: timedelta) -> str:
-    """The time a scan has left, as "about N min left", rounded up to a whole minute."""
-    return f"about {max(1, ceil(left.total_seconds() / 60))} min left"
+    """The time a scan has left: "less than a minute left", or "about N min left" rounded up to a whole minute."""
+    if left < timedelta(minutes=1):
+        return "less than a minute left"
+    return f"about {ceil(left.total_seconds() / 60)} min left"
 
 
 def short_ref(ref: str) -> str:

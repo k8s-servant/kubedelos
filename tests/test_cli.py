@@ -275,12 +275,28 @@ def test_ui_closes_stale_runs_at_startup(ui_env):
         conn.close()
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output
-    assert "note: closed 1 interrupted run(s)" in r.output
+    assert "note: closed 1 interrupted run\n" in r.output
     conn = connect(Settings().db_path)
     try:
         assert Repo(conn).get_run(run_id)["status"] == "failed"
     finally:
         conn.close()
+
+
+def test_ui_counts_stale_runs_in_the_plural(ui_env):
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    conn = connect(Settings().db_path)
+    try:
+        for _ in range(2):
+            Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+    finally:
+        conn.close()
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "note: closed 2 interrupted runs\n" in r.output
 
 
 def test_ui_prints_no_note_without_stale_runs(ui_env):

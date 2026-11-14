@@ -375,3 +375,9 @@ def test_describe_error_of_a_huge_message_is_fast():
     described = describe_error(RuntimeError("http://a" * 32768))
     assert time.perf_counter() - started < 1
     assert described.startswith("RuntimeError: ") and len(described) <= 300
+
+
+def test_api_error_without_status_or_reason_shows_its_type():
+    assert describe_error(ApiException()) == "Kubernetes API error (ApiException)"
+    assert describe_error(ApiException(status=500)) == "Kubernetes API error 500"
+    assert describe_error(ApiException(reason="Forbidden")) == "Kubernetes API error: Forbidden"
