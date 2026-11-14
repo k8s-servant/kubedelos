@@ -4,6 +4,7 @@ import sys
 
 import pytest
 import uvicorn
+from fastapi import FastAPI
 
 from kubedelos.web import server
 
@@ -54,7 +55,7 @@ def test_serve_turns_the_access_log_off_so_the_token_is_never_logged(monkeypatch
 
     monkeypatch.setattr(uvicorn, "Server", FakeServer)
     sentinel = object()
-    server.serve(object(), sentinel)  # type: ignore[arg-type]
+    server.serve(FastAPI(), sentinel)  # type: ignore[arg-type]
     assert seen["config"].access_log is False
     assert seen["config"].workers == 1
     assert seen["sockets"] == [sentinel]
@@ -91,3 +92,26 @@ def test_bind_treats_an_unclear_probe_as_in_use(monkeypatch, result):
     monkeypatch.setattr(server, "_probe", lambda family, address, port: result)
     with pytest.raises(server.PortInUse):
         server.bind("127.0.0.1", 9370)
+
+
+def test_serve_shuts_the_scan_runner_down_when_the_server_stops(monkeypatch):
+    events = []
+
+    class FakeServer:
+        def __init__(self, config):
+            pass
+
+        def run(self, sockets=None):
+            events.append("run")
+            raise KeyboardInterrupt
+
+    class FakeRunner:
+        def shutdown(self, timeout=10.0):
+            events.append("shutdown")
+
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    app = FastAPI()
+    app.state.scans = FakeRunner()
+    with pytest.raises(KeyboardInterrupt):
+        server.serve(app, object())  # type: ignore[arg-type]
+    assert events == ["run", "shutdown"]

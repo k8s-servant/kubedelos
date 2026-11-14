@@ -1,10 +1,12 @@
+import contextlib
 import sqlite3
 
 import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
-from kubedelos.web.pages import open_db, render
+from kubedelos.store.db import connect_readonly
+from kubedelos.web.pages import open_db, open_db_rw, render
 
 
 @pytest.fixture(autouse=True)
@@ -37,3 +39,18 @@ def test_open_db_is_read_only(client):
     version, _, error = response.text.partition(" ")
     assert int(version) > 0
     assert "readonly" in error
+
+
+def test_open_db_rw_writes(app, client):
+    @app.post("/_db_rw")
+    def db_rw(request: Request):
+        with open_db_rw(request) as conn:
+            conn.execute("CREATE TABLE t (x)")
+        return PlainTextResponse("written")
+
+    guard = app.state.guard
+    token = guard.csrf_token(client.cookies[guard.cookie_name])
+    response = client.post("/_db_rw", headers={"origin": "http://127.0.0.1:9370", "x-csrf-token": token})
+    assert response.text == "written"
+    with contextlib.closing(connect_readonly(app.state.settings.db_path)) as conn:
+        assert conn.execute("SELECT name FROM sqlite_master WHERE name = 't'").fetchone()

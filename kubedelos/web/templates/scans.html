@@ -1,10 +1,14 @@
-{#- The scans page: the start form (prefilled with the saved settings) and the paged run history. -#}
+{#- The scans page: the start form (prefilled with the saved settings), the progress of the UI's scan and the paged run
+    history. -#}
 {% extends "base.html" %}
 {% block title %}Scans · kubedelos{% endblock %}
 {% block run_line %}<div class="page-head"><h1>Scans</h1></div>{% endblock %}
 {% block content %}
   <section class="card scan-start" aria-labelledby="start-title">
     <h2 class="card-title" id="start-title">Start a scan of {{ context }}</h2>
+    {%- if form_error %}
+    <div class="callout" role="alert"><p>{{ form_error }}</p></div>
+    {%- endif %}
     <form method="post" action="/scans" class="filters">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <label>Namespaces
@@ -37,6 +41,8 @@
       </div>
     </form>
   </section>
+
+  {% include "partials/scan_progress.html" %}
 
   <section class="card" aria-labelledby="history-title">
     <h2 class="card-title" id="history-title">Run history</h2>

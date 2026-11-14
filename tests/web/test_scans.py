@@ -1,5 +1,8 @@
+"""Tests for the scans page: the history, the start form, starting and cancelling a scan, and the progress fragment."""
+
 import contextlib
 import re
+import threading
 from datetime import UTC, datetime, timedelta
 from html import unescape
 
@@ -8,7 +11,9 @@ import pytest
 import kubedelos.store.db
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
+from kubedelos.scan.service import Progress, ScanOutcome
 from kubedelos.store import runlock
+from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.routes import scans
 
 CLUSTER = Settings().scope
@@ -129,3 +134,266 @@ def test_duration_text(seconds, text):
     start = datetime(2026, 1, 1, tzinfo=UTC)
     assert scans.duration_text(start, start + timedelta(seconds=seconds)) == text
     assert scans.duration_text(start, None) == "—"
+
+
+def test_scan_form_escapes_saved_values(client, app):
+    app.state.settings = app.state.settings.model_copy(update={"selector": '"><script>x</script>'})
+    html = client.get("/scans").text
+    escaped = "&#34;&gt;&lt;script&gt;x&lt;/script&gt;"
+    assert re.search(rf'name="selector"[^>]*value="{escaped}"', html)
+    assert f"saved: {escaped}" in html
+    assert "<script>x" not in html
+
+
+def test_scans_page_hides_other_contexts(client, seed):
+    mine = _run(seed)
+    other = seed.repo.start_run("other-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(other, "ok")
+    rows = _rows(client.get("/scans").text)
+    assert len(rows) == 1
+    assert f"Run {mine}<" in rows[0]
+
+
+# Starting, cancelling and the progress fragment
+
+ORIGIN = {"origin": "http://127.0.0.1:9370"}
+FORM = {
+    "namespaces": "",
+    "namespace_selector": "",
+    "selector": "",
+    "exclude_images": "",
+    "pkg_types": ["os", "library"],
+}
+
+
+class FakeScan:
+    """A stand-in for ``run_scan`` that blocks until released (or cancelled), so each test controls the timing."""
+
+    def __init__(self, *, status: str = "ok", run_id: int = 7) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Event()
+        self.status = status
+        self.run_id = run_id
+        self.calls: list[dict] = []
+
+    def __call__(self, settings, **kw):
+        self.calls.append({"settings": settings, **kw})
+        self.on_progress = kw["on_progress"]
+        self.entered.set()
+        while not self.release.wait(0.01):
+            if kw["cancel"].is_set():
+                return ScanOutcome(run_id=self.run_id, warnings=[], status="cancelled")
+        return ScanOutcome(run_id=self.run_id, warnings=[], status=self.status)
+
+
+@pytest.fixture
+def fake(app):
+    scan = FakeScan()
+    runner = ScanRunner(app.state.settings, app.state.context, scan=scan)
+    app.state.scans = runner
+    yield scan
+    scan.release.set()
+    runner.shutdown(timeout=5)
+
+
+def _csrf(client) -> str:
+    guard = client.app.state.guard
+    return guard.csrf_token(client.cookies[guard.cookie_name])
+
+
+def _start(client, **fields):
+    data = {**FORM, **fields, "csrf_token": _csrf(client)}
+    return client.post("/scans", data=data, headers=ORIGIN, follow_redirects=False)
+
+
+def _wait_for(app, state):
+    for _ in range(500):
+        view = app.state.scans.view()
+        if view is not None and view.state == state:
+            return view
+        threading.Event().wait(0.01)
+    raise AssertionError(f"the scan never reached {state!r}: {app.state.scans.view()}")
+
+
+def _progress(client):
+    response = client.get("/scans/progress")
+    assert response.status_code == 200
+    return response.text
+
+
+def test_start_requires_csrf(client, fake):
+    response = client.post("/scans", data=FORM, headers=ORIGIN, follow_redirects=False)
+    assert response.status_code == 403
+    assert not fake.calls and client.app.state.scans.view() is None
+
+
+def test_start_runs_with_the_form_overrides(client, app, fake):
+    response = _start(
+        client,
+        namespaces="web, api  jobs",
+        namespace_selector=" ",
+        selector="app=x,tier=web",
+        exclude_images="*/pause:*,  reg.example.com/skip:*",
+        pkg_types=["os"],
+    )
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    assert fake.entered.wait(5)
+    settings = fake.calls[0]["settings"]
+    assert settings.namespaces == ["web", "api", "jobs"]
+    assert settings.namespace_selector is None
+    assert settings.selector == "app=x,tier=web"
+    assert settings.exclude_images == ["*/pause:*", "reg.example.com/skip:*"]
+    assert settings.pkg_types == ("os",)
+    assert settings.context == app.state.context
+    assert fake.calls[0]["trigger"] == "ui"
+
+
+def test_second_start_is_refused(client, fake):
+    assert _start(client).status_code == 303
+    assert fake.entered.wait(5)
+    response = _start(client)
+    assert response.status_code == 409
+    assert "a scan is already running" in response.text
+    assert 'action="/scans"' in response.text  # the page itself, re-rendered
+    assert len(fake.calls) == 1
+
+
+def test_invalid_pkg_types_rerenders_with_400(client, fake):
+    response = _start(client, pkg_types=["windows"])
+    assert response.status_code == 400
+    assert "Package types" in response.text and "must be a comma-separated list of library, os" in response.text
+    assert 'action="/scans"' in response.text
+    none_ticked = _start(client, pkg_types=[])
+    assert none_ticked.status_code == 400 and "Package types" in none_ticked.text
+    assert not fake.calls and client.app.state.scans.view() is None
+
+
+def test_cancel_switches_readout_at_once(client, app, fake):
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))
+    assert 'action="/scans/cancel"' in _progress(client)
+    response = client.post("/scans/cancel", data={"csrf_token": _csrf(client)}, headers=ORIGIN, follow_redirects=False)
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    html = _progress(client)
+    assert "stopping after the current image" in html
+    assert 'action="/scans/cancel"' not in html
+    assert client.post("/scans/cancel", headers=ORIGIN, follow_redirects=False).status_code == 403  # CSRF
+
+
+def test_progress_fragment_shows_counts_and_image(client, app, fake):
+    _start(client)
+    assert fake.entered.wait(5)
+    ref = "reg.example.com/app:1@sha256:" + "a" * 64
+    fake.on_progress(Progress(total=12, done=6, errors=1, current=ref, phase="scanning", cached=2))
+    html = _progress(client)
+    assert "<html" not in html  # the fragment only
+    assert "scanning" in html
+    assert "6 of 12 images" in html
+    assert re.search(r"3</\w+>\s*scanned", html) and re.search(r"2</\w+>\s*cached", html)
+    assert re.search(r"1</\w+>\s*failed", html)
+    assert "reg.example.com/app:1@sha256:aaaaaaaa" in html and "a" * 64 not in html
+    assert 'name="csrf_token"' in html
+    fake.on_progress(Progress(total=12, done=6, errors=1, current=None, phase="trivy-db", cached=2))
+    assert "Trivy DB" in _progress(client)
+
+
+def test_progress_fragment_shows_the_eta(client, app, monkeypatch):
+    clock = iter(datetime(2026, 1, 1, tzinfo=UTC) + timedelta(minutes=m) for m in (0, 5, 5, 5, 5, 5))
+    scan = FakeScan()
+    runner = ScanRunner(app.state.settings, app.state.context, scan=scan, clock=lambda: next(clock))
+    app.state.scans = runner
+    try:
+        _start(client)
+        assert scan.entered.wait(5)
+        scan.on_progress(Progress(total=10, done=0, errors=0, current=None, phase="trivy-db"))
+        scan.on_progress(Progress(total=10, done=0, errors=0, current=None, phase="scanning"))
+        scan.on_progress(Progress(total=10, done=5, errors=0, current="a", phase="scanning"))
+        assert "about 5 min left" in _progress(client)  # 5 images in 5 min, 5 to go
+    finally:
+        scan.release.set()
+        runner.shutdown(timeout=5)
+
+
+def test_progress_fragment_before_any_scan(client, fake):
+    html = _progress(client)
+    assert 'id="scan-progress"' in html
+    assert "images" not in html and 'action="/scans/cancel"' not in html
+
+
+@pytest.mark.parametrize("status, linked", [("ok", True), ("partial", True), ("cancelled", False)])
+def test_finished_ok_links_results_cancelled_does_not(client, app, fake, status, linked):
+    fake.status = status
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=1, done=1, errors=0, current="a", phase="saving"))
+    fake.release.set()
+    _wait_for(app, "finished")
+    html = _progress(client)
+    assert re.search(rf'class="chip[^"]*">{status}<', html)
+    assert ("/findings?run_id=7" in _hrefs(html)) == linked
+    assert ("see results" in html) == linked
+    assert 'action="/scans/cancel"' not in html
+
+
+def test_progress_fragment_shows_the_error(client, app):
+    def broken(settings, **kw):
+        raise RuntimeError("cannot reach https://user:hunter2@reg.example.com/v2/")
+
+    runner = ScanRunner(app.state.settings, app.state.context, scan=broken)
+    app.state.scans = runner
+    try:
+        _start(client)
+        _wait_for(app, "error")
+        html = _progress(client)
+        assert re.search(r'class="callout[^"]*"[^>]*>.*RuntimeError', html, re.S)
+        assert "hunter2" not in html
+        assert "/findings?run_id=" not in html
+    finally:
+        runner.shutdown(timeout=5)
+
+
+def test_start_sweeps_stale_runs_first(client, seed, fake):
+    dead = _run(seed, "running", owner="deadbeef")
+    assert _start(client).status_code == 303
+    with contextlib.closing(kubedelos.store.db.connect_readonly(seed.settings.db_path)) as conn:
+        assert conn.execute("SELECT status FROM scan_run WHERE id = ?", (dead,)).fetchone()[0] == "failed"
+
+
+def test_busy_start_still_reports_409_after_the_sweep(client, seed, fake):
+    assert _start(client).status_code == 303
+    assert fake.entered.wait(5)
+    dead = _run(seed, "running", owner="deadbeef")
+    assert _start(client).status_code == 409
+    with contextlib.closing(kubedelos.store.db.connect_readonly(seed.settings.db_path)) as conn:
+        assert conn.execute("SELECT status FROM scan_run WHERE id = ?", (dead,)).fetchone()[0] == "failed"
+
+
+def test_get_routes_stay_read_only(client, seed, fake, monkeypatch):
+    _run(seed)
+    _start(client)
+    assert fake.entered.wait(5)
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("a GET opened a read-write connection")
+
+    monkeypatch.setattr(kubedelos.store.db, "connect", refuse)
+    assert client.get("/scans").status_code == 200
+    assert client.get("/scans/progress").status_code == 200
+
+
+def test_scans_page_includes_the_progress_fragment(client, fake):
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=3, done=1, errors=0, current="a", phase="scanning"))
+    html = client.get("/scans").text
+    assert 'id="scan-progress"' in html and "1 of 3 images" in html
+
+
+def test_unreadable_form_is_400(client, fake):
+    headers = {**ORIGIN, "x-csrf-token": _csrf(client), "content-type": "application/x-www-form-urlencoded"}
+    response = client.post("/scans", headers=headers, content=b"\xff\xfe", follow_redirects=False)
+    assert response.status_code == 400 and "the form could not be read" in response.text
+    many = "&".join(f"f{i}=x" for i in range(200)).encode()
+    assert client.post("/scans", headers=headers, content=many, follow_redirects=False).status_code == 400
+    assert not fake.calls
