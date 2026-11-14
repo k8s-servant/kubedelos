@@ -444,3 +444,56 @@ def test_start_runs_off_the_event_loop(client, fake, monkeypatch):
     client.get("/_loop_thread")
     assert _start(client).status_code == 303
     assert threads and threads[0] is not loop_thread[0]
+
+
+HTMX_CONFIG = (
+    '<meta name="htmx-config" content=\'{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}\'>'
+)
+
+
+def _nonce(response) -> str:
+    match = re.search(r"'nonce-([^']+)'", response.headers["content-security-policy"])
+    assert match
+    return match.group(1)
+
+
+def test_scans_page_loads_htmx_with_the_nonce_only_there(client, fake):
+    response = client.get("/scans")
+    nonce = _nonce(response)
+    assert f'<script src="/static/htmx.min.js" nonce="{nonce}"' in response.text
+    assert response.text.count("<script") == 1
+    assert client.get("/static/htmx.min.js").status_code == 200
+    for path in ("/", "/findings"):
+        assert "<script" not in client.get(path).text, path
+
+
+def test_no_inline_style_or_eval_config(client, fake):
+    html = client.get("/scans").text
+    assert HTMX_CONFIG in html
+    assert html.index(HTMX_CONFIG) < html.index('<script src="/static/htmx.min.js"')  # read when htmx loads
+    assert "<style" not in html and "style=" not in html
+
+
+def test_progress_box_polls_only_while_active(client, app, fake):
+    poll = 'hx-get="/scans/progress" hx-trigger="every 2s" hx-swap="outerHTML"'
+    assert "hx-trigger" not in _progress(client)  # nothing to follow before the first scan
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=2, done=1, errors=0, current="a", phase="scanning"))
+    assert re.search(rf'<div id="scan-progress" class="scan-progress" {poll}>', _progress(client))
+    assert poll in client.get("/scans").text
+    assert poll in client.get("/scans/progress", headers={"HX-Request": "true"}).text  # htmx gets the same fragment
+    fake.release.set()
+    _wait_for(app, "finished")
+    assert "hx-trigger" not in _progress(client)
+    assert "hx-trigger" not in client.get("/scans").text
+
+
+def test_noscript_refresh_link(client, fake):
+    _start(client)
+    assert fake.entered.wait(5)
+    html = _progress(client)
+    assert re.search(r'<noscript>\s*<p><a href="/scans">refresh</a>[^<]*</p>\s*</noscript>', html)
+    fake.release.set()
+    _wait_for(client.app, "finished")
+    assert "<noscript>" not in _progress(client)  # nothing left to refresh for

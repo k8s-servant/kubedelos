@@ -10,6 +10,7 @@ EXPECTED = (
     "kubedelos/web/templates/partials/run_line.html",
     "kubedelos/web/static/app.css",
     "kubedelos/web/static/logo.svg",
+    "kubedelos/web/static/htmx.min.js",
 )
 
 
