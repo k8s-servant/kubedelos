@@ -105,6 +105,23 @@ def _short(text: str) -> str:
     return text.strip()[-_MAX_ERROR_CHARS:]
 
 
+def error_cause(text: str | None, limit: int = 300) -> str:
+    """The cause of a failed Trivy run, as one printable line of at most ``limit`` characters.
+
+    Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
+    is on the ``* `` lines below it. Without those, the ``FATAL`` message, or else the whole text, is used. A cut
+    keeps the end, where the cause is.
+    """
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if causes := [line[2:] for line in lines if line.startswith("* ")]:
+        flat = "; ".join(causes)
+    else:
+        flat = " ".join([line.split("\t")[-1] for line in lines if "\tFATAL\t" in line] or lines)
+    flat = " ".join(flat.split())
+    flat = "".join(ch if ch.isprintable() else "?" for ch in flat)
+    return flat if len(flat) <= limit else "\u2026" + flat[-(limit - 1) :]
+
+
 def _classify(stderr: str) -> ErrorKind:
     lowered = stderr.lower()
     for kind, patterns in _ERROR_PATTERNS:

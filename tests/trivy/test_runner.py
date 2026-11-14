@@ -10,7 +10,7 @@ from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem
 from kubedelos.trivy import runner
 from kubedelos.trivy.parse import parse_report
-from kubedelos.trivy.runner import scan_image, scan_many
+from kubedelos.trivy.runner import error_cause, scan_image, scan_many
 
 FAKE_TRIVY = Path(__file__).parent / "fake_trivy.py"
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -230,3 +230,65 @@ def test_scan_many_passes_pkg_types(tmp_path, monkeypatch):
     )  # fmt: skip
     argv = json.loads(record.read_text())["FakeArgv"]
     assert argv[argv.index("--pkg-types") + 1] == "os"
+
+
+# Trivy v0.76.1 stderr, captured from real failed scans; the cause is on the "* " line.
+_WRAPPERS = (
+    "2026-11-14T08:37:10+02:00\tFATAL\tFatal error\trun error: image scan error: scan error: unable to initialize a "
+    "scan service: unable to initialize artifact: unable to initialize container image: unable to find the specified "
+    'image "{ref}" in ["remote"]: 1 error occurred:\n'
+)
+_NOT_FOUND = _WRAPPERS.format(ref="docker.io/library/nginx:nope") + (
+    "\t* remote error: GET https://index.docker.io/v2/library/nginx/manifests/nope: MANIFEST_UNKNOWN: manifest unknown; "
+    "unknown tag=nope\n\n\n"
+)
+_NO_HOST = _WRAPPERS.format(ref="registry.invalid/app:1") + (
+    '\t* remote error: Get "https://registry.invalid/v2/": dial tcp: lookup registry.invalid: no such host\n\n\n'
+)
+
+
+@pytest.mark.parametrize(
+    ("stderr", "cause"),
+    [
+        (
+            _NOT_FOUND,
+            "remote error: GET https://index.docker.io/v2/library/nginx/manifests/nope: MANIFEST_UNKNOWN: manifest unknown; "
+            "unknown tag=nope",
+        ),
+        (_NO_HOST, 'remote error: Get "https://registry.invalid/v2/": dial tcp: lookup registry.invalid: no such host'),
+        (
+            "2026-11-14T08:37:10+02:00\tFATAL\tFatal error\tscan error: context deadline exceeded\n",
+            "scan error: context deadline exceeded",
+        ),
+        ("trivy did not finish within 90s", "trivy did not finish within 90s"),
+        ("first line\n  last line\n", "first line last line"),
+        ("", ""),
+        (None, ""),
+    ],
+)
+def test_error_cause_finds_the_cause(stderr, cause):
+    assert error_cause(stderr) == cause
+
+
+def test_error_cause_joins_several_causes():
+    text = "1 error occurred... 2 errors occurred:\n\t* docker error: no daemon\n\t* remote error: DENIED: denied\n"
+    assert error_cause(text) == "docker error: no daemon; remote error: DENIED: denied"
+
+
+def test_error_cause_keeps_the_end_of_a_long_cause():
+    cause = error_cause("wrapper: " * 100 + "the real cause", limit=80)
+    assert len(cause) == 80
+    assert cause.startswith("\u2026")
+    assert cause.endswith("the real cause")
+
+
+def test_error_cause_replaces_control_characters():
+    assert error_cause("bad\x1b[31m\tthing") == "bad?[31m thing"
+
+
+def test_runner_keeps_full_stderr_for_error_cause(monkeypatch):
+    monkeypatch.setenv("FAKE_TRIVY_STDERR", _NO_HOST)
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
+    assert result.error_kind == "trivy"
+    assert error_cause(result.error).endswith("lookup registry.invalid: no such host")

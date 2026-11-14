@@ -151,3 +151,21 @@ def test_trivy_install_bad_env_setting_exits_2(monkeypatch):
     r = CliRunner().invoke(app, ["trivy", "install"])
     assert r.exit_code == 2
     assert "error: KUBEDELOS_PARALLELISM:" in r.stderr
+
+
+def test_registry_test_shows_the_trivy_cause(fake_env, monkeypatch):
+    monkeypatch.setenv(
+        "FAKE_TRIVY_STDERR",
+        "2026-11-14T08:37:11+02:00\tFATAL\tFatal error\trun error: image scan error: scan error: unable to initialize "
+        'a scan service: unable to find the specified image "registry.example/team/app:1" in ["remote"]: 1 error '
+        "occurred:\n\t* remote error: GET https://registry.example/token: DENIED: requested access to the resource "
+        "is denied\n\n",
+    )
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    r = _registry_test("registry.example/team/app:1")
+    assert r.exit_code == 1
+    assert (
+        "error: registry.example/team/app:1: authentication failed on registry.example: "
+        "remote error: GET https://registry.example/token: DENIED: requested access to the resource is denied\n"
+    ) in r.stderr
+    assert "FATAL" not in r.stderr

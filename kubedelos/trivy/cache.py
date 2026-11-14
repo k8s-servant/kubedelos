@@ -17,7 +17,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import Self
 
-from kubedelos.trivy.runner import _run_group, _short
+from kubedelos.trivy.runner import _run_group, error_cause
 
 _DB_DOWNLOAD_TIMEOUT_S = 1800
 _LOCK_FILE = ".kubedelos.lock"
@@ -79,7 +79,7 @@ class TrivyCache:
         except subprocess.TimeoutExpired:
             raise RuntimeError(f"trivy image {flag} did not finish within {_DB_DOWNLOAD_TIMEOUT_S}s") from None
         if code != 0:
-            raise RuntimeError(f"trivy image {flag} failed with exit code {code}: {_short(stderr)}")
+            raise RuntimeError(f"trivy image {flag} failed with exit code {code}: {error_cause(stderr)}")
 
     def _close(self) -> None:
         fd, self._fd = self._fd, None
