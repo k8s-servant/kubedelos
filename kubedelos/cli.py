@@ -29,6 +29,7 @@ from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import Severity, is_valid_ref, registry_host
 from kubedelos.output import RENDERERS
 from kubedelos.scan.service import Progress, run_scan
+from kubedelos.store import runlock
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
@@ -377,10 +378,17 @@ def ui(
     settings = _load_settings(context=context, kubeconfig=kubeconfig)
     try:
         name = _one_line(kube_client.load(settings).current_context())
-        connect(settings.db_path).close()  # creates the database and runs the migrations
+        conn = connect(settings.db_path)  # creates the database and runs the migrations
+        try:
+            # A run left "running" by a killed scan stays that way for ever; close the ones no live process owns.
+            stale = runlock.close_stale_runs(conn, settings.data_dir)
+        finally:
+            conn.close()
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
+    if stale:
+        typer.echo(f"note: closed {len(stale)} interrupted run(s)")
     token = secrets.token_urlsafe(32)
     try:
         sock = server.bind(host, port)
