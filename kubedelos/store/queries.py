@@ -178,20 +178,20 @@ def kpis(conn: sqlite3.Connection, run_id: int) -> Kpis:
 SAMPLE_CAP = 20
 
 # The units the fix lists need: Critical and High rows only, with the fix a unit has (MAX picks a version over an empty
-# one when platforms disagree). Only the columns the lists show, so it stays cheap on a large run. ``{join}`` lets a
-# caller narrow the rows early. ``:run`` as above.
+# one when platforms disagree). Only columns idx_finding_unit holds, so a run's units come from the index alone; the
+# CVE link is fetched for the page's groups. ``{columns}`` adds columns and ``{join}`` lets a caller narrow the rows
+# early. ``:run`` as above.
 _FIX_UNITS_TEMPLATE = f"""
 SELECT r.ref, f.vuln_id, f.pkg_name, f.installed_version,
        MAX(COALESCE(f.fixed_version, '')) AS fixed_version,
-       MAX({_RANK_SQL}) AS sev_rank,
-       MAX(f.primary_url) AS primary_url
+       MAX({_RANK_SQL}) AS sev_rank{{columns}}
 FROM image_result r
 JOIN finding f ON f.image_result_id = r.id
 {{join}}
 WHERE r.run_id = :run AND f.severity IN ('CRITICAL', 'HIGH')
 GROUP BY {_UNIT_KEY_SQL}
 """  # noqa: S608 - only module constants are interpolated
-_FIX_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(join="")
+_FIX_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(columns="", join="")
 
 # The distinct namespaces each image runs in within the run (a second platform repeats its workloads). Every ref has a
 # row, with a NULL namespace when it has no workload, so an inner JOIN on ref never drops an image.
@@ -204,7 +204,8 @@ WHERE r.run_id = :run
 
 # Only the rows of the CVE and package pairs on the page, so the sample query groups a few rows, not the whole run.
 _SAMPLE_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(
-    join="JOIN wanted w ON w.vuln_id = f.vuln_id AND w.pkg_name IS f.pkg_name"
+    columns=",\n       MAX(f.primary_url) AS primary_url",
+    join="JOIN wanted wa ON wa.vuln_id = f.vuln_id AND wa.pkg_name IS f.pkg_name",
 )
 
 
@@ -230,21 +231,45 @@ class ImageFixRow:
     fixable: int
 
 
-def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[FixRow], int]:
-    """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are."""
-    groups = conn.execute(
+@dataclass(frozen=True)
+class FixList[T]:
+    """One capped fix list, how many rows it has in all, and the Critical/High units that have no fix (and images)."""
+
+    rows: list[T]
+    total: int
+    no_fix: int
+    no_fix_images: int
+
+
+def _fix_list(conn: sqlite3.Connection, run_id: int, listing: str, order: str, limit: int) -> list[sqlite3.Row]:
+    """``listing`` (a SELECT over ``units`` and ``ns`` with a ``total`` column) in ``order``, capped at ``limit``, beside
+    the no-fix numbers of the same units, so one pass over the run's Critical/High units serves the list and the no-fix
+    line. There is always one row: an empty list leaves the listing's columns NULL.
+    """
+    return conn.execute(
         f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL})"  # noqa: S608
-        " SELECT u.vuln_id, u.pkg_name, u.fixed_version, MAX(u.sev_rank) AS sev_rank, MAX(u.primary_url) AS primary_url,"
+        " SELECT s.no_fix, s.no_fix_images, l.* FROM"
+        " (SELECT COUNT(*) AS no_fix, COUNT(DISTINCT ref) AS no_fix_images FROM units WHERE fixed_version = '') s"
+        f" LEFT JOIN (SELECT * FROM ({listing}) ORDER BY {order} LIMIT :limit) l ON 1 ORDER BY {order}",
+        {"run": run_id, "limit": limit},
+    ).fetchall()
+
+
+def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixList[FixRow]:
+    """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are."""
+    found = _fix_list(
+        conn,
+        run_id,
+        "SELECT u.vuln_id, u.pkg_name, u.fixed_version, MAX(u.sev_rank) AS sev_rank,"
         " json_group_array(DISTINCT u.installed_version) AS installed,"
         " COUNT(DISTINCT u.ref) AS images, COUNT(DISTINCT ns.namespace) AS namespaces, COUNT(*) OVER () AS total"
         " FROM units u JOIN ns ON ns.ref = u.ref WHERE u.fixed_version <> ''"
-        " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version"
-        " ORDER BY sev_rank DESC, images DESC, namespaces DESC, u.vuln_id, u.pkg_name, u.fixed_version LIMIT :limit",
-        {"run": run_id, "limit": limit},
-    ).fetchall()
-    if not groups:
-        return [], 0
-    samples = _samples(conn, run_id, groups)
+        " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version",
+        "sev_rank DESC, images DESC, namespaces DESC, vuln_id, pkg_name, fixed_version",
+        limit,
+    )
+    groups = [g for g in found if g["vuln_id"] is not None]
+    samples = _samples(conn, run_id, groups) if groups else {}
     rows = [
         FixRow(
             vuln_id=g["vuln_id"],
@@ -252,18 +277,18 @@ def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[
             fixed_version=g["fixed_version"],
             severity=_SEVERITIES[4 - g["sev_rank"]],
             installed=sorted(v for v in json.loads(g["installed"]) if v is not None),
-            primary_url=g["primary_url"],
+            primary_url=samples[(g["vuln_id"], g["pkg_name"], g["fixed_version"])][1],
             images=g["images"],
             namespaces=g["namespaces"],
-            sample=samples.get((g["vuln_id"], g["pkg_name"], g["fixed_version"]), []),
+            sample=samples[(g["vuln_id"], g["pkg_name"], g["fixed_version"])][0],
         )
         for g in groups
     ]
-    return rows, groups[0]["total"]
+    return FixList(rows, groups[0]["total"] if groups else 0, found[0]["no_fix"], found[0]["no_fix_images"])
 
 
-def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -> dict[tuple, list]:
-    """Up to ``SAMPLE_CAP`` (ref, namespaces) pairs for each of the page's groups, in one query."""
+def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -> dict[tuple, tuple[list, str | None]]:
+    """For each of the page's groups, up to ``SAMPLE_CAP`` (ref, namespaces) pairs and the group's CVE link, in one query."""
     params: dict[str, object] = {"run": run_id, "cap": SAMPLE_CAP}
     values = []
     for i, g in enumerate(groups):
@@ -273,53 +298,48 @@ def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -
         f"WITH wanted(vuln_id, pkg_name, fixed_version) AS (VALUES {', '.join(values)}),"  # noqa: S608
         f" units AS MATERIALIZED ({_SAMPLE_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}),"
         " ranked AS (SELECT g.vuln_id, g.pkg_name, g.fixed_version, g.ref,"
+        "   MAX(g.primary_url) OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version) AS group_url,"
         "   ROW_NUMBER() OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version ORDER BY g.ref) AS rn"
-        "   FROM (SELECT DISTINCT u.vuln_id, u.pkg_name, u.fixed_version, u.ref FROM units u"
-        "     JOIN wanted w ON w.vuln_id = u.vuln_id AND w.pkg_name IS u.pkg_name AND w.fixed_version = u.fixed_version"
+        "   FROM (SELECT u.vuln_id, u.pkg_name, u.fixed_version, u.ref, MAX(u.primary_url) AS primary_url FROM units u"
+        "     JOIN wanted wa ON wa.vuln_id = u.vuln_id AND wa.pkg_name IS u.pkg_name"
+        "     AND wa.fixed_version = u.fixed_version GROUP BY u.vuln_id, u.pkg_name, u.fixed_version, u.ref"
         "   ) g)"
-        " SELECT k.vuln_id, k.pkg_name, k.fixed_version, k.ref, ns.namespace"
+        " SELECT k.vuln_id, k.pkg_name, k.fixed_version, k.ref, k.group_url, ns.namespace"
         " FROM ranked k JOIN ns ON ns.ref = k.ref WHERE k.rn <= :cap ORDER BY k.ref, ns.namespace",
         params,
     )
-    out: dict[tuple, dict[str, list[str]]] = {}
+    refs_of: dict[tuple, dict[str, list[str]]] = {}
+    urls: dict[tuple, str | None] = {}
     for row in rows:
-        refs = out.setdefault((row["vuln_id"], row["pkg_name"], row["fixed_version"]), {})
-        namespaces = refs.setdefault(row["ref"], [])
+        key = (row["vuln_id"], row["pkg_name"], row["fixed_version"])
+        urls[key] = row["group_url"]
+        namespaces = refs_of.setdefault(key, {}).setdefault(row["ref"], [])
         if row["namespace"] is not None:
             namespaces.append(row["namespace"])
-    return {key: list(refs.items()) for key, refs in out.items()}
+    return {key: (list(refs.items()), urls[key]) for key, refs in refs_of.items()}
 
 
-def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[ImageFixRow], int]:
+def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixList[ImageFixRow]:
     """The first ``limit`` images with a fixable Critical/High finding, worst first, and how many there are."""
-    rows = conn.execute(
-        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL})"  # noqa: S608
-        " SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high, SUM(fixed_version <> '') AS fixable,"
-        " COUNT(*) OVER () AS total FROM units GROUP BY ref HAVING fixable > 0"
-        " ORDER BY critical DESC, high DESC, ref LIMIT :limit",
-        {"run": run_id, "limit": limit},
-    ).fetchall()
-    if not rows:
-        return [], 0
+    found = _fix_list(
+        conn,
+        run_id,
+        "SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high, SUM(fixed_version <> '') AS fixable,"
+        " COUNT(*) OVER () AS total FROM units GROUP BY ref HAVING fixable > 0",
+        "critical DESC, high DESC, ref",
+        limit,
+    )
+    rows = [r for r in found if r["ref"] is not None]
     namespaces: dict[str, list[str]] = {}
-    for row in conn.execute(
-        f"WITH ns AS MATERIALIZED ({_NAMESPACES_SQL}) SELECT ref, namespace FROM ns"  # noqa: S608
-        " WHERE namespace IS NOT NULL AND ref IN (SELECT value FROM json_each(:refs)) ORDER BY namespace",
-        {"run": run_id, "refs": json.dumps([r["ref"] for r in rows])},
-    ):
-        namespaces.setdefault(row["ref"], []).append(row["namespace"])
+    if rows:
+        for row in conn.execute(
+            f"WITH ns AS MATERIALIZED ({_NAMESPACES_SQL}) SELECT ref, namespace FROM ns"  # noqa: S608
+            " WHERE namespace IS NOT NULL AND ref IN (SELECT value FROM json_each(:refs)) ORDER BY namespace",
+            {"run": run_id, "refs": json.dumps([r["ref"] for r in rows])},
+        ):
+            namespaces.setdefault(row["ref"], []).append(row["namespace"])
     result = [ImageFixRow(r["ref"], namespaces.get(r["ref"], []), r["critical"], r["high"], r["fixable"]) for r in rows]
-    return result, rows[0]["total"]
-
-
-def no_fix_summary(conn: sqlite3.Connection, run_id: int) -> tuple[int, int]:
-    """How many Critical/High units have no released fix, and across how many images."""
-    row = conn.execute(
-        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL}) SELECT COUNT(*) AS n, COUNT(DISTINCT ref) AS images"  # noqa: S608
-        " FROM units WHERE fixed_version = ''",
-        {"run": run_id},
-    ).fetchone()
-    return row["n"], row["images"]
+    return FixList(result, rows[0]["total"] if rows else 0, found[0]["no_fix"], found[0]["no_fix_images"])
 
 
 def failed_images(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[sqlite3.Row], int]:
@@ -424,7 +444,12 @@ GROUP BY p.ref, p.vuln_id, p.pkg_name, p.installed_version
 
 
 def _filtered_cte(f: FindingFilter, run_id: int) -> tuple[str, dict[str, object]]:
-    """``WITH ... filtered AS (...)``: the lean units of the run, with their namespaces, that pass the filter."""
+    """``WITH ... filtered AS (...)``: the lean units of the run that pass the filter.
+
+    ``filtered`` stays a plain CTE over the materialized units: the count and the page read it again more cheaply than
+    a third copy of 100,000 rows is written. The namespaces are joined in only when the filter or the sort reads them;
+    the page fetches them for its own rows.
+    """
     where: list[str] = []
     params: dict[str, object] = {"run": run_id}
     if f.severities:
@@ -449,24 +474,39 @@ def _filtered_cte(f: FindingFilter, run_id: int) -> tuple[str, dict[str, object]
         where.append("(u.ref LIKE :q ESCAPE '\\' OR u.vuln_id LIKE :q ESCAPE '\\' OR u.pkg_name LIKE :q ESCAPE '\\')")
         params["q"] = _like_pattern(f.q)
     clause = " WHERE " + " AND ".join(where) if where else ""
-    severity = _SEVERITY_OF_RANK_SQL.format(rank="u.sev_rank")
+    by_namespace = bool(f.namespace) or f.sort == "namespace"
+    source = "units u LEFT JOIN ns ON ns.ref = u.ref" if by_namespace else "units u"
+    first_ns = ", ns.first_ns" if by_namespace else ""
     cte = (
         f"WITH units AS MATERIALIZED ({_LEAN_UNITS_SQL}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
-        f" filtered AS (SELECT u.*, {severity} AS severity, COALESCE(ns.namespaces, '[]') AS namespaces, ns.first_ns"
-        f" FROM units u LEFT JOIN ns ON ns.ref = u.ref{clause})"
+        f" filtered AS (SELECT u.*{first_ns} FROM {source}{clause})"
     )
     return cte, params
 
 
-def _page_sql(cte: str, f: FindingFilter, *, window: bool, reverse: bool = False) -> str:
-    """The page query: pick the page's keys from the lean set, then fetch the text columns for those rows only."""
-    total = ", COUNT(*) OVER () AS total" if window else ""
+def _page_sql(cte: str, f: FindingFilter) -> str:
+    """Count and page in one statement: one row per unit on the page, each with ``total``, or one row of NULLs and
+    ``total`` when the page is empty, so a page past the end still reports the count.
+
+    A LIMIT/OFFSET sorter holds offset + limit rows, so a page past the middle is read from the far end in the reverse
+    order instead: only one of the two halves has a non-zero LIMIT, and SQLite skips the other without sorting.
+    """
+    forward, backward = _order_sql(f), _order_sql(f, reverse=True)
+    severity = _SEVERITY_OF_RANK_SQL.format(rank="p.sev_rank")
     return (
-        f"{cte}, page AS MATERIALIZED (SELECT *{total} FROM filtered"  # noqa: S608 - only module constants are interpolated
-        f" ORDER BY {_order_sql(f, reverse=reverse)} LIMIT :limit OFFSET :offset), detail AS ({_PAGE_DETAIL_SQL})"
-        " SELECT p.*, d.repo, d.tag, d.digest, d.title, d.primary_url, d.targets FROM page p"
-        " JOIN detail d ON d.d_ref = p.ref AND d.d_vuln = p.vuln_id AND d.d_pkg IS p.pkg_name"
-        f" AND d.d_ver IS p.installed_version ORDER BY {_order_sql(f, 'p.', reverse=reverse)}"
+        f"{cte}, n AS (SELECT COUNT(*) AS total FROM filtered),"  # noqa: S608 - only module constants are interpolated
+        f" page AS MATERIALIZED (SELECT * FROM (SELECT * FROM filtered ORDER BY {forward}"
+        "   LIMIT (SELECT CASE WHEN :offset <= total / 2 THEN :limit ELSE 0 END FROM n) OFFSET :offset)"
+        f" UNION ALL SELECT * FROM (SELECT * FROM filtered ORDER BY {backward}"
+        "   LIMIT (SELECT CASE WHEN :offset > total / 2 THEN MAX(0, MIN(:limit, total - :offset)) ELSE 0 END FROM n)"
+        "   OFFSET (SELECT MAX(0, total - :offset - :limit) FROM n))),"
+        f" detail AS ({_PAGE_DETAIL_SQL})"
+        " SELECT n.total, p.ref, p.vuln_id, p.pkg_name, p.installed_version, p.fixed_version, p.sev_rank, p.pkg_class,"
+        f" {severity} AS severity, COALESCE(ns.namespaces, '[]') AS namespaces,"
+        " d.repo, d.tag, d.digest, d.title, d.primary_url, d.targets"
+        " FROM n LEFT JOIN page p ON 1 LEFT JOIN ns ON ns.ref = p.ref"
+        " LEFT JOIN detail d ON d.d_ref = p.ref AND d.d_vuln = p.vuln_id AND d.d_pkg IS p.pkg_name"
+        f" AND d.d_ver IS p.installed_version ORDER BY {_order_sql(f, 'p.')}"
     )
 
 
@@ -475,22 +515,8 @@ def findings_page(
 ) -> tuple[list[sqlite3.Row], int]:
     """One page of the run's finding units that pass ``f``, and how many pass in all (also for a page past the end)."""
     cte, params = _filtered_cte(f, run_id)
-    offset = (page - 1) * per_page
-    if page == 1:
-        rows = conn.execute(_page_sql(cte, f, window=True), params | {"limit": per_page, "offset": 0}).fetchall()
-        if rows:
-            return rows, rows[0]["total"]
-        return [], 0
-    total = conn.execute(f"{cte} SELECT COUNT(*) FROM filtered", params).fetchone()[0]  # noqa: S608
-    if offset >= total:
-        return [], total
-    count = min(per_page, total - offset)
-    if offset > total // 2:
-        # Past the middle, a LIMIT/OFFSET sorter would hold almost every row: read from the other end instead.
-        far = {"limit": count, "offset": total - offset - count}
-        rows = conn.execute(_page_sql(cte, f, window=False, reverse=True), params | far).fetchall()
-        return rows[::-1], total
-    return conn.execute(_page_sql(cte, f, window=False), params | {"limit": count, "offset": offset}).fetchall(), total
+    rows = conn.execute(_page_sql(cte, f), params | {"limit": per_page, "offset": (page - 1) * per_page}).fetchall()
+    return [r for r in rows if r["ref"] is not None], rows[0]["total"]
 
 
 def run_namespaces(conn: sqlite3.Connection, run_id: int) -> list[str]:

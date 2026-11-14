@@ -55,8 +55,8 @@ kubedelos = ["web/templates/**/*", "web/static/**/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-markers = ["e2e: needs kind + network"]
-addopts = "-m 'not e2e'"
+markers = ["e2e: needs kind + network", "perf: seeds a 100,000-finding database and times the UI pages"]
+addopts = "-m 'not e2e and not perf'"
 # Starlette's TestClient prefers httpx2 but still works with the httpx kubedelos already depends on.
 filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning"]
 

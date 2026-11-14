@@ -21,7 +21,6 @@ from kubedelos.store.queries import (
     get_run,
     kpis,
     newest_run,
-    no_fix_summary,
     previous_comparable,
     run_namespaces,
 )
@@ -271,7 +270,7 @@ def test_same_ref_with_differing_tag_and_digest_is_one_unit(db):
     assert len(rows) == 1
 
 
-def _fx(vuln, sev, pkg="openssl", version="1.1", fixed="1.2"):
+def _fx(vuln, sev, pkg="openssl", version="1.1", fixed="1.2", url=None):
     return Finding(
         vuln_id=vuln,
         pkg_name=pkg,
@@ -280,6 +279,7 @@ def _fx(vuln, sev, pkg="openssl", version="1.1", fixed="1.2"):
         severity=Severity(sev),
         target="os",
         pkg_type="os",
+        primary_url=url,
     )
 
 
@@ -296,7 +296,8 @@ def test_fix_by_fix_groups_one_base_image_rebuild(db):
     for i in range(30):
         _add_in(repo, run_id, f"img{i:02d}", [_fx("CVE-9", "CRITICAL")], namespaces=("b", "a"))
     _add_in(repo, run_id, "solo", [_fx("CVE-8", "CRITICAL")])
-    rows, total = fix_by_fix(conn, run_id)
+    fixes = fix_by_fix(conn, run_id)
+    rows, total = fixes.rows, fixes.total
     assert total == 2 and [r.vuln_id for r in rows] == ["CVE-9", "CVE-8"]
     top = rows[0]
     assert (top.pkg_name, top.fixed_version, top.severity, top.images, top.namespaces) == (
@@ -320,7 +321,8 @@ def test_fix_by_fix_sort_and_total(db):
     _add_in(repo, run_id, "t1", [_fx("CVE-T1", "HIGH", pkg="c")], namespaces=("x", "y"))
     _add_in(repo, run_id, "t2", [_fx("CVE-T2", "HIGH", pkg="d")], namespaces=("x", "y"))
     _add_in(repo, run_id, "t3", [_fx("CVE-T2", "HIGH", pkg="d")], namespaces=("x",))
-    rows, total = fix_by_fix(conn, run_id)
+    fixes = fix_by_fix(conn, run_id)
+    rows, total = fixes.rows, fixes.total
     assert total == 4
     # Critical first, then more images, then (equal images) more namespaces, then fewer images
     assert rows[0].vuln_id == "CVE-C"
@@ -328,7 +330,8 @@ def test_fix_by_fix_sort_and_total(db):
     many = _run(repo)
     for i in range(30):
         _add_in(repo, many, f"i{i}", [_fx(f"CVE-{i:02d}", "HIGH")])
-    rows, total = fix_by_fix(conn, many, limit=25)
+    fixes = fix_by_fix(conn, many, limit=25)
+    rows, total = fixes.rows, fixes.total
     assert len(rows) == 25 and total == 30
 
 
@@ -347,12 +350,14 @@ def test_fix_lists_skip_unfixed_medium_and_low(db):
             _fx("CVE-OK", "HIGH"),
         ],
     )
-    rows, total = fix_by_fix(conn, run_id)
+    fixes = fix_by_fix(conn, run_id)
+    rows, total = fixes.rows, fixes.total
     assert [r.vuln_id for r in rows] == ["CVE-OK"] and total == 1
-    images, total = fix_by_image(conn, run_id)
+    fixes = fix_by_image(conn, run_id)
+    images, total = fixes.rows, fixes.total
     assert [(r.ref, r.critical, r.high, r.fixable) for r in images] == [("a", 0, 3, 1)] and total == 1
     _add_in(repo, run_id, "b", [_fx("CVE-M", "MEDIUM"), _fx("CVE-N", "CRITICAL", fixed=None)])
-    assert fix_by_image(conn, run_id)[1] == 1
+    assert fix_by_image(conn, run_id).total == 1
 
 
 def test_installed_versions_distinct_sorted(db):
@@ -361,7 +366,7 @@ def test_installed_versions_distinct_sorted(db):
     _add_in(repo, run_id, "a", [_fx("CVE-1", "HIGH", version="1.1.0")])
     _add_in(repo, run_id, "b", [_fx("CVE-1", "HIGH", version="1.0.9")])
     _add_in(repo, run_id, "c", [_fx("CVE-1", "HIGH", version="1.1.0")])
-    rows, _ = fix_by_fix(conn, run_id)
+    rows = fix_by_fix(conn, run_id).rows
     assert rows[0].installed == ["1.0.9", "1.1.0"] and rows[0].images == 3
 
 
@@ -379,7 +384,8 @@ def test_fix_by_image_counts_and_sort(db):
     _add_in(repo, run_id, "a-high", [_fx("CVE-4", "HIGH"), _fx("CVE-5", "HIGH")])
     _add_in(repo, run_id, "z-arm", [_fx("CVE-6", "HIGH")], platform="linux/arm64")
     _add_in(repo, run_id, "z-arm", [_fx("CVE-6", "HIGH")], platform="linux/amd64")
-    rows, total = fix_by_image(conn, run_id)
+    fixes = fix_by_image(conn, run_id)
+    rows, total = fixes.rows, fixes.total
     assert total == 4
     assert [(r.ref, r.critical, r.high, r.fixable) for r in rows] == [
         ("z-crit", 2, 1, 2),
@@ -388,18 +394,35 @@ def test_fix_by_image_counts_and_sort(db):
         ("z-arm", 0, 1, 1),
     ]
     assert rows[0].namespaces == ["a", "b"]
-    assert len(fix_by_image(conn, run_id, limit=2)[0]) == 2
+    assert len(fix_by_image(conn, run_id, limit=2).rows) == 2
 
 
-def test_no_fix_summary(db):
+def test_fix_lists_count_the_units_with_no_fix(db):
     conn, repo = db
     run_id = _run(repo)
-    assert no_fix_summary(conn, run_id) == (0, 0)
+    for fixes in (fix_by_fix(conn, run_id), fix_by_image(conn, run_id)):
+        assert (fixes.rows, fixes.total, fixes.no_fix, fixes.no_fix_images) == ([], 0, 0, 0)
     _add_in(repo, run_id, "a", [_fx("CVE-1", "HIGH", fixed=None), _fx("CVE-2", "CRITICAL", fixed="")])
     _add_in(
         repo, run_id, "b", [_fx("CVE-1", "HIGH", fixed=None), _fx("CVE-3", "HIGH"), _fx("CVE-4", "LOW", fixed=None)]
     )
-    assert no_fix_summary(conn, run_id) == (3, 2)
+    for fixes in (fix_by_fix(conn, run_id), fix_by_image(conn, run_id)):
+        assert (fixes.total, fixes.no_fix, fixes.no_fix_images) == (1, 3, 2)
+    # No fixable unit at all still reports the units without one.
+    only = _run(repo)
+    _add_in(repo, only, "c", [_fx("CVE-1", "HIGH", fixed=None)])
+    for fixes in (fix_by_fix(conn, only), fix_by_image(conn, only)):
+        assert (fixes.rows, fixes.total, fixes.no_fix, fixes.no_fix_images) == ([], 0, 1, 1)
+
+
+def test_fix_by_fix_link_is_the_groups_highest_url(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "a", [_fx("CVE-1", "HIGH", url="https://example.com/a")])
+    _add_in(repo, run_id, "b", [_fx("CVE-1", "HIGH", url="https://example.com/b")])
+    _add_in(repo, run_id, "c", [_fx("CVE-2", "HIGH")])
+    rows = fix_by_fix(conn, run_id).rows
+    assert [(r.vuln_id, r.primary_url) for r in rows] == [("CVE-1", "https://example.com/b"), ("CVE-2", None)]
 
 
 def test_failed_images_cap_and_total(db):

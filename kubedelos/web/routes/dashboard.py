@@ -27,7 +27,6 @@ from kubedelos.store.queries import (
     get_run,
     kpis,
     newest_run,
-    no_fix_summary,
     previous_comparable,
 )
 from kubedelos.trivy.runner import error_cause
@@ -131,8 +130,7 @@ def dashboard(
         current = kpis(conn, run.id)
         previous = previous_comparable(conn, run)
         before = (previous, kpis(conn, previous.id)) if previous else None
-        fix_rows, fix_total = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
-        no_fix, no_fix_images = no_fix_summary(conn, run.id)
+        fixes = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
         failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
         auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
@@ -151,14 +149,14 @@ def dashboard(
     fix_links = {"severity": ["CRITICAL", "HIGH"]}
     ctx.update(
         by=by,
-        fix_rows=fix_rows,
-        fix_total=fix_total,
+        fix_rows=fixes.rows,
+        fix_total=fixes.total,
         sample_cap=SAMPLE_CAP,
         by_fix_href=dashboard_href(run_id=run_id),
         by_image_href=dashboard_href(run_id=run_id, by="image"),
         all_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="yes"),
-        no_fix=no_fix,
-        no_fix_images=no_fix_images,
+        no_fix=fixes.no_fix,
+        no_fix_images=fixes.no_fix_images,
         no_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="no"),
         more_href=lambda row: findings_href(run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
     )

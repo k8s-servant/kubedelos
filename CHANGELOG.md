@@ -19,6 +19,7 @@
 - The table shows `repo:tag` plus a short digest; JSON, CSV and SARIF keep the full ref.
 - Environment variables are documented, including the JSON list format.
 - `kubedelos ui` serves a local web UI (dashboard and findings) on loopback only. The printed URL carries a one-time token that is swapped for a session cookie; `KUBEDELOS_LOG_LEVEL=info` prints an access line per request on stderr.
+- The UI pages render in under 300 ms on a database of 1,000 images and 100,000 findings; schema migration 5 adds the indexes they need.
 
 ### Bug Fixes
 
