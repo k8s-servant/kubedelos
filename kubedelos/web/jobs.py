@@ -21,7 +21,7 @@ from kubernetes.config import ConfigException
 
 from kubedelos.config import Settings
 from kubedelos.scan.service import Progress, ScanOutcome, run_scan
-from kubedelos.trivy.runner import _redact, error_cause
+from kubedelos.trivy.runner import error_cause
 
 logger = logging.getLogger("kubedelos.web")
 
@@ -172,10 +172,12 @@ class ScanRunner:
         try:
             outcome = self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=job.cancel)
         except BaseException as exc:  # anything, including a failure before the run row exists: never stuck
+            described = describe_error(exc)
             with self._lock:
                 job.state = "error"
-                job.error = describe_error(exc)
-            logger.debug("ui scan failed: %s", _redact(str(exc)))
+                job.error = described
+            # Only the described text: redaction is best effort, so raw messages, headers and bodies stay out of logs.
+            logger.debug("ui scan failed (%s): %s", type(exc).__name__, described)
             return
         with self._lock:
             job.run_id = outcome.run_id

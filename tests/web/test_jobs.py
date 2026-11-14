@@ -216,6 +216,19 @@ def test_api_error_shows_only_status_and_reason(settings, caplog):
     assert "tok123" not in caplog.text
 
 
+def test_api_error_body_never_reaches_the_log(settings, caplog):
+    exc = ApiException(status=403, reason="Forbidden")
+    exc.headers = {"X-Debug": "plain-header-secret"}
+    exc.body = '{"data": "plain-body-secret"}'  # a shape redaction does not recognise
+    runner = _runner(settings, FakeScan(raises=exc))
+    with caplog.at_level(logging.DEBUG, logger="kubedelos.web"):
+        runner.start({})
+        _wait_for(runner, "error")
+        runner.shutdown()
+    assert "ApiException" in caplog.text and "Kubernetes API error 403: Forbidden" in caplog.text
+    assert "plain-body-secret" not in caplog.text and "plain-header-secret" not in caplog.text
+
+
 def test_config_error_shows_the_redacted_message(settings):
     runner = _runner(settings, FakeScan(raises=ConfigException("no context my-cluster, token: tok123")))
     runner.start({})
