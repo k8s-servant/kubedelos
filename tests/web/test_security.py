@@ -5,7 +5,7 @@ import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
-from kubedelos.web.app import render
+from kubedelos.web.pages import render
 from kubedelos.web.security import Guard
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."

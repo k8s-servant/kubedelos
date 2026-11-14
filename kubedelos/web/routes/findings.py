@@ -22,7 +22,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.app import MAX_ID, open_db, render
+from kubedelos.web.pages import MAX_ID, open_db, render
 
 router = APIRouter()
 

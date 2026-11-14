@@ -30,7 +30,7 @@ from kubedelos.store.queries import (
     previous_comparable,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.app import MAX_ID, open_db, render
+from kubedelos.web.pages import MAX_ID, open_db, render
 
 router = APIRouter()
 

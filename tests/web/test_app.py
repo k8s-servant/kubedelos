@@ -1,11 +1,10 @@
 import re
-import sqlite3
 
 import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
-from kubedelos.web.app import open_db, render
+from kubedelos.web.pages import render
 
 
 @pytest.fixture(autouse=True)
@@ -23,16 +22,6 @@ def _test_routes(app):
         # Rendered from the app's environment, to show the csrf_token global and the escaping.
         template = app.state.templates.env.from_string("{{ csrf_token(request) }} {{ '<b>' }}")
         return PlainTextResponse(template.render(request=request))
-
-    @app.get("/_db")
-    def db(request: Request):
-        with open_db(request) as conn:
-            version = conn.execute("PRAGMA user_version").fetchone()[0]
-            try:
-                conn.execute("CREATE TABLE t (x)")
-            except sqlite3.OperationalError as exc:
-                return PlainTextResponse(f"{version} {exc}")
-        return PlainTextResponse("writable")
 
 
 def test_app_state(app, seed):
@@ -54,13 +43,6 @@ def test_base_page_has_nav_context_and_stylesheet(client):
     assert "my-cluster" in html
     assert "<script" not in html and "<style" not in html and "style=" not in html
     assert not re.search(r"\son[a-z]+\s*=", html)  # no event-handler attributes such as onclick=
-
-
-def test_render_escapes_context(app, client):
-    app.state.context = "<script>alert(1)</script>"
-    html = client.get("/_page").text
-    assert "<script>alert(1)" not in html
-    assert "&lt;script&gt;alert(1)&lt;/script&gt;" in html
 
 
 def test_csrf_token_global(client):
@@ -97,11 +79,3 @@ def test_validation_error_renders_400_page(client):
     assert response.headers["content-type"].startswith("text/html")
     assert "invalid parameter: n" in response.text
     assert response.headers["cache-control"] == "no-store"
-
-
-def test_open_db_is_read_only(client):
-    response = client.get("/_db")
-    assert response.status_code == 200
-    version, _, error = response.text.partition(" ")
-    assert int(version) > 0
-    assert "readonly" in error

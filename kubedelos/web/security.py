@@ -17,6 +17,8 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
+from kubedelos.web.pages import render
+
 CSRF_HEADER = "x-csrf-token"
 CSRF_FIELD = "csrf_token"
 SESSION_HINT = "Open the URL printed in the terminal where you started kubedelos ui."
@@ -105,8 +107,6 @@ async def _sent_csrf(request: Request) -> str | None:
 
 
 def _forbidden(request: Request) -> Response:
-    from kubedelos.web.app import render  # app imports this module; render is only needed once a request arrives
-
     return render(
         request,
         "error.html",
