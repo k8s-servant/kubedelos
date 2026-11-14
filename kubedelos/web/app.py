@@ -20,7 +20,7 @@ from fastapi.templating import Jinja2Templates
 
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
-from kubedelos.web.pages import render
+from kubedelos.web.pages import plural, render
 from kubedelos.web.routes import dashboard, findings
 from kubedelos.web.security import Guard, install
 
@@ -57,6 +57,7 @@ def _templates(guard: Guard) -> Jinja2Templates:
 
     env.globals["csrf_token"] = csrf_token
     env.filters["safe_url"] = safe_url
+    env.filters["plural"] = plural
     env.globals.update(
         ago=ago,
         describe_scope=describe_scope,

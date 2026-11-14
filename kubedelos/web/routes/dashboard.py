@@ -32,7 +32,7 @@ from kubedelos.store.queries import (
     worst_images,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.pages import MAX_ID, open_db, render
+from kubedelos.web.pages import MAX_ID, open_db, plural, render
 
 router = APIRouter()
 
@@ -173,6 +173,7 @@ def _change(current: int, previous: int | None) -> str:
 
 def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
     prev_run, prev = before if before else (None, None)
+    scanned = now.images - now.images_failed
     noisy = bool(run.gaps or run.images_failed or (prev_run and (prev_run.gaps or prev_run.images_failed)))
     specs = [
         ("critical", "Critical findings", now.critical, "", prev and prev.critical, False),
@@ -181,7 +182,7 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
             "images-critical",
             "Images with a Critical",
             now.images_with_critical,
-            f"of {now.images - now.images_failed} images scanned",
+            f"of {scanned} {plural(scanned, 'image')} scanned",
             prev and prev.images_with_critical,
             False,
         ),

@@ -58,11 +58,13 @@
 
   {% if kpis.findings == 0 %}
     {% if kpis.images_failed > 0 %}
-    <p class="notice">No vulnerabilities found in the {{ kpis.images - kpis.images_failed }} images that scanned; {{ kpis.images_failed }} failed to scan.</p>
+    {%- set scanned = kpis.images - kpis.images_failed %}
+    <p class="notice">No vulnerabilities found in the {{ scanned }} {{ scanned | plural("image") }} that scanned; {{ kpis.images_failed }} failed to scan.</p>
     {% elif run.gaps %}
-    <p class="notice">No vulnerabilities found in the {{ kpis.images }} images that could be listed; {{ run.gaps | length }} namespaces or resources could not be listed.</p>
+    {%- set gaps = run.gaps | length %}
+    <p class="notice">No vulnerabilities found in the {{ kpis.images }} {{ kpis.images | plural("image") }} that could be listed; {{ gaps }} {{ gaps | plural("namespace or resource", "namespaces or resources") }} could not be listed.</p>
     {% else %}
-    <p class="notice">No vulnerabilities found in {{ kpis.images }} images.</p>
+    <p class="notice">No vulnerabilities found in {{ kpis.images }} {{ kpis.images | plural("image") }}.</p>
     {% endif %}
   {% endif %}
 
@@ -114,8 +116,8 @@
           <span class="version"><span class="fix-label">installed </span>{{ row.installed | join(", ") }}</span>
           {%- endif %}
           <span class="version"><span class="fix-label">fixed in </span><span class="fixed">{{ versions(row.fixed_version) }}</span></span>
-          <span>{{ row.images }} <span class="fix-unit">images</span></span>
-          <span>{{ row.namespaces }} <span class="fix-unit">namespaces</span></span>
+          <span>{{ row.images }} <span class="fix-unit">{{ row.images | plural("image") }}</span></span>
+          <span>{{ row.namespaces }} <span class="fix-unit">{{ row.namespaces | plural("namespace") }}</span></span>
         </summary>
         {%- if row.installed | length > 1 %}
         <p class="fix-installed">Installed: {{ row.installed | join(", ") }}</p>
@@ -153,7 +155,7 @@
     <p class="fix-overflow">showing {{ fix_rows | length }} of {{ fix_total }}: <a href="{{ all_fix_href }}">see the full list in findings</a></p>
     {% endif %}
     {% if no_fix %}
-    <p class="fix-nofix"><a href="{{ no_fix_href }}">{{ no_fix }} Critical/High findings have no released fix yet, across {{ no_fix_images }} images</a></p>
+    <p class="fix-nofix"><a href="{{ no_fix_href }}">{{ no_fix }} Critical/High {{ no_fix | plural("finding has", "findings have") }} no released fix yet, across {{ no_fix_images }} {{ no_fix_images | plural("image") }}</a></p>
     {% endif %}
   </section>
   {% if worst %}

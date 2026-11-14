@@ -233,3 +233,9 @@ def test_versions_wrap_between_versions_and_ids_stay_whole(client, seed):
     assert "overflow-wrap: break-word" in version and "max-width: 14rem" in version
     assert re.search(r"\.cve \{[^}]*font-family: var\(--mono\);[^}]*white-space: nowrap;", css)
     assert "font-family: var(--mono)" in re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
+
+
+def test_past_end_count_is_pluralised(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "img", [_f("CVE-1")])
+    assert "page 2 is past the end (1 finding)" in client.get(f"/findings?run_id={run_id}&page=2").text

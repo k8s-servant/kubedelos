@@ -202,7 +202,7 @@ def test_gaps_mark_incomplete(client, seed):
     _add(seed, run_id, "a", ["CRITICAL"], status="ok")
     seed.repo.add_warnings(run_id, [InventoryWarning("namespace secret-ns: forbidden", coverage=True)])
     html = client.get("/").text
-    assert "incomplete: 1 namespaces or resources could not be listed" in html
+    assert "incomplete: 1 namespace or resource could not be listed" in html
     assert "namespace secret-ns: forbidden" in html
     assert '<details class="callout">' in html
     for label in ("critical", "high", "images-critical", "findings"):
@@ -278,7 +278,7 @@ def test_images_with_critical_tile_counts_only_images_that_scanned(client, seed)
     run_id = _run(seed)
     _add(seed, run_id, "a", ["CRITICAL"])
     _add(seed, run_id, "b", status="error")
-    assert "of 1 images scanned" in _tile(client.get("/").text, "images-critical")
+    assert "of 1 image scanned" in _tile(client.get("/").text, "images-critical")
 
 
 def test_severity_legend_links_and_unknown_hidden_when_zero(client, seed):
@@ -364,10 +364,10 @@ def test_zero_findings_with_failures_is_not_called_clean(client, seed):
 def test_zero_findings_clean_vs_broken(client, seed):
     run_id = _run(seed)
     _add(seed, run_id, "a")
-    assert "No vulnerabilities found in 1 images." in client.get("/").text
+    assert "No vulnerabilities found in 1 image." in client.get("/").text
     _add(seed, run_id, "b", status="error")
     html = client.get("/").text
-    assert "No vulnerabilities found in the 1 images that scanned; 1 failed to scan." in html
+    assert "No vulnerabilities found in the 1 image that scanned; 1 failed to scan." in html
     assert "No vulnerabilities found in 2 images." not in html
 
 
@@ -396,10 +396,8 @@ def test_zero_findings_with_gaps_is_not_called_clean(client, seed):
     _add(seed, run_id, "a")
     seed.repo.add_warnings(run_id, [InventoryWarning("namespace x: forbidden", coverage=True)])
     html = client.get("/").text
-    assert (
-        "No vulnerabilities found in the 1 images that could be listed; 1 namespaces or resources could not be" in html
-    )
-    assert "No vulnerabilities found in 1 images." not in html
+    assert "No vulnerabilities found in the 1 image that could be listed; 1 namespace or resource could not be" in html
+    assert "No vulnerabilities found in 1 image." not in html
 
 
 def _add_fix(
@@ -432,7 +430,7 @@ def test_fix_list_default_and_by_image(client, seed):
     html = client.get("/").text
     assert 'data-fix="CVE-9"' in html and "1.1" in html and "1.2" in html
     assert 'href="https://example.com/CVE-9"' in html and 'rel="noopener noreferrer"' in html
-    assert "1 Critical/High findings have no released fix yet, across 1 images" in html
+    assert "1 Critical/High finding has no released fix yet, across 1 image" in html
     assert "/findings?run_id=1&severity=CRITICAL&severity=HIGH&has_fix=no" in unescape(html)
     by_image = client.get("/?by=image").text
     assert 'data-image="reg.example.com/app:1"' in by_image and 'data-fix="CVE-9"' not in by_image
@@ -614,3 +612,17 @@ def test_worst_images_show_the_image_name_and_a_short_tag(client, seed):
     panel = _between(client.get("/").text, '<ul class="worst">', "</ul>")
     assert ">kindnetd:v20251212-\u2026<" in panel and f'title="{long}"' in panel
     assert ">coredns:v1.13.1<" in panel
+
+
+def test_counts_are_pluralised(client, seed):
+    run_id = _run(seed)
+    _add_fix(seed, run_id, "img", "CVE-9")
+    html = client.get("/").text
+    row = _between(html, 'data-fix="CVE-9"', "</summary>")
+    assert '1 <span class="fix-unit">image</span>' in row and '1 <span class="fix-unit">namespace</span>' in row
+    assert "of 1 image scanned" in _tile(html, "images-critical")
+    for i in range(2):
+        _add_fix(seed, run_id, f"other{i}", f"CVE-N{i}", "HIGH", fixed=None, ns=f"ns{i}")
+    html = client.get("/").text
+    assert "2 Critical/High findings have no released fix yet, across 2 images" in html
+    assert "of 3 images scanned" in _tile(html, "images-critical")
