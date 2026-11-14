@@ -334,3 +334,22 @@ def test_add_note_stores_a_run_warning(tmp_path):
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
     repo.add_note(run, "closed by kubedelos")
     assert [(r["text"], r["coverage"]) for r in repo.run_warnings(run)] == [("closed by kubedelos", 0)]
+
+
+def test_close_stale_closes_a_running_run_and_notes_why(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    assert repo.close_stale(run, "closed by kubedelos") is True
+    row = repo.get_run(run)
+    assert row["status"] == "failed" and row["finished_at"] is not None
+    assert (row["images_total"], row["images_error"]) == (0, 0)
+    assert [r["text"] for r in repo.run_warnings(run)] == ["closed by kubedelos"]
+
+
+def test_close_stale_leaves_a_finished_run_alone(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    repo.finish_run(run, "ok")
+    assert repo.close_stale(run, "closed by kubedelos") is False
+    assert repo.get_run(run)["status"] == "ok"
+    assert repo.run_warnings(run) == []

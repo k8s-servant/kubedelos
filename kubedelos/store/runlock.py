@@ -67,17 +67,24 @@ def hold(data_dir: Path) -> Iterator[str]:
         try:
             yield owner
         finally:
+            # Cleanup must never mask the run's own result or exception, so its errors are ignored.
             if sys.platform != "win32":
                 # Delete while still locked, so a checker can never lock the file in the gap and see a dead owner.
-                path.unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
             _unlock(fd)
     finally:
         os.close(fd)
-        path.unlink(missing_ok=True)  # Windows cannot delete an open file: do it once closed
+        with contextlib.suppress(OSError):
+            path.unlink(missing_ok=True)  # Windows cannot delete an open file: do it once closed
 
 
 def is_owned(data_dir: Path, owner: str) -> bool:
-    """True when some open handle, in this process or another, holds the lock of ``owner``."""
+    """True when some open handle, in this process or another, holds the lock of ``owner``.
+
+    A lock file nobody holds was left by a process that died; it is deleted while locked, so files don't pile up.
+    That can't hit a run that is starting: an owner reaches the database only after its file is locked.
+    """
     if not _OWNER_RE.fullmatch(owner):
         return False
     try:
@@ -87,6 +94,8 @@ def is_owned(data_dir: Path, owner: str) -> bool:
     try:
         if not _try_lock(fd):
             return True
+        with contextlib.suppress(OSError):  # on Windows an open file can't be deleted: it is left in place
+            _lock_path(data_dir, owner).unlink()
         _unlock(fd)
         return False
     finally:
@@ -100,11 +109,7 @@ def close_stale_runs(conn: sqlite3.Connection, data_dir: Path) -> list[int]:
     for row in conn.execute("SELECT id, owner FROM scan_run WHERE status = 'running' ORDER BY id").fetchall():
         if row["owner"] is not None and is_owned(data_dir, row["owner"]):
             continue
-        # The owner releases its lock only after finish_run, so a run that ended since the SELECT now reads as
-        # finished: read the status again rather than overwrite a real result with "failed".
-        if repo.get_run(row["id"])["status"] != "running":
-            continue
-        repo.finish_run(row["id"], "failed")
-        repo.add_note(row["id"], STALE_NOTE)
-        closed.append(row["id"])
+        # close_stale only closes a row still "running", so a run that ended since the SELECT keeps its result.
+        if repo.close_stale(row["id"], STALE_NOTE):
+            closed.append(row["id"])
     return closed

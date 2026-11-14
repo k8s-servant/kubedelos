@@ -32,6 +32,13 @@ ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM'
          w.namespace, w.name, f.vuln_id
 """
 
+_FINISH_RUN_SQL = (
+    "UPDATE scan_run SET status = :status, finished_at = :now,"
+    " images_total = (SELECT COUNT(*) FROM image_result WHERE run_id = :id),"
+    " images_error = (SELECT COUNT(*) FROM image_result WHERE run_id = :id AND status = 'error')"
+    " WHERE id = :id"
+)
+
 
 def _is_digest_key(key: str) -> bool:
     return _DIGEST_KEY_RE.search(key) is not None
@@ -117,13 +124,19 @@ class Repo:
         if status not in _FINAL_STATUSES:
             raise ValueError(f"invalid final run status: {status!r}")
         with self._conn:
-            self._conn.execute(
-                "UPDATE scan_run SET status = :status, finished_at = :now,"
-                " images_total = (SELECT COUNT(*) FROM image_result WHERE run_id = :id),"
-                " images_error = (SELECT COUNT(*) FROM image_result WHERE run_id = :id AND status = 'error')"
-                " WHERE id = :id",
-                {"status": status, "now": self._now(), "id": run_id},
+            self._conn.execute(_FINISH_RUN_SQL, {"status": status, "now": self._now(), "id": run_id})
+
+    def close_stale(self, run_id: int, note: str) -> bool:
+        """Mark a run ``failed`` and record ``note``, only if it is still running. Returns whether it was closed."""
+        # One transaction, conditional on status: a run whose owner finished it meanwhile keeps its real result.
+        with self._conn:
+            cur = self._conn.execute(
+                _FINISH_RUN_SQL + " AND status = 'running'", {"status": "failed", "now": self._now(), "id": run_id}
             )
+            if cur.rowcount != 1:
+                return False
+            self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, note))
+        return True
 
     def get_run(self, run_id: int) -> sqlite3.Row | None:
         return self._conn.execute("SELECT * FROM scan_run WHERE id = ?", (run_id,)).fetchone()

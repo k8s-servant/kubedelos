@@ -41,10 +41,11 @@ def test_is_owned_rejects_owners_that_are_not_tokens(tmp_path, owner):
     assert not runlock.is_owned(tmp_path, owner)
 
 
-def test_a_lock_file_nobody_holds_is_not_owned(tmp_path):
+def test_a_lock_file_nobody_holds_is_not_owned_and_is_removed(tmp_path):
     (tmp_path / "runs").mkdir()
     (tmp_path / "runs" / "deadbeef.lock").touch()  # left behind by a process that was killed
     assert not runlock.is_owned(tmp_path, "deadbeef")
+    assert not (tmp_path / "runs" / "deadbeef.lock").exists()
 
 
 def test_sweep_leaves_a_live_cli_run_alone(tmp_path, repo):  # spec: never mark another terminal's scan failed
@@ -78,6 +79,33 @@ def test_sweep_leaves_finished_runs_alone(tmp_path, repo):
     assert repo.run_warnings(run_id) == []
 
 
+def test_sweep_keeps_a_run_that_finished_while_it_was_checked(tmp_path, repo, monkeypatch):
+    run_id = _start(repo, "deadbeef" * 4)
+
+    def finished_meanwhile(data_dir, owner):  # the owner writes its result, then releases the lock
+        repo.finish_run(run_id, "ok")
+        return False
+
+    monkeypatch.setattr(runlock, "is_owned", finished_meanwhile)
+    assert runlock.close_stale_runs(repo._conn, tmp_path) == []
+    assert repo.get_run(run_id)["status"] == "ok"
+    assert repo.run_warnings(run_id) == []
+
+
+def test_hold_cleanup_errors_never_mask_the_run(tmp_path, monkeypatch):
+    def unlink(self, missing_ok=False):
+        raise PermissionError("read-only runs dir")
+
+    with runlock.hold(tmp_path) as owner:
+        monkeypatch.setattr(runlock.Path, "unlink", unlink)
+        result = owner
+    monkeypatch.undo()
+    assert result == owner
+    with pytest.raises(RuntimeError, match="boom"), runlock.hold(tmp_path):
+        monkeypatch.setattr(runlock.Path, "unlink", unlink)
+        raise RuntimeError("boom")
+
+
 _HOLDER = """
 import sys, time
 from pathlib import Path
@@ -109,5 +137,5 @@ def test_lock_held_by_another_process_counts_as_live(tmp_path):
     finally:
         proc.kill()
         proc.wait(timeout=10)
-    assert _wait(lambda: not runlock.is_owned(tmp_path, owner))  # killed: its lock file is left, but nobody holds it
-    assert (tmp_path / "runs" / f"{owner}.lock").exists()
+    assert (tmp_path / "runs" / f"{owner}.lock").exists()  # killed: its lock file is left behind
+    assert _wait(lambda: not runlock.is_owned(tmp_path, owner))  # but nobody holds it
