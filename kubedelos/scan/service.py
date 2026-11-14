@@ -58,6 +58,7 @@ def run_scan(
         scan_level=settings.scan_level,
         scope=settings.scope,
     )
+    repo.add_warnings(run_id, warnings)
     try:
         errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
     except KeyboardInterrupt:

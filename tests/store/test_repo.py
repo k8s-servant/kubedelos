@@ -5,8 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
-from kubedelos.store.db import MIGRATIONS, connect
+from kubedelos.store.db import MIGRATIONS, connect, connect_readonly
 from kubedelos.store.repo import Repo
 
 DIGEST = "sha256:" + "a" * 64
@@ -283,3 +284,39 @@ def test_run_records_scope(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope='{"x":1}')
     assert repo.get_run(run)["scope"] == '{"x":1}'
+
+
+def test_add_and_read_warnings(tmp_path):
+    repo = _repo(tmp_path)
+    run_id = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    repo.add_warnings(
+        run_id,
+        [
+            InventoryWarning("namespace missing not found", coverage=True),
+            InventoryWarning("no owner info", coverage=False),
+        ],
+    )
+    rows = repo.run_warnings(run_id)
+    assert [(r["text"], r["coverage"]) for r in rows] == [("namespace missing not found", 1), ("no owner info", 0)]
+
+
+def test_connect_readonly_cannot_write(tmp_path):
+    connect(tmp_path / "k.db").close()
+    conn = connect_readonly(tmp_path / "k.db")
+    _OPEN.append(conn)
+    with pytest.raises(sqlite3.OperationalError, match="readonly"):
+        conn.execute("INSERT INTO scan_run (started_at, status) VALUES ('x', 'ok')")
+
+
+def test_connect_readonly_missing_file_raises(tmp_path):
+    with pytest.raises(sqlite3.OperationalError):
+        connect_readonly(tmp_path / "nope.db")
+    assert not (tmp_path / "nope.db").exists()
+
+
+def test_connect_readonly_path_with_space_and_hash(tmp_path):
+    path = tmp_path / "a b#c" / "k.db"
+    connect(path).close()
+    conn = connect_readonly(path)
+    _OPEN.append(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)

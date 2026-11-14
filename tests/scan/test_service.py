@@ -231,3 +231,12 @@ def test_service_records_scope(env, monkeypatch):
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings.model_copy(update={"selector": "app=web"}), api=_api(), repo=repo)
     assert json.loads(repo.get_run(out.run_id)["scope"])["selector"] == "app=web"
+
+
+def test_service_stores_inventory_warnings(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    settings = settings.model_copy(update={"namespaces": ["default", "missing"]})
+    outcome = service.run_scan(settings, api=_api(), repo=repo)
+    rows = repo.run_warnings(outcome.run_id)
+    assert [(r["text"], r["coverage"]) for r in rows] == [("namespace missing not found", 1)]

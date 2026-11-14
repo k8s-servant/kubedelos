@@ -89,6 +89,16 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE scan_run ADD COLUMN scope TEXT;
     """,
+    # 4: the inventory warnings of each run, so a reader can tell a run that could not see everything.
+    """
+    CREATE TABLE run_warning (
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES scan_run(id),
+        text TEXT NOT NULL,
+        coverage INTEGER NOT NULL CHECK (coverage IN (0, 1))
+    );
+    CREATE INDEX idx_run_warning_run ON run_warning(run_id);
+    """,
 ]
 
 
@@ -129,4 +139,13 @@ def connect(path: Path) -> sqlite3.Connection:
         if sidecar.exists():
             sidecar.chmod(0o600)
     _migrate(conn)
+    return conn
+
+
+def connect_readonly(path: Path) -> sqlite3.Connection:
+    """Open an existing database read-only. Never creates, migrates or writes; raises if the file is missing."""
+    # as_uri() percent-escapes spaces and '#', which would otherwise end the URI path.
+    conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
