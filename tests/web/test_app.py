@@ -43,7 +43,7 @@ def test_base_page_has_nav_context_and_stylesheet(client):
     assert "my-cluster" in html
     assert '<aside class="sidebar"' in html
     assert '<link rel="icon" type="image/svg+xml" href="/static/logo.svg">' in html
-    assert '<img class="logo" src="/static/logo.svg" alt="" width="24" height="24">' in html
+    assert '<img class="logo" src="/static/logo.svg" alt="" width="32" height="32">' in html
     assert "site-header" not in html
     assert "<script" not in html and "<style" not in html and "style=" not in html
     assert not re.search(r"\son[a-z]+\s*=", html)  # no event-handler attributes such as onclick=

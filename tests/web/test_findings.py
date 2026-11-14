@@ -187,3 +187,25 @@ def test_hostile_strings_are_escaped_on_the_findings_page(client, seed):
     assert "<script>x</script>" not in html and "<b>ns</b>" not in html
     assert 'title="reg.example.com/&lt;script&gt;x&lt;/script&gt;:1"' in html
     assert re.search(r"<option[^>]*>&lt;b&gt;ns&lt;/b&gt;</option>", html)
+
+
+def test_filters_are_one_card_with_severity_pills(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "img", [_f(f"CVE-{n}") for n in range(120)])
+    html = client.get(f"/findings?run_id={run_id}&severity=HIGH").text
+    assert re.search(r'<form [^>]*class="card filters"', html)
+    for name in ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"):
+        pill = re.search(rf'<label class="pill sev-{name.lower()}">(.*?)</label>', html, re.S)
+        assert pill, name
+        assert f'<input type="checkbox" name="severity" value="{name}"' in pill.group(1)
+        assert name.title() in pill.group(1)
+    assert re.search(r'<input type="checkbox" name="severity" value="HIGH" checked>', html)
+    assert '<button type="submit" class="btn">Apply filters</button>' in html
+    assert re.search(r'<div class="card">\s*<div class="table-wrap">', html)
+    pager = re.search(r'<nav class="pager".*?</nav>', html, re.S).group(0)
+    assert pager.count('aria-current="page"') == 1
+    assert re.search(r'aria-current="page">1<', pager)
+    assert '<span class="sev sev-high">High</span>' in html
+    assert '<td class="version nowrap fixed">1.1</td>' in html
+    assert re.search(r'<td class="version nowrap">1\.0</td>', html)
+    assert re.search(r'<td class="nowrap">\s*(<a [^>]*>)?CVE-0', html)
