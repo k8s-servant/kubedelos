@@ -24,6 +24,7 @@
 
 ### Bug Fixes
 
+- The local UI keeps at most 64 sessions, so repeated token visits no longer grow its memory.
 - Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.
 - Valid image refs with an uppercase or IPv6 registry host, repeated separators or a non-sha256 digest are no longer rejected.
 - Locally loaded images (kind's `import-<date>` imageID) are scanned by their tag instead of a digest that no registry has.

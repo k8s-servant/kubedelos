@@ -6,7 +6,7 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.web.pages import render
-from kubedelos.web.security import Guard
+from kubedelos.web.security import MAX_SESSIONS, Guard
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."
 CSP = (
@@ -55,6 +55,13 @@ def test_guard_sessions_and_csrf_tokens():
     assert not guard.check_csrf(first, "ünïcode")
     # Another process (another startup) has another secret, so its tokens are worthless here.
     assert Guard("tok", 9370).csrf_token(first) != guard.csrf_token(first)
+
+
+def test_session_set_is_capped_and_drops_the_oldest():
+    guard = Guard("tok", 9370)
+    sids = [guard.new_session() for _ in range(MAX_SESSIONS + 1)]
+    assert not guard.valid_session(sids[0])
+    assert guard.valid_session(sids[1]) and guard.valid_session(sids[-1])
 
 
 # Host

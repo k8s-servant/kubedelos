@@ -29,6 +29,9 @@ CSP = (
 _SAFE_METHODS = frozenset({"GET", "HEAD"})
 _FORM_TYPE = "application/x-www-form-urlencoded"
 _MAX_FORM_FIELDS = 100
+# Every ?token= visit makes one session and the token stays valid, so a browser whose session was dropped just
+# reuses its URL. The cap keeps the set from growing without bound.
+MAX_SESSIONS = 64
 
 logger = logging.getLogger("kubedelos.web")
 
@@ -43,7 +46,7 @@ class Guard:
 
     def __init__(self, token: str, port: int) -> None:
         self._token = token
-        self._sessions: set[str] = set()
+        self._sessions: dict[str, None] = {}  # insertion-ordered, oldest first
         self.csrf_secret = secrets.token_bytes(32)
         self.cookie_name = f"kubedelos_session_{port}"
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
@@ -53,7 +56,9 @@ class Guard:
 
     def new_session(self) -> str:
         sid = secrets.token_urlsafe(32)
-        self._sessions.add(sid)
+        self._sessions[sid] = None
+        while len(self._sessions) > MAX_SESSIONS:
+            del self._sessions[next(iter(self._sessions))]
         return sid
 
     def valid_session(self, sid: str | None) -> bool:
