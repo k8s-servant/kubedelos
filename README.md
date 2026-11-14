@@ -134,9 +134,11 @@ To use it on a remote machine, forward the port over SSH and open the printed UR
 ssh -L 9370:127.0.0.1:9370 my-host
 ```
 
-- **Dashboard (`/`)**: the latest run (scope, package types, age; a stale badge after 24 hours, and an incomplete marker when
+Keep the same port on both ends: the UI checks the `Host` header against the port it listens on, so `-L 9400:...` fails.
+
+- **Dashboard (`/`)**: the latest whole-cluster run (scope, package types, age; a stale badge after 24 hours, and an incomplete marker when
   some namespaces could not be listed), tiles with the change against the previous comparable run, severity bricks, a
-  fix-first list (grouped by fix, or by image with `?by=image`), and failed images with the cause and a registry login hint.
+  fix-first list (grouped by fix, or by image with `?by=image`), and failed images with the cause and a registry login hint. A newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
   100 per page.
 

@@ -360,7 +360,7 @@ def ui(
 ) -> None:
     """Serve the local web UI for the current kube-context, on loopback only.
 
-    The address carries a one-time token; the first visit swaps it for a session cookie.
+    The address carries a startup token, valid until the server stops; the first visit swaps it for a session cookie.
     Set KUBEDELOS_LOG_LEVEL=info to print an access line per request on stderr.
     """
     if host not in server.LOOPBACK:
