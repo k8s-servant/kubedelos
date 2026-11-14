@@ -139,9 +139,9 @@ Keep the same port on both ends: the UI checks the `Host` header against the por
 
 Every page has a sidebar with the kube-context and a freshness dot that turns from green to amber once the shown run is
 over 24 hours old, and a footer naming the Trivy that scanned it ("Scanned with Trivy v0.76.1", or "a custom Trivy" for
-`--trivy-path` runs); below 760 px the sidebar becomes a top bar. The page head names the run in chips: its number, scope,
-package types, age, image count and failures, and whether it is pinned or stale. The UI follows the system light or dark
-theme.
+`--trivy-path` runs); below 760 px the sidebar becomes a top bar, which leaves the footer out. The page head names the
+run in chips: its number, scope, package types, age, image count and failures, and whether it is pinned or stale. The UI
+follows the system light or dark theme.
 
 - **Dashboard (`/`)**: the latest whole-cluster run, with an incomplete marker when some namespaces could not be listed.
   KPI tiles show the change against the previous comparable run; the all findings tile carries a severity bar and a
@@ -154,18 +154,18 @@ theme.
   selector, image exclusions and package types, each prefilled from your settings and labelled with the saved value.
   The UI runs one scan at a time; a second start while one runs is refused, but a `kubedelos scan` in another terminal
   doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
-  saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images are
-  done; when the scan ends the page reloads once to show the finished run. Cancel stops the scan once the images in flight finish. The run history lists every run, newest first, 25 per
-  page, with status, scope, packages, images, failures and duration; only `ok` and `partial` runs link to their results.
-  Ctrl-C on `kubedelos ui` cancels a running scan, waits up to 10 seconds for the images in flight, then kills any
-  Trivy process still running.
+  saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images
+  have been scanned. When the scan ends, the page reloads once to show the finished run. Cancel stops the scan once the
+  images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,
+  images, failures and duration; only `ok` and `partial` runs link to their results. Ctrl-C on `kubedelos ui` cancels
+  a running scan, waits up to 10 seconds for the images in flight, then kills any Trivy process still running.
 
 Add `?run_id=N` to pin a page to one run.
 
 Each scan run, from the CLI or the UI, holds a lock file under the data directory for as long as it runs. A run left
 `running` by a process that died (killed, crashed, or a laptop that went to sleep for good) has no live lock, so
-`kubedelos ui` marks it `failed` at startup, printing `note: closed N interrupted run(s)`, and again before each UI
-scan starts. A scan still running in another terminal holds its lock and is never touched.
+`kubedelos ui` marks it `failed` at startup, printing a note such as `note: closed 2 interrupted runs`, and again before
+each UI scan starts. A scan still running in another terminal holds its lock and is never touched.
 
 ## License
 
