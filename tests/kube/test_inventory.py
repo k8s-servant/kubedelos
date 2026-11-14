@@ -71,6 +71,7 @@ def test_inventory_includes_init_ephemeral_and_templates():
             ImageRef(
                 ref="docker.io/library/nginx@sha256:" + "c" * 64,
                 repo="docker.io/library/nginx",
+                tag="latest",  # an untagged spec image is pulled as :latest
                 digest="sha256:" + "c" * 64,
             ),
         ),
@@ -258,3 +259,95 @@ def test_inventory_platform_uses_node_os():
         "docker.io/library/win": "windows/amd64",  # kept and scanned for its own platform, not skipped
         "docker.io/library/lin": "linux/arm64",
     }
+
+
+def _refs(items):
+    return sorted(i.image.ref for i in items)
+
+
+def test_namespace_selector_filters_namespaces():
+    api = FakeKubeApi(
+        namespaces=[namespace("a", labels={"team": "x"}), namespace("b", labels={"team": "y"})],
+        pods={"a": [pod("p", "a", image="a:1")], "b": [pod("p", "b", image="b:1")]},
+    )
+    items, _ = collect(api, Settings(namespace_selector="team=x"))
+    assert _refs(items) == ["docker.io/library/a:1"]
+    assert ("list_namespaces", "team=x") in api.selectors
+
+
+def test_selector_passed_to_every_namespaced_list():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("web", "a", image="web:1", labels={"app": "web"}), pod("db", "a", image="db:1")]},
+    )
+    items, _ = collect(api, Settings(selector="app=web"))
+    assert _refs(items) == ["docker.io/library/web:1"]
+    for method in ("list_pods", "list_deployments", "list_statefulsets", "list_cronjobs"):
+        assert (method, "app=web") in api.selectors
+
+
+def test_namespace_selector_with_forbidden_namespace_list_fails_closed():
+    api = FakeKubeApi(namespaces_forbidden=True, pods={"a": [pod("p", "a")]})
+    with pytest.raises(RuntimeError, match="--namespace-selector"):
+        collect(api, Settings(namespaces=["a"], namespace_selector="team=x"))
+
+
+def test_named_namespace_outside_selector_warns():
+    api = FakeKubeApi(
+        namespaces=[namespace("a", labels={"team": "x"}), namespace("b")],
+        pods={"a": [pod("p", "a", image="a:1")], "b": [pod("p", "b", image="b:1")]},
+    )
+    items, warnings = collect(api, Settings(namespaces=["a", "b"], namespace_selector="team=x"))
+    assert _refs(items) == ["docker.io/library/a:1"]
+    assert InventoryWarning("namespace b does not match --namespace-selector; not scanned", coverage=False) in warnings
+
+
+def test_invalid_selector_is_a_clear_error():
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
+    with pytest.raises(ValueError, match=r"invalid label selector 'app in \('"):
+        collect(api, Settings(selector="app in ("))
+
+
+@pytest.mark.parametrize("pattern", ["nginx:*", "library/nginx:*", "docker.io/library/nginx:*"])
+def test_exclude_image_matches_any_docker_hub_spelling(pattern):
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("short", "a", image="nginx:1.19"), pod("long", "a", image="docker.io/library/nginx:1.19")]},
+    )
+    items, _ = collect(api, Settings(exclude_images=[pattern]))
+    assert items == []
+
+
+def test_exclude_image_keeps_others_and_warns():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [pod("pause", "a", image="registry.k8s.io/pause:3.9"), pod("web", "a", image="nginx:1.19")]},
+    )
+    items, warnings = collect(api, Settings(exclude_images=["registry.k8s.io/*"]))
+    assert _refs(items) == ["docker.io/library/nginx:1.19"]
+    assert InventoryWarning("excluded 1 image(s) matching --exclude-image", coverage=False) in warnings
+
+
+def test_exclude_image_digest_only_ref():
+    image = f"registry.example/team/app@{DIGEST}"
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a", image=image)]})
+    assert collect(api, Settings(exclude_images=["*:1.19"]))[0] != []
+    assert collect(api, Settings(exclude_images=["registry.example/team/*"]))[0] == []
+
+
+def test_no_exclusion_no_warning():
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
+    _, warnings = collect(api, Settings())
+    assert not any("--exclude-image" in w.text for w in warnings)
+
+
+@pytest.mark.parametrize("pattern", ["nginx:*", "nginx:latest"])
+def test_exclude_image_matches_untagged_running_pod(pattern):
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a", image="nginx", image_id=ID)]})
+    assert collect(api, Settings(exclude_images=[pattern]))[0] == []
+
+
+def test_untagged_running_image_records_latest_like_its_template():
+    assert parse_image_id("nginx", ID).tag == "latest"
+    assert parse_image_id("nginx", "").tag == "latest"
+    assert parse_image_id(f"nginx@{DIGEST}", ID).tag is None  # pinned by digest only: no tag was involved

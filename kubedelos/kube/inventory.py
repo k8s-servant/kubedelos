@@ -2,6 +2,7 @@
 
 from collections import Counter
 from dataclasses import dataclass
+from fnmatch import fnmatchcase
 
 from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubernetes.client.rest import ApiException
@@ -66,7 +67,9 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
         if repo != spec_repo:  # e.g. kind's "import-<date>" repo for a locally loaded image: not this image's digest
             repo, digest = "", None
     if digest and is_digest(digest):
-        return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=spec_tag, digest=digest)
+        # An untagged spec image was pulled as :latest; record that, as the template path does, so tag patterns match.
+        tag = spec_tag or (None if spec_digest else "latest")
+        return ImageRef(ref=f"{repo}@{digest}", repo=repo, tag=tag, digest=digest)
     if spec_digest and is_digest(spec_digest):
         return ImageRef(ref=f"{spec_repo}@{spec_digest}", repo=spec_repo, tag=spec_tag, digest=spec_digest)
     tag = spec_tag or "latest"
@@ -110,9 +113,44 @@ def _is_forbidden(exc: ApiException) -> bool:
     return exc.status == 403
 
 
-def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarning]) -> list:
+def image_names(image: ImageRef) -> set[str]:
+    """Every name an ``--exclude-image`` pattern may match for ``image``, whatever spelling the pod spec used.
+
+    ``repo``, ``repo:tag`` and ``repo@digest`` on the normalised repo, plus the short Docker Hub forms people type
+    (``nginx:1.19`` and ``library/nginx:1.19`` for ``docker.io/library/nginx:1.19``).
+    """
+    repos = {image.repo}
+    host, _, path = image.repo.partition("/")  # the repo is normalised, so the first segment is always the host
+    if host == "docker.io":
+        repos.add(path)
+        if path.startswith("library/"):
+            repos.add(path.removeprefix("library/"))
+    names = set(repos)
+    for repo in repos:
+        if image.tag:
+            names.add(f"{repo}:{image.tag}")
+        if image.digest:
+            names.add(f"{repo}@{image.digest}")
+    return names
+
+
+def is_excluded(image: ImageRef, patterns: list[str]) -> bool:
+    return any(fnmatchcase(name, pattern) for name in image_names(image) for pattern in patterns)
+
+
+def _with_selector(list_fn, selector: str | None, *args: str) -> list:
+    """Call ``list_fn`` with ``selector``; a selector the API server cannot parse (HTTP 400) is a clear error."""
     try:
-        return list_fn(ns)
+        return list_fn(*args, label_selector=selector)
+    except ApiException as exc:
+        if selector is not None and exc.status == 400:
+            raise ValueError(f"invalid label selector {selector!r}: {exc.reason}") from None
+        raise
+
+
+def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarning], selector: str | None) -> list:
+    try:
+        return _with_selector(list_fn, selector, ns)
     except ApiException as exc:
         if not _is_forbidden(exc):
             raise
@@ -122,9 +160,15 @@ def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarni
 
 def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[InventoryWarning]) -> list[V1Namespace]:
     wanted = set(settings.namespaces)
+    selector = settings.namespace_selector
     try:
-        found = api.list_namespaces()
+        found = _with_selector(api.list_namespaces, selector)
     except ApiException as exc:
+        if _is_forbidden(exc) and selector is not None:
+            # The labels cannot be read, so the selector cannot be applied: never guess which namespaces it means.
+            raise RuntimeError(
+                "cannot list namespaces: forbidden; --namespace-selector needs list rights on namespaces"
+            ) from None
         if not (_is_forbidden(exc) and wanted):
             raise
         warnings.append(
@@ -133,7 +177,15 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[Inventor
             )
         )
         found = [V1Namespace(metadata=V1ObjectMeta(name=name)) for name in settings.namespaces]
-    for missing in sorted(wanted - {ns.metadata.name for ns in found}):
+    unmatched: set[str] = set()
+    if selector is not None and wanted - {ns.metadata.name for ns in found}:
+        # A named namespace the selector dropped is not missing: say so instead of reporting it as not found.
+        unmatched = (wanted & {ns.metadata.name for ns in api.list_namespaces()}) - {ns.metadata.name for ns in found}
+        for name in sorted(unmatched):
+            warnings.append(
+                InventoryWarning(f"namespace {name} does not match --namespace-selector; not scanned", coverage=False)
+            )
+    for missing in sorted(wanted - unmatched - {ns.metadata.name for ns in found}):
         warnings.append(InventoryWarning(f"namespace {missing} not found", coverage=True))
     excluded = set(settings.exclude_namespaces)
     return [ns for ns in found if (not wanted or ns.metadata.name in wanted) and ns.metadata.name not in excluded]
@@ -169,15 +221,15 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
         name = ns.metadata.name
         owner, team = owners.resolve(ns, settings)
         try:
-            pods = api.list_pods(name)
+            pods = _with_selector(api.list_pods, settings.selector, name)
         except ApiException as exc:
             if not _is_forbidden(exc):
                 raise
             warnings.append(InventoryWarning(f"skipped namespace {name}: forbidden", coverage=True))
             continue
-        deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings)
-        statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings)
-        cronjobs = _list_or_warn(api.list_cronjobs, "cronjobs", name, warnings)
+        deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings, settings.selector)
+        statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings, settings.selector)
+        cronjobs = _list_or_warn(api.list_cronjobs, "cronjobs", name, warnings, settings.selector)
 
         for pod in pods:
             ids = _status_ids(pod)
@@ -200,7 +252,10 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
                 add, name, "CronJob", cj.metadata.name, cj.spec.job_template.spec.template.spec, owner, team, fallback
             )
 
-    return list(items.values()), warnings
+    kept = [item for item in items.values() if not is_excluded(item.image, settings.exclude_images)]
+    if excluded := len(items) - len(kept):
+        warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching --exclude-image", coverage=False))
+    return kept, warnings
 
 
 def _add_template(add, ns: str, kind: str, name: str, pod_spec, owner, team, platform: str) -> None:

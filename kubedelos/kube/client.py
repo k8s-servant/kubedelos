@@ -13,13 +13,34 @@ REQUEST_TIMEOUT = (10, 120)  # (connect, read) seconds, so a hung API server can
 
 
 class KubeApi(Protocol):
-    def list_namespaces(self) -> list[V1Namespace]: ...
-    def list_pods(self, ns: str) -> list: ...
-    def list_deployments(self, ns: str) -> list: ...
-    def list_statefulsets(self, ns: str) -> list: ...
-    def list_cronjobs(self, ns: str) -> list: ...
-    def list_nodes(self) -> list: ...
-    def current_context(self) -> str: ...
+    def list_namespaces(self, label_selector: str | None = None) -> list[V1Namespace]:
+        """Namespaces, optionally filtered by a label selector."""
+
+    def list_pods(self, ns: str, label_selector: str | None = None) -> list:
+        """Pods in ``ns``, optionally filtered by a label selector."""
+
+    def list_deployments(self, ns: str, label_selector: str | None = None) -> list:
+        """Deployments in ``ns``, optionally filtered by a label selector."""
+
+    def list_statefulsets(self, ns: str, label_selector: str | None = None) -> list:
+        """StatefulSets in ``ns``, optionally filtered by a label selector."""
+
+    def list_cronjobs(self, ns: str, label_selector: str | None = None) -> list:
+        """CronJobs in ``ns``, optionally filtered by a label selector."""
+
+    def list_nodes(self) -> list:
+        """Cluster nodes, for each pod's platform."""
+
+    def current_context(self) -> str:
+        """The kube-context name, or ``in-cluster``."""
+
+
+def _list_kwargs(label_selector: str | None) -> dict[str, object]:
+    """Every list call gets the timeout; a label selector only when one was asked for."""
+    kwargs: dict[str, object] = {"_request_timeout": REQUEST_TIMEOUT}
+    if label_selector is not None:
+        kwargs["label_selector"] = label_selector
+    return kwargs
 
 
 class _RealKubeApi:
@@ -29,20 +50,20 @@ class _RealKubeApi:
         self._batch = client.BatchV1Api()
         self._context = context_name
 
-    def list_namespaces(self) -> list[V1Namespace]:
-        return self._core.list_namespace(_request_timeout=REQUEST_TIMEOUT).items
+    def list_namespaces(self, label_selector: str | None = None) -> list[V1Namespace]:
+        return self._core.list_namespace(**_list_kwargs(label_selector)).items
 
-    def list_pods(self, ns: str) -> list:
-        return self._core.list_namespaced_pod(ns, _request_timeout=REQUEST_TIMEOUT).items
+    def list_pods(self, ns: str, label_selector: str | None = None) -> list:
+        return self._core.list_namespaced_pod(ns, **_list_kwargs(label_selector)).items
 
-    def list_deployments(self, ns: str) -> list:
-        return self._apps.list_namespaced_deployment(ns, _request_timeout=REQUEST_TIMEOUT).items
+    def list_deployments(self, ns: str, label_selector: str | None = None) -> list:
+        return self._apps.list_namespaced_deployment(ns, **_list_kwargs(label_selector)).items
 
-    def list_statefulsets(self, ns: str) -> list:
-        return self._apps.list_namespaced_stateful_set(ns, _request_timeout=REQUEST_TIMEOUT).items
+    def list_statefulsets(self, ns: str, label_selector: str | None = None) -> list:
+        return self._apps.list_namespaced_stateful_set(ns, **_list_kwargs(label_selector)).items
 
-    def list_cronjobs(self, ns: str) -> list:
-        return self._batch.list_namespaced_cron_job(ns, _request_timeout=REQUEST_TIMEOUT).items
+    def list_cronjobs(self, ns: str, label_selector: str | None = None) -> list:
+        return self._batch.list_namespaced_cron_job(ns, **_list_kwargs(label_selector)).items
 
     def list_nodes(self) -> list:
         return self._core.list_node(_request_timeout=REQUEST_TIMEOUT).items

@@ -53,3 +53,26 @@ def test_pkg_types_rejects_unknown_and_empty(value):
 def test_pkg_types_from_env(monkeypatch):
     monkeypatch.setenv("KUBEDELOS_PKG_TYPES", "os")
     assert Settings().pkg_types == ("os",)
+
+
+def test_selectors_default_none_and_blank_is_none():
+    assert Settings().selector is None and Settings().namespace_selector is None
+    assert Settings(selector="  ", namespace_selector="").selector is None
+    assert Settings(namespace_selector=" team=x ").namespace_selector == "team=x"
+
+
+def test_exclude_images_from_env_json(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_EXCLUDE_IMAGES", '["a/*","b:*"]')
+    assert Settings().exclude_images == ["a/*", "b:*"]
+
+
+def test_scope_is_canonical():
+    import json
+
+    a = Settings(namespaces=["b", "a"], exclude_images=["y", "x"], selector="app=web")
+    b = Settings(namespaces=["a", "b"], exclude_images=["x", "y"], selector="app=web")
+    assert a.scope == b.scope
+    assert json.loads(a.scope) == {
+        "namespaces": ["a", "b"], "exclude_namespaces": [], "namespace_selector": None, "selector": "app=web",
+        "exclude_images": ["x", "y"],
+    }  # fmt: skip
