@@ -2,7 +2,8 @@
     div is always there, so a poller has a target before the first scan. A run links to its results only when its
     final status is ok or partial, never by its phase: "saving" also fires on a cancelled run. While a scan is active the
     div polls itself through htmx every 2 seconds; the swapped-in copy of a finished scan lacks the attributes, so polling
-    stops on its own. Without JavaScript a refresh link stands in. -#}
+    stops on its own, and the poll that sees the scan end also gets HX-Refresh, which reloads the page with the
+    finished run in the history. Without JavaScript a refresh link stands in. -#}
 {%- set active = job and job.state in ("starting", "running", "stopping") %}
 <div id="scan-progress" class="scan-progress"{% if active %} hx-get="/scans/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {%- if job %}

@@ -497,3 +497,20 @@ def test_noscript_refresh_link(client, fake):
     fake.release.set()
     _wait_for(client.app, "finished")
     assert "<noscript>" not in _progress(client)  # nothing left to refresh for
+
+
+def test_htmx_poll_refreshes_the_page_once_the_scan_ends(client, app, fake):
+    htmx = {"HX-Request": "true"}
+    assert "HX-Refresh" not in client.get("/scans/progress", headers=htmx).headers  # no scan yet
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=2, done=1, errors=0, current="a", phase="scanning"))
+    assert "HX-Refresh" not in client.get("/scans/progress", headers=htmx).headers  # still running
+    fake.release.set()
+    _wait_for(app, "finished")
+    done = client.get("/scans/progress", headers=htmx)
+    assert done.headers["HX-Refresh"] == "true"  # so the history row is reloaded too
+    assert "hx-trigger" not in done.text
+    assert "HX-Refresh" not in client.get("/scans/progress").headers  # a plain GET just gets the fragment
+    page = client.get("/scans")
+    assert "HX-Refresh" not in page.headers and "hx-trigger" not in page.text  # the reload can't loop

@@ -155,7 +155,7 @@ theme.
   The UI runs one scan at a time; a second start while one runs is refused, but a `kubedelos scan` in another terminal
   doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
   saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images are
-  done. Cancel stops the scan once the images in flight finish. The run history lists every run, newest first, 25 per
+  done; when the scan ends the page reloads once to show the finished run. Cancel stops the scan once the images in flight finish. The run history lists every run, newest first, 25 per
   page, with status, scope, packages, images, failures and duration; only `ok` and `partial` runs link to their results.
   Ctrl-C on `kubedelos ui` cancels a running scan, waits up to 10 seconds for the images in flight, then kills any
   Trivy process still running.

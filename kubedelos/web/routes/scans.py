@@ -9,7 +9,8 @@ form posts to ``/scans`` with the CSRF token; each field starts at the UI's save
 dependency), validates the five fields against ``Settings`` and passes only the validated values to the app's
 ``ScanRunner``. Before it starts the scan it closes the stale ``running`` rows no live process owns, through
 ``open_db_rw``, the only writable connection these routes open. ``GET /scans/progress`` serves the progress readout
-alone, for polling, and ``POST /scans/cancel`` asks the running scan to stop.
+alone, for polling; once the scan has ended it tells htmx to reload the page, so the history shows the finished run.
+``POST /scans/cancel`` asks the running scan to stop.
 """
 
 import re
@@ -33,6 +34,7 @@ from kubedelos.web.pages import open_db, open_db_rw, render
 router = APIRouter()
 
 PER_PAGE = 25
+ACTIVE = ("starting", "running", "stopping")
 PKG_TYPES = ("os", "library")
 CHIP = {
     "ok": "chip-ok",
@@ -120,7 +122,7 @@ def _job(request: Request) -> dict | None:
     if view is None:
         return None
     p = view.progress
-    active = view.state in ("starting", "running", "stopping")
+    active = view.state in ACTIVE
     finished = view.state == "finished"
     linked = finished and view.status in RESULT_STATUSES and view.run_id is not None
     titles = {"finished": "Last scan", "error": "Scan failed"}
@@ -239,4 +241,10 @@ def cancel(request: Request) -> RedirectResponse:
 
 @router.get("/scans/progress", response_class=HTMLResponse)
 def progress(request: Request) -> HTMLResponse:
-    return render(request, "partials/scan_progress.html", {"job": _job(request)})
+    job = _job(request)
+    response = render(request, "partials/scan_progress.html", {"job": job})
+    # The scan htmx was polling has ended: reload the page so the run history shows the run's final row too. The
+    # reloaded page has no poller, since the job is no longer active, so this can't loop.
+    if request.headers.get("HX-Request") == "true" and job is not None and job["state"] not in ACTIVE:
+        response.headers["HX-Refresh"] = "true"
+    return response
