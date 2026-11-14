@@ -21,14 +21,23 @@ class PortInUse(Exception):
         self.port = port
 
 
+def _listening(family: int, address: str, port: int) -> bool:
+    """True when something accepts a TCP connection on ``address:port``."""
+    with socket.socket(family, socket.SOCK_STREAM) as probe:
+        probe.settimeout(0.2)
+        return probe.connect_ex((address, port)) == 0
+
+
 def bind(host: str, port: int) -> socket.socket:
     """A listening socket on the loopback address for ``host``."""
     family = socket.AF_INET6 if host == "::1" else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
-        if sys.platform.startswith("linux"):
-            # Skips TIME_WAIT on restart. On macOS/BSD it would let this bind succeed beside a 0.0.0.0 listener.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        # SO_REUSEADDR skips TIME_WAIT, so a restart works. On macOS/BSD it also lets this bind succeed beside a
+        # 0.0.0.0 listener, so probe first: TIME_WAIT refuses connections, a live listener answers.
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if not sys.platform.startswith("linux") and _listening(family, LOOPBACK[host], port):
+            raise PortInUse(port)
         sock.bind((LOOPBACK[host], port))
         sock.listen()
     except OSError as exc:

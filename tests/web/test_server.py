@@ -68,3 +68,16 @@ def test_bind_detects_a_wildcard_listener_on_the_same_port():
             server.bind("127.0.0.1", port)
     finally:
         wildcard.close()
+
+
+def test_bind_reuses_a_port_left_in_time_wait():
+    first = server.bind("127.0.0.1", 0)
+    port = first.getsockname()[1]
+    client = socket.create_connection(("127.0.0.1", port))
+    conn, _ = first.accept()
+    # Closing the server side first leaves its end of the connection in TIME_WAIT.
+    conn.close()
+    first.close()
+    client.close()
+    again = server.bind("127.0.0.1", port)
+    again.close()

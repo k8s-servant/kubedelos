@@ -24,6 +24,7 @@
 
 ### Bug Fixes
 
+- Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.
 - Valid image refs with an uppercase or IPv6 registry host, repeated separators or a non-sha256 digest are no longer rejected.
 - Locally loaded images (kind's `import-<date>` imageID) are scanned by their tag instead of a digest that no registry has.
 - SIGTERM and SIGHUP no longer leave Trivy scans running and the run stuck in `running`.
