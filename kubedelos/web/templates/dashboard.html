@@ -1,9 +1,9 @@
 {#- The dashboard: the run line, the KPI tiles, the severity bricks and the fix-first list. -#}
 {% extends "base.html" %}
 {% block title %}Dashboard · kubedelos{% endblock %}
-{% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
+{% block page_title %}Dashboard{% endblock %}
+{% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
 {% block content %}
-<h1>Dashboard</h1>
 {% if not run %}
   {% if narrower_href %}
   <section class="notice">

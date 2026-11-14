@@ -36,6 +36,16 @@ def _add(seed, run_id, ref, severities=(), *, status="ok", platform="linux/amd64
     seed.repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status=status, findings=findings))
 
 
+def _chips(html):
+    start = html.index('<ul class="chips">')
+    return html[start : html.index("</ul>", start)]
+
+
+def _sidebar(html):
+    start = html.index('<aside class="sidebar"')
+    return html[start : html.index("</aside>", start)]
+
+
 def _tile(html, label):
     start = html.index(f'data-tile="{label}"')
     return html[start : html.index("</li>", start)]
@@ -57,7 +67,7 @@ def test_uses_newest_cluster_run_and_mentions_newer_narrower(client, seed):
     _run(seed)
     _run(seed, scope=Settings(namespaces=["web"]).scope)
     html = client.get("/").text
-    assert "Run 1 " in html
+    assert '<li class="chip">Run 1</li>' in html
     assert "a newer run of namespace web exists" in html
     assert "/findings?run_id=2" in html
 
@@ -70,7 +80,7 @@ def test_pinned_run_and_404_reasons(client, seed):
     pinned = client.get("/?run_id=2")
     assert pinned.status_code == 200 and "pinned" in pinned.text
     assert "a newer run" not in pinned.text
-    assert "Run 2 " in pinned.text
+    assert '<li class="chip">Run 2</li>' in pinned.text
     foreign = client.get(f"/?run_id={other}")
     assert foreign.status_code == 404 and "belongs to context elsewhere" in foreign.text
     bad = client.get(f"/?run_id={failed}")
@@ -91,13 +101,66 @@ def test_run_line_stale_and_scope_text(client, seed):
     assert "stale" in html
     assert "whole cluster, excluding images busybox:*" in html
     assert "os + library packages" in html
-    assert "2 images, 1 failed" in html
+    assert "2 images · 1 failed" in html
     assert "25 h ago" in html
 
 
 def test_fresh_run_is_not_stale(client, seed):
     _run(seed)
-    assert "badge-stale" not in client.get("/").text
+    assert "chip-stale" not in client.get("/").text
+
+
+def test_sidebar_freshness_dot(client, seed):
+    _run(seed)
+    finished = datetime.fromisoformat(seed.repo.get_run(1)["finished_at"])
+    seed.clock.now = finished + timedelta(minutes=5) - timedelta(minutes=1)  # the clock ticks a minute per call
+    fresh = client.get("/").text
+    sidebar = _sidebar(fresh)
+    assert '<span class="fresh">scanned 5 min ago</span>' in sidebar
+    seed.clock.now = finished + timedelta(hours=30) - timedelta(minutes=1)
+    stale = client.get("/").text
+    assert '<span class="stale">scanned 30 h ago</span>' in _sidebar(stale)
+    assert "connected" not in fresh and "connected" not in stale
+
+
+def test_sidebar_without_a_run_says_no_scans_yet(client):
+    assert "no scans yet" in _sidebar(client.get("/").text)
+
+
+def test_run_chips(client, seed):
+    clean = _run(seed)
+    for i in range(8):
+        _add(seed, clean, f"a{i}")
+    chips = _chips(client.get(f"/?run_id={clean}").text)
+    assert '<li class="chip">Run 1</li>' in chips
+    assert "whole cluster" in chips
+    assert "os + library packages" in chips
+    assert "finished " in chips and "ago" in chips
+    assert '<li class="chip chip-ok">8 images · 0 failed</li>' in chips
+    assert '<li class="chip chip-pinned">pinned</li>' in chips
+    broken = _run(seed)
+    _add(seed, broken, "b", status="error")
+    chips = _chips(client.get("/").text)
+    assert '<li class="chip chip-bad">1 images · 1 failed</li>' in chips
+    assert "chip-ok" not in chips and "pinned" not in chips
+
+
+def test_run_line_unknown_finish_time(client, seed):
+    run_id = _run(seed)
+    writer = connect(seed.settings.db_path)
+    with writer:
+        writer.execute("UPDATE scan_run SET finished_at = NULL WHERE id = ?", (run_id,))
+    writer.close()
+    response = client.get(f"/?run_id={run_id}")
+    assert response.status_code == 200
+    assert "finished at an unknown time" in _chips(response.text)
+    assert '<span class="stale">scanned at an unknown time</span>' in _sidebar(response.text)
+
+
+def test_page_title_shows_without_a_run(client):
+    html = client.get("/").text
+    assert '<div class="page-head">' in html and "<h1>Dashboard</h1>" in html
+    assert '<ul class="chips">' not in html
 
 
 def test_gaps_mark_incomplete(client, seed):
@@ -107,7 +170,7 @@ def test_gaps_mark_incomplete(client, seed):
     html = client.get("/").text
     assert "incomplete: 1 namespaces or resources could not be listed" in html
     assert "namespace secret-ns: forbidden" in html
-    assert "<details" in html
+    assert '<details class="callout">' in html
     for label in ("critical", "high", "images-critical", "findings"):
         assert "⚠" in _tile(html, label)
 
@@ -227,7 +290,7 @@ def test_page_renders_while_a_scan_is_writing(client, seed):
         response = client.get("/")
         assert time.monotonic() - start < 2
         assert response.status_code == 200
-        assert f"Run {run_id} " in response.text
+        assert f'<li class="chip">Run {run_id}</li>' in response.text
     finally:
         writer.rollback()
         writer.close()
@@ -379,7 +442,7 @@ def test_hostile_strings_are_escaped(client, seed):
     for path in ("/", "/?by=image"):
         html = client.get(path).text
         assert "<script>x" not in html
-        assert "<img" not in html
+        assert html.count("<img") == 1  # only the logo
         assert "<b>ns" not in html
         assert 'href="javascript:' not in html
 

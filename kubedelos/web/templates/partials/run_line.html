@@ -1,13 +1,25 @@
-{#- The sentence under every page heading that names the run. Needs: run, pinned, now. -#}
-<p class="run-line">
-  Run {{ run.id }} · {{ describe_scope(run.scope) }} · {{ describe_pkg_types(run.pkg_types) }} ·
-  finished {{ ago(run.finished_at, now) if run.finished_at else "at an unknown time" }} ·
-  {{ run.images }} images, {{ run.images_failed }} failed
-  {%- if pinned %} · <span class="badge">pinned</span>{% endif %}
-  {%- if is_stale(run.finished_at, now) %} <span class="badge badge-stale">stale</span>{% endif %}
-</p>
-{% if run.gaps %}
-<details class="run-gaps">
+{#- The page head: the page title and, when there is a run, chips that name it, then the gaps callout.
+    Needs: page_title, run (or None), pinned, now. -#}
+<div class="page-head">
+  <h1>{{ page_title }}</h1>
+  {%- if run %}
+  <ul class="chips">
+    <li class="chip">Run {{ run.id }}</li>
+    <li class="chip">{{ describe_scope(run.scope) }}</li>
+    <li class="chip">{{ describe_pkg_types(run.pkg_types) }}</li>
+    <li class="chip">finished {{ ago(run.finished_at, now) if run.finished_at else "at an unknown time" }}</li>
+    <li class="chip {{ 'chip-bad' if run.images_failed else 'chip-ok' }}">{{ run.images }} images · {{ run.images_failed }} failed</li>
+    {%- if pinned %}
+    <li class="chip chip-pinned">pinned</li>
+    {%- endif %}
+    {%- if is_stale(run.finished_at, now) %}
+    <li class="chip chip-stale">stale</li>
+    {%- endif %}
+  </ul>
+  {%- endif %}
+</div>
+{% if run and run.gaps %}
+<details class="callout">
   <summary><span class="caution" aria-hidden="true">⚠</span> incomplete: {{ run.gaps | length }} namespaces or resources could not be listed</summary>
   <ul>
     {%- for text in run.gaps %}

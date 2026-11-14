@@ -46,7 +46,7 @@ def test_default_run_is_newest_any_scope(client, seed):
     second = _run(seed, scope=Settings(namespaces=["web"]).scope)
     _put(seed, second, "new", [_f("CVE-NEW")], namespaces=("web",))
     html = client.get("/findings").text
-    assert "Run 2 " in html and "CVE-NEW" in html and "CVE-OLD" not in html
+    assert '<li class="chip">Run 2</li>' in html and "CVE-NEW" in html and "CVE-OLD" not in html
 
 
 def test_no_runs_and_unknown_run(client, seed):

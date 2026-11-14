@@ -1,9 +1,9 @@
 {#- The findings page: filter form, sortable table, paging. Every link is built in the route from the current filters. -#}
 {% extends "base.html" %}
 {% block title %}Findings · kubedelos{% endblock %}
-{% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
+{% block page_title %}Findings{% endblock %}
+{% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
 {% block content %}
-<h1>Findings</h1>
 {% if not run %}
   <section class="notice">
     <p>No scans of <strong>{{ context }}</strong> yet. Run <code>kubedelos scan</code> and reload.</p>
