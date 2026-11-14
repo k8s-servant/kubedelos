@@ -27,7 +27,7 @@ class Progress:
     done: int
     errors: int
     current: str | None
-    phase: str = "scanning"  # one of PHASES, in the order a run passes through them
+    phase: str = "scanning"  # one of PHASES; scanning repeats around trivy-db
     cached: int = 0  # cache hits among ``done``; the freshly scanned count is done - cached - errors
 
 

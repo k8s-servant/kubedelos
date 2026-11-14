@@ -294,6 +294,7 @@ def test_progress_reports_phases_in_order_and_counts_cached(env, monkeypatch):
     assert _phases(progress) == ["inventory", "scanning", "trivy-db", "scanning", "saving"]
     assert progress[-1].cached == 1
     assert progress[-1].done == 2
+    assert all(p.current is None for p in progress if p.phase in ("inventory", "trivy-db", "saving"))
 
 
 def test_progress_skips_trivy_db_phase_when_everything_is_cached(env, monkeypatch):

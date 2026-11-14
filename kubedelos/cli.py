@@ -46,6 +46,14 @@ def main() -> None:
     """Keep `app` a command group so more subcommands can be added next to `version`."""
 
 
+def _update_bar(bar: RichProgress, task: Any, p: Progress) -> None:
+    """Reflect one progress event; the bar stays indeterminate until the image total is known."""
+    if p.total:
+        bar.update(task, total=p.total, completed=p.done, description=f"{p.phase} ({p.errors} errors)")
+    else:
+        bar.update(task, description=f"{p.phase}…")
+
+
 @app.command()
 def version() -> None:
     """Print the kubedelos version."""
@@ -239,7 +247,7 @@ def scan(
                     task = bar.add_task("scanning", total=None)
 
                     def on_progress(p: Progress) -> None:
-                        bar.update(task, total=p.total, completed=p.done, description=f"scanning ({p.errors} errors)")
+                        _update_bar(bar, task, p)
 
                     kwargs: dict[str, Any] = {"api": api, "on_progress": on_progress, "cancel": cancel}
                     if no_cache:
