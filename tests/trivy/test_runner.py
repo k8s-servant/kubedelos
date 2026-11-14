@@ -421,3 +421,41 @@ def test_kill_all_running_stops_every_live_trivy_group():
         os.killpg(pgid, 0)
     # The registry stays open: a later Trivy still runs.
     assert runner._run_group([sys.executable, "-c", "pass"], dict(os.environ), 30)[0] == 0
+
+
+@pytest.mark.parametrize("unit", ["http://a", "eyJ-", "eyJa", "http://a@", "token: ", "Authorization: Bearer "])
+def test_redaction_of_a_huge_input_is_fast(unit):
+    text = unit * (256 * 1024 // len(unit))
+    for redact in (error_cause, runner._short):
+        started = time.perf_counter()
+        redact(text)
+        assert time.perf_counter() - started < 1, (unit, redact.__name__)
+
+
+def test_redaction_patterns_are_linear():
+    """Even uncapped, a 64 KB input of the worst shapes redacts fast: no pattern rescans the text from every start."""
+    for unit in ("http://a", "eyJ-", "eyJa", "a-b.c"):
+        started = time.perf_counter()
+        runner._redact(unit * (64 * 1024 // len(unit)))
+        assert time.perf_counter() - started < 0.5, unit
+
+
+def test_colon_and_header_redaction_stays_on_one_line():
+    text = "1 error occurred:\n\t* token:\n* GET https://example.com/v2/: denied"
+    assert error_cause(text) == "token:; GET https://example.com/v2/: denied"
+    assert (
+        runner._redact("Authorization:\nGET https://example.com/v2/") == "Authorization:\nGET https://example.com/v2/"
+    )
+    assert runner._redact("Bearer\n* denied") == "Bearer\n* denied"
+    assert (
+        runner._redact("token: tok123 Authorization: Basic abc") == "token: <redacted> Authorization: Basic <redacted>"
+    )
+
+
+def test_a_cut_never_leaves_part_of_a_secret():
+    """The cap keeps the end of the text; the line it cuts into is dropped, so a secret can't lose its marker."""
+    secret = "GET https://example.com/v2/?sig=" + "S" * 100
+    text = "start\n" + secret + "\n" + "b" * (16 * 1024 - 50)
+    for redact in (error_cause, runner._short):
+        assert "SSSS" not in redact(text)
+    assert error_cause(text).endswith("b" * 20)

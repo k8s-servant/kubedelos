@@ -15,7 +15,7 @@ from kubernetes.config import ConfigException
 from kubedelos.config import Settings
 from kubedelos.scan.service import Progress, ScanOutcome
 from kubedelos.trivy import runner as trivy_runner
-from kubedelos.web.jobs import ScanBusy, ScanRunner, eta
+from kubedelos.web.jobs import ScanBusy, ScanRunner, describe_error, eta
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
 
@@ -368,3 +368,10 @@ def test_shutdown_kills_trivy_a_scan_ignores_cancel_for(settings):
     with pytest.raises(ProcessLookupError):
         os.killpg(pgid, 0)
     assert runner.view().state == "finished"  # the worker got to record its run after the kill
+
+
+def test_describe_error_of_a_huge_message_is_fast():
+    started = time.perf_counter()
+    described = describe_error(RuntimeError("http://a" * 32768))
+    assert time.perf_counter() - started < 1
+    assert described.startswith("RuntimeError: ") and len(described) <= 300

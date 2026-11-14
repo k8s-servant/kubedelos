@@ -128,18 +128,36 @@ def _run_group(
 # ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Authorization header
 # values, bearer tokens, JWTs and ``token=`` / ``token: ``-style pairs are redacted wherever they appear, including
 # JSON-quoted keys. Best effort: other shapes are not recognised.
-_URL_QUERY = re.compile(r"([a-z][a-z0-9+.-]*://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
-_URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s\"'/@]+@", re.IGNORECASE)
-_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
+#
+# Every pattern stays on one line and runs in linear time: a scheme starts only where a run of scheme characters
+# starts and is taken whole (possessive), a URL's host and path stop at the next ``://``, and a JWT starts only where a
+# run of base64url characters starts, so no attempt rescans text an earlier one already read.
+_SCHEME = r"(?<![a-z0-9+.-])[a-z0-9+.-]++://"
+_URL_QUERY = re.compile(rf"({_SCHEME}(?:(?!://)[^\s\"'?#])++)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
+_URL_USERINFO = re.compile(rf"({_SCHEME})[^\s\"'/@]++@", re.IGNORECASE)
+_JWT = re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]++\.[A-Za-z0-9_-]++\.[A-Za-z0-9_-]*+")
 _AUTH_HEADER = re.compile(
-    r"\b(Authorization\"?\s*:\s*\"?)((?:Basic|Bearer|Digest|Negotiate|Token)\s+)?[^\s,;\"']+", re.IGNORECASE
+    r"\b(Authorization\"?[ \t]*:[ \t]*\"?)((?:Basic|Bearer|Digest|Negotiate|Token)[ \t]+)?[^\s,;\"']+", re.IGNORECASE
 )
-_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
+_BEARER = re.compile(r"\b(Bearer[ \t]+)[^\s,;\"']+", re.IGNORECASE)
 _CREDENTIAL_NAMES = r"(?:access_|refresh_|id_)?token|password|passwd|secret|api[-_]?key"
 _SECRET_PAIR = re.compile(rf"\b({_CREDENTIAL_NAMES}|signature|sig)=[^\s,;&\"']+", re.IGNORECASE)
 # Not after a path or host character, so a URL such as ``https://example.com/token: DENIED`` keeps its message.
-_SECRET_COLON = re.compile(rf"(?<![\w/.-])({_CREDENTIAL_NAMES})(\"?\s*:\s*\"?)[^\s,;\"']+", re.IGNORECASE)
+_SECRET_COLON = re.compile(rf"(?<![\w/.-])({_CREDENTIAL_NAMES})(\"?[ \t]*:[ \t]*\"?)[^\s,;\"']+", re.IGNORECASE)
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
+_MAX_REDACT_CHARS = 16 * 1024  # only the end of a longer text is redacted and shown: the cause is there
+
+
+def _tail(text: str) -> str:
+    """The last :data:`_MAX_REDACT_CHARS` characters of ``text``, without the line the cut falls in.
+
+    A cut inside a line could keep a secret but drop the ``sig=`` or ``token:`` before it that marks it for
+    redaction. Every pattern stays on one line, so dropping that partial line keeps the rest safe.
+    """
+    if len(text) <= _MAX_REDACT_CHARS:
+        return text
+    _, newline, rest = text[-_MAX_REDACT_CHARS:].partition("\n")
+    return "\u2026\n" + rest if newline else "\u2026"
 
 
 def _redact(text: str) -> str:
@@ -153,7 +171,7 @@ def _redact(text: str) -> str:
 
 def _short(text: str) -> str:
     """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters, with URL credentials redacted."""
-    return _redact(text.strip())[-_MAX_ERROR_CHARS:]
+    return _redact(_tail(text.strip()))[-_MAX_ERROR_CHARS:]
 
 
 def error_cause(text: str | None, limit: int = 300) -> str:
@@ -161,10 +179,10 @@ def error_cause(text: str | None, limit: int = 300) -> str:
 
     Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
     is on the ``* `` lines of the "N errors occurred:" list below it. Without those, the ``FATAL`` message, or
-    else the whole text, is used. A cut keeps the end, where the cause is. Credentials are redacted as in
-    :func:`_redact`.
+    else the whole text, is used. A cut keeps the end, where the cause is; only the last
+    :data:`_MAX_REDACT_CHARS` characters are read. Credentials are redacted as in :func:`_redact`.
     """
-    lines = [line.strip() for line in _redact(text or "").splitlines() if line.strip()]
+    lines = [line.strip() for line in _redact(_tail(text or "")).splitlines() if line.strip()]
     causes: list[str] = []
     in_list = False  # only the "* " lines of Trivy's "N errors occurred:" list are causes
     for line in lines:
