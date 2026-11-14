@@ -9,6 +9,7 @@ process group so that a stop or a timeout also reaches its children.
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -100,20 +101,38 @@ def _run_group(
     return proc.returncode, stdout, stderr
 
 
+# Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
+# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors.
+_URL_QUERY = re.compile(r"(https?://[^\s\"'?#]+)\?[^\s\"']*")
+_URL_USERINFO = re.compile(r"(https?://)[^\s\"'/@]+@")
+_ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
+
+
+def _redact(text: str) -> str:
+    return _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
+
+
 def _short(text: str) -> str:
-    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters."""
-    return text.strip()[-_MAX_ERROR_CHARS:]
+    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters, with URL credentials redacted."""
+    return _redact(text.strip())[-_MAX_ERROR_CHARS:]
 
 
 def error_cause(text: str | None, limit: int = 300) -> str:
     """The cause of a failed Trivy run, as one printable line of at most ``limit`` characters.
 
     Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
-    is on the ``* `` lines below it. Without those, the ``FATAL`` message, or else the whole text, is used. A cut
+    is on the ``* `` lines of the "N errors occurred:" list below it. URL credentials are redacted. Without those, the ``FATAL`` message, or else the whole text, is used. A cut
     keeps the end, where the cause is.
     """
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    if causes := [line[2:] for line in lines if line.startswith("* ")]:
+    lines = [line.strip() for line in _redact(text or "").splitlines() if line.strip()]
+    causes: list[str] = []
+    in_list = False  # only the "* " lines of Trivy's "N errors occurred:" list are causes
+    for line in lines:
+        if in_list and line.startswith("* "):
+            causes.append(line[2:])
+        else:
+            in_list = bool(_ERROR_LIST.search(line))
+    if causes:
         flat = "; ".join(causes)
     else:
         flat = " ".join([line.split("\t")[-1] for line in lines if "\tFATAL\t" in line] or lines)

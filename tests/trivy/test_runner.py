@@ -292,3 +292,32 @@ def test_runner_keeps_full_stderr_for_error_cause(monkeypatch):
     result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
     assert result.error_kind == "trivy"
     assert error_cause(result.error).endswith("lookup registry.invalid: no such host")
+
+
+def test_error_cause_ignores_bullets_outside_trivy_error_list():
+    text = "WARN\tnote:\n* not a cause\n2026-11-14T08:37:10+02:00\tFATAL\tFatal error\tscan error: boom\n"
+    assert error_cause(text) == "scan error: boom"
+
+
+@pytest.mark.parametrize(
+    ("url", "shown"),
+    [
+        (
+            "https://example.blob.core.windows.net/layer?sv=2021&sig=c2VjcmV0&se=2026",
+            "https://example.blob.core.windows.net/layer?<redacted>",
+        ),
+        ("https://s3.example.com/l?X-Amz-Signature=abc&X-Amz-Credential=key", "https://s3.example.com/l?<redacted>"),
+        ("https://user:hunter2@registry.example/v2/", "https://<redacted>@registry.example/v2/"),
+    ],
+)
+def test_error_cause_redacts_url_credentials(url, shown):
+    cause = error_cause(f'1 error occurred:\n\t* remote error: GET "{url}": 403 Forbidden\n')
+    assert cause == f'remote error: GET "{shown}": 403 Forbidden'
+
+
+def test_runner_redacts_url_credentials_in_stored_error(monkeypatch):
+    monkeypatch.setenv("FAKE_TRIVY_STDERR", "GET https://s3.example.com/l?X-Amz-Signature=abc: 403\n")
+    monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
+    result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
+    assert "abc" not in result.error
+    assert "https://s3.example.com/l?<redacted>" in result.error

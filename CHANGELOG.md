@@ -31,4 +31,4 @@
 - A cached result that no longer validates is rescanned instead of failing the run.
 - Results from `--trivy-path` no longer enter the cache under the pinned Trivy version.
 - When `--fail-on` fires on findings hidden by `--severity`, the count is printed.
-- Failed images, `registry test` and Trivy DB download errors show the cause Trivy reports (`MANIFEST_UNKNOWN`, `DENIED`, `no such host`) instead of the first 200 characters of its generic `FATAL` wrapper, and multi-line errors print on one line.
+- Failed images, `registry test` and Trivy DB download errors show the cause Trivy reports (`MANIFEST_UNKNOWN`, `DENIED`, `no such host`) instead of the first 200 characters of its generic `FATAL` wrapper, and multi-line errors print on one line. Query strings and `user:password@` in URLs inside Trivy errors are redacted before they are stored or printed, so signed storage URLs never leak their signatures.
