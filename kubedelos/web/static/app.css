@@ -368,3 +368,17 @@ th {
     display: inline;
   }
 }
+
+/* Failed images */
+.failed-images {
+  margin: 1rem 0;
+}
+
+.failed-list {
+  padding-left: 1.25rem;
+}
+
+.failed-overflow,
+.failed-hint {
+  color: var(--muted, inherit);
+}

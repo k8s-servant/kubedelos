@@ -37,12 +37,29 @@
 
   {% if kpis.findings == 0 %}
     {% if kpis.images_failed > 0 %}
-    <p class="notice">No findings in the images that scanned, but {{ kpis.images_failed }} of {{ kpis.images }} images failed to scan, so this is not a clean result.</p>
+    <p class="notice">No vulnerabilities found in the {{ kpis.images - kpis.images_failed }} images that scanned; {{ kpis.images_failed }} failed to scan.</p>
     {% elif run.gaps %}
     <p class="notice">No vulnerabilities found in the {{ kpis.images }} images that could be listed; {{ run.gaps | length }} namespaces or resources could not be listed.</p>
     {% else %}
     <p class="notice">No vulnerabilities found in {{ kpis.images }} images.</p>
     {% endif %}
+  {% endif %}
+
+  {% if failed %}
+  <section class="failed-images" aria-labelledby="failed-images-title">
+    <h2 id="failed-images-title">Failed images</h2>
+    <ul class="failed-list">
+      {%- for ref, platform, kind, cause in failed %}
+      <li><code>{{ ref }}</code> [{{ platform }}] {{ kind }}: {{ cause }}</li>
+      {%- endfor %}
+    </ul>
+    {% if failed_total > failed | length %}
+    <p class="failed-overflow">showing {{ failed | length }} of {{ failed_total }}</p>
+    {% endif %}
+    {%- for hint in login_hints %}
+    <p class="failed-hint">hint: {{ hint }}</p>
+    {%- endfor %}
+  </section>
   {% endif %}
 
   <ul class="bricks">

@@ -319,3 +319,16 @@ def no_fix_summary(conn: sqlite3.Connection, run_id: int) -> tuple[int, int]:
         {"run": run_id},
     ).fetchone()
     return row["n"], row["images"]
+
+
+def failed_images(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[sqlite3.Row], int]:
+    """The images of a run that failed to scan, ordered by ref and platform, and how many failed in all."""
+    rows = conn.execute(
+        "SELECT ref, platform, error_kind, error FROM image_result WHERE run_id = ? AND status = 'error'"
+        " ORDER BY ref, platform LIMIT ?",
+        (run_id, limit),
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
+    ).fetchone()[0]
+    return rows, total

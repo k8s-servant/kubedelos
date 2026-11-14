@@ -19,6 +19,7 @@ from rich.progress import Progress as RichProgress
 
 from kubedelos import __version__
 from kubedelos.config import Settings
+from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import Severity, is_valid_ref, registry_host
@@ -49,21 +50,6 @@ trivy_app = typer.Typer(help="Manage the pinned Trivy binary.", no_args_is_help=
 app.add_typer(trivy_app, name="trivy")
 registry_app = typer.Typer(help="Check access to container registries.", no_args_is_help=True)
 app.add_typer(registry_app, name="registry")
-
-
-def _login_hint(host: str) -> str:
-    """How to log in to ``host`` so that Docker, and with it kubedelos, can read it."""
-    name = host.split(":", 1)[0]
-    if name.endswith(".azurecr.io"):
-        command = f"az acr login --name {name.split('.', 1)[0]}"
-    elif name == "gcr.io" or name.endswith((".gcr.io", "-docker.pkg.dev")):
-        command = f"gcloud auth configure-docker {host}"
-    elif ".dkr.ecr." in name and name.endswith(".amazonaws.com"):
-        region = name.split(".dkr.ecr.", 1)[1].removesuffix(".amazonaws.com")
-        command = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {host}"
-    else:
-        command = f"docker login {host}"
-    return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
 
 
 def _load_settings(**flags: Any) -> Settings:
@@ -289,7 +275,7 @@ def scan(
     for host in sorted(
         {registry_host(parse_image_id(row["ref"], "")) for row in failed if row["error_kind"] == "auth"}
     ):
-        typer.echo("hint: " + _login_hint(host), err=True)
+        typer.echo("hint: " + login_hint(host), err=True)
     errors = run["images_error"] or 0
     if errors:
         typer.echo(f"{errors} image(s) failed to scan", err=True)
@@ -347,7 +333,7 @@ def registry_test(
     detail = error_cause(result.error)
     if result.error_kind == "auth":
         typer.echo(f"error: {ref.ref}: authentication failed on {host}: {detail}", err=True)
-        typer.echo("hint: " + _login_hint(host), err=True)
+        typer.echo("hint: " + login_hint(host), err=True)
         raise typer.Exit(1)
     if result.error_kind == "not_found":
         typer.echo(f"error: {ref.ref}: not found on {host}: {detail}", err=True)

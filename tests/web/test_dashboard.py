@@ -193,13 +193,17 @@ def test_zero_findings_with_failures_is_not_called_clean(client, seed):
     _add(seed, run_id, "a")
     _add(seed, run_id, "b", status="error")
     html = client.get("/").text
-    assert "No vulnerabilities found" not in html
+    assert "No vulnerabilities found in 2 images." not in html
 
 
-def test_zero_findings_clean_message(client, seed):
+def test_zero_findings_clean_vs_broken(client, seed):
     run_id = _run(seed)
     _add(seed, run_id, "a")
     assert "No vulnerabilities found in 1 images." in client.get("/").text
+    _add(seed, run_id, "b", status="error")
+    html = client.get("/").text
+    assert "No vulnerabilities found in the 1 images that scanned; 1 failed to scan." in html
+    assert "No vulnerabilities found in 2 images." not in html
 
 
 def test_page_renders_while_a_scan_is_writing(client, seed):
@@ -298,3 +302,76 @@ def test_dashboard_links_carry_run_id(client, seed):
         main = client.get(query).text.split("<main", 1)[1]  # the site nav's bare /findings link is not page content
         links = [unescape(link) for link in re.findall(r'href="(/findings[^"]*)"', main)]
         assert links and all("run_id=1" in link for link in links), query
+
+
+FATAL = (
+    "2026-01-01T00:00:00Z\tFATAL\tFatal error\trun error: image scan error: scan error: unable to inspect the image"
+    " (registry.example.com/team/app:1): 2 errors occurred:\n\t* MANIFEST_UNKNOWN: manifest unknown\n"
+    "\t* unable to find the image"
+)
+
+
+def _add_failed(seed, run_id, ref, kind, error, platform="linux/amd64"):
+    image = ImageRef(ref=ref, repo="registry.example.com/team/app", tag="1", digest="sha256:" + "a" * 64)
+    item = InventoryItem(image=image, platform=platform, workloads=[])
+    seed.repo.add_result(
+        run_id, item, ImageResult(image=image, platform=platform, status="error", error_kind=kind, error=error)
+    )
+
+
+def test_failed_images_show_cause_and_one_hint_per_host(client, seed):
+    run_id = _run(seed)
+    _add_failed(seed, run_id, "registry.example.com/team/a:1", "auth", FATAL)
+    _add_failed(seed, run_id, "registry.example.com/team/b:1", "auth", FATAL)
+    _add_failed(seed, run_id, "registry.example.com/team/c:1", "not_found", FATAL)
+    html = unescape(client.get("/").text)
+    assert "Failed images" in html
+    assert "MANIFEST_UNKNOWN: manifest unknown; unable to find the image" in html
+    assert "run error: image scan error" not in html
+    assert html.count("docker login registry.example.com`") == 1
+    assert "registry.example.com/team/c:1" in html
+
+
+def test_failed_images_section_hidden_without_failures(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["HIGH"])
+    assert "Failed images" not in client.get("/").text
+
+
+def test_failed_images_over_the_cap_say_so(client, seed):
+    run_id = _run(seed)
+    for i in range(27):
+        _add_failed(seed, run_id, f"registry.example.com/team/app{i:02d}:1", "timeout", "timed out")
+    html = client.get("/").text
+    assert "showing 25 of 27" in html
+    assert "app24:1" in html
+    assert "app26:1" not in html
+
+
+def test_hostile_strings_are_escaped(client, seed):
+    run_id = _run(seed)
+    ref = "reg.example.com/<script>x</script>:1"
+    image = ImageRef(ref=ref, repo="reg.example.com/x", tag="1", digest="sha256:" + "a" * 64)
+    finding = Finding(
+        vuln_id="CVE-1",
+        pkg_name="p",
+        installed_version="1",
+        fixed_version="2",
+        severity=Severity("CRITICAL"),
+        title="<img src=x onerror=alert(1)>",
+        primary_url="javascript:alert(1)",
+        target="t",
+        pkg_type="os",
+    )
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
+    seed.repo.add_result(
+        run_id, item, ImageResult(image=image, platform="linux/amd64", status="ok", findings=[finding])
+    )
+    _add_failed(seed, run_id, ref + "x", "unknown", "<script>x</script>")
+    seed.repo.add_warnings(run_id, [InventoryWarning("<b>ns</b>", coverage=True)])
+    for path in ("/", "/?by=image"):
+        html = client.get(path).text
+        assert "<script>x" not in html
+        assert "<img" not in html
+        assert "<b>ns" not in html
+        assert 'href="javascript:' not in html

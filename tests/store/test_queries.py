@@ -12,6 +12,7 @@ from kubedelos.store.queries import (
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
     RunNotShown,
+    failed_images,
     fix_by_fix,
     fix_by_image,
     get_run,
@@ -390,3 +391,21 @@ def test_no_fix_summary(db):
         repo, run_id, "b", [_fx("CVE-1", "HIGH", fixed=None), _fx("CVE-3", "HIGH"), _fx("CVE-4", "LOW", fixed=None)]
     )
     assert no_fix_summary(conn, run_id) == (3, 2)
+
+
+def test_failed_images_cap_and_total(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add(repo, run_id, "ok-image", "linux/amd64")
+    for i in range(30):
+        _add(repo, run_id, f"reg.example.com/app{i:02d}:1", "linux/amd64", status="error")
+    _add(repo, run_id, "reg.example.com/app00:1", "linux/arm64", status="error")
+    rows, total = failed_images(conn, run_id, limit=25)
+    assert total == 31
+    assert len(rows) == 25
+    assert [(r["ref"], r["platform"]) for r in rows[:2]] == [
+        ("reg.example.com/app00:1", "linux/amd64"),
+        ("reg.example.com/app00:1", "linux/arm64"),
+    ]
+    assert set(rows[0].keys()) == {"ref", "platform", "error_kind", "error"}
+    assert failed_images(conn, run_id)[1] == 31

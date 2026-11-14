@@ -12,11 +12,15 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from kubedelos.analytics import ago, delta, describe_scope
+from kubedelos.hints import login_hint
+from kubedelos.kube.inventory import parse_image_id
+from kubedelos.models import registry_host
 from kubedelos.store.queries import (
     SAMPLE_CAP,
     Kpis,
     Run,
     RunNotShown,
+    failed_images,
     fix_by_fix,
     fix_by_image,
     get_run,
@@ -25,6 +29,7 @@ from kubedelos.store.queries import (
     no_fix_summary,
     previous_comparable,
 )
+from kubedelos.trivy.runner import error_cause
 from kubedelos.web.app import open_db, render
 
 router = APIRouter()
@@ -127,7 +132,14 @@ def dashboard(
         before = (previous, kpis(conn, previous.id)) if previous else None
         fix_rows, fix_total = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
         no_fix, no_fix_images = no_fix_summary(conn, run.id)
+        failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
+    hosts = sorted({registry_host(parse_image_id(r["ref"], "")) for r in failed_rows if r["error_kind"] == "auth"})
+    ctx.update(
+        failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
+        failed_total=failed_total,
+        login_hints=[login_hint(host) for host in hosts],
+    )
     if run_id is None and newest_any is not None and newest_any.id > run.id:
         ctx["newer"] = {
             "scope": describe_scope(newest_any.scope),
