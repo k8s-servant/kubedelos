@@ -41,6 +41,9 @@
         {%- for share in shares if share.count %}
         <rect class="sev-{{ share.severity | lower }}" x="{{ share.x }}" y="0" width="{{ share.width }}" height="10"/>
         {%- endfor %}
+        {%- for share in shares if share.count and share.x %}
+        <line class="sevbar-sep" x1="{{ share.x }}" y1="0" x2="{{ share.x }}" y2="10"/>
+        {%- endfor %}
       </svg>
       {%- endif %}
       <ul class="legend">
@@ -156,17 +159,17 @@
   {% if worst %}
   <section class="card worst-images" aria-labelledby="worst-images-title">
     <h2 class="card-title" id="worst-images-title">Worst images</h2>
-    <svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
-      <defs>
-        <linearGradient id="worst-fill"><stop class="stop-critical" offset="0"/><stop class="stop-high" offset="1"/></linearGradient>
-      </defs>
-    </svg>
     <ul class="worst">
       {%- for bar in worst %}
       <li><a href="{{ bar.href }}">
         <code class="worst-ref" title="{{ bar.ref }}">{{ bar.short }}</code>
         <svg class="worst-bar" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
-          <rect x="0" y="0" width="{{ bar.width }}" height="6" fill="url(#worst-fill)"/>
+          {%- if bar.critical %}
+          <rect class="sev-critical" x="0" y="0" width="{{ bar.critical_width }}" height="6"/>
+          {%- endif %}
+          {%- if bar.high %}
+          <rect class="sev-high" x="{{ bar.high_x }}" y="0" width="{{ bar.high_width }}" height="6"/>
+          {%- endif %}
         </svg>
         <span class="worst-counts">{{ bar.critical }} Critical · {{ bar.high }} High</span>
       </a></li>

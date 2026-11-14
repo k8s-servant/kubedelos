@@ -15,7 +15,6 @@ from kubedelos.analytics import ago, delta, describe_scope
 from kubedelos.hints import login_hint
 from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import registry_host
-from kubedelos.output import short_image
 from kubedelos.store.queries import (
     SAMPLE_CAP,
     Kpis,
@@ -38,6 +37,10 @@ from kubedelos.web.pages import MAX_ID, open_db, render
 router = APIRouter()
 
 CAUTION = "either run had failed images or skipped namespaces"
+# The narrowest bar segment, in percent of the bar. A KPI tile is about 220 px wide on a laptop, so 2.5 is about 5 px:
+# enough to see a handful of Critical among thousands next to its 2 px separator and the bar's rounded end.
+MIN_SHARE = 2.5
+TAG_SHOWN = 16  # longer tags (a kind build such as v20251212-v0.29.0-alpha-105-g20ccfc88) are cut to their first 10
 
 
 @dataclass(frozen=True)
@@ -68,13 +71,18 @@ class SeverityShare:
 
 @dataclass(frozen=True)
 class WorstBar:
-    """One row of the worst images panel: a bar as wide as its Critical plus High against the worst image's."""
+    """One row of the worst images panel: a Critical then a High segment, scaled to the worst image's Critical plus High.
+
+    The High segment starts where the Critical one ends; a zero count draws no segment.
+    """
 
     ref: str
     short: str
     critical: int
     high: int
-    width: float
+    critical_width: float
+    high_x: float
+    high_width: float
     href: str
 
 
@@ -88,15 +96,30 @@ def dashboard_href(**params: object) -> str:
     return "/?" + query if query else "/"
 
 
+def _widths(by_severity: dict[str, int]) -> dict[str, float]:
+    """Each non-zero severity's share of the bar in percent, at least ``MIN_SHARE``; the largest gives up the excess.
+
+    The widths are rounded to one decimal and still add up to exactly 100, because the largest takes the remainder.
+    """
+    total = sum(by_severity.values())
+    counts = {sev: count for sev, count in by_severity.items() if count}
+    if not counts:
+        return {}
+    largest = max(counts, key=lambda sev: counts[sev])
+    widths = {sev: round(max(MIN_SHARE, 100 * count / total), 1) for sev, count in counts.items() if sev != largest}
+    widths[largest] = round(100 - sum(widths.values()), 1)
+    return widths
+
+
 def _shares(run_id: int, by_severity: dict[str, int]) -> list[SeverityShare]:
     """Critical, High, Medium and Low always, Unknown only when non-zero; each placed after the ones before it."""
-    total = sum(by_severity.values())
+    widths = _widths(by_severity)
     shares: list[SeverityShare] = []
     x: float = 0  # an int, so the first segment starts at x="0"
     for sev, count in by_severity.items():
         if sev == "UNKNOWN" and not count:
             continue
-        width = round(100 * count / total, 1) if total else 0.0
+        width = widths.get(sev, 0.0)
         shares.append(SeverityShare(sev, count, x, width, findings_href(run_id=run_id, severity=sev)))
         if count:
             x = round(x + width, 1)
@@ -104,9 +127,15 @@ def _shares(run_id: int, by_severity: dict[str, int]) -> list[SeverityShare]:
 
 
 def _short_ref(ref: str) -> str:
-    """``short_image`` of a bare ref: a digest ref keeps its repo and the first 8 hex of the digest."""
-    repo, at, digest = ref.partition("@")
-    return short_image({"repo": repo if at else "", "tag": None, "digest": digest or None, "image": ref})
+    """The image's own name (the last path segment) with its tag, or with ``sha256:`` and 8 hex of a digest-only ref.
+
+    A tag over ``TAG_SHOWN`` characters keeps its first 10 and an ellipsis; the page puts the full ref in a tooltip.
+    """
+    name, _, digest = ref.partition("@")
+    image, _, tag = name.rsplit("/", 1)[-1].partition(":")  # a registry port sits before the last slash
+    if tag:
+        return f"{image}:{tag if len(tag) <= TAG_SHOWN else tag[:10] + chr(0x2026)}"
+    return f"{image}@{digest[:15]}" if digest else image
 
 
 def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
@@ -114,17 +143,23 @@ def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
     if not rows:
         return []
     top = rows[0].critical + rows[0].high
-    return [
-        WorstBar(
-            ref=w.ref,
-            short=_short_ref(w.ref),
-            critical=w.critical,
-            high=w.high,
-            width=round(100 * (w.critical + w.high) / top, 1),
-            href=findings_href(run_id=run_id, q=w.ref),
+    bars = []
+    for w in rows:
+        critical_width = round(100 * w.critical / top, 1)
+        whole = round(100 * (w.critical + w.high) / top, 1)
+        bars.append(
+            WorstBar(
+                ref=w.ref,
+                short=_short_ref(w.ref),
+                critical=w.critical,
+                high=w.high,
+                critical_width=critical_width,
+                high_x=critical_width if w.critical else 0,
+                high_width=round(whole - critical_width, 1),
+                href=findings_href(run_id=run_id, q=w.ref),
+            )
         )
-        for w in rows
-    ]
+    return bars
 
 
 def _change(current: int, previous: int | None) -> str:

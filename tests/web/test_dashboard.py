@@ -321,8 +321,9 @@ def test_worst_images_panel(client, seed):
     panel = _between(html, '<ul class="worst">', "</ul>")
     assert panel.index("reg.example.com/a:1") < panel.index("reg.example.com/b:1")
     assert "1 Critical · 2 High" in panel and "0 Critical · 1 High" in panel
-    widths = re.findall(r'<rect [^>]*width="([0-9.]+)"', panel)
-    assert widths == ["100.0", "33.3"]
+    rects = re.findall(r'<rect class="(sev-[a-z]+)" x="([0-9.]+)" y="0" width="([0-9.]+)"', panel)
+    assert rects == [("sev-critical", "0", "33.3"), ("sev-high", "33.3", "66.7"), ("sev-high", "0", "33.3")]
+    assert "Gradient" not in html and "url(#" not in html
     assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fa%3A1"' in panel
     assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fb%3A1"' in panel
     assert 'viewBox="0 0 100 6"' in panel and "style=" not in panel
@@ -333,7 +334,7 @@ def test_worst_images_shows_a_short_digest(client, seed):
     ref = "reg.example.com/app@sha256:" + "c" * 64
     _add(seed, run_id, ref, ["CRITICAL"])
     panel = _between(client.get("/").text, '<ul class="worst">', "</ul>")
-    assert ">reg.example.com/app@sha256:cccccccc<" in panel
+    assert ">app@sha256:cccccccc<" in panel
     assert f'title="{ref}"' in panel
 
 
@@ -590,3 +591,26 @@ def test_fix_row_labels_installed_and_fixed_in_on_narrow_screens(client, seed):
     assert re.search(r"\.fix-unit,\s*\.fix-label \{[^}]*display: none;", css)
     narrow = css[css.index("@media (max-width: 40rem)") :]
     assert re.search(r"\.fix-unit,\s*\.fix-label \{[^}]*display: inline;", narrow)
+
+
+def test_severity_bar_gives_a_tiny_share_a_visible_minimum(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"] + ["HIGH"] * 2 + ["LOW"] * 2997)
+    bar = _between(_tile(client.get("/").text, "findings"), '<svg class="sevbar"', "</svg>")
+    rects = re.findall(r'<rect class="(sev-[a-z]+)" x="([0-9.]+)" y="0" width="([0-9.]+)"', bar)
+    assert rects == [("sev-critical", "0", "2.5"), ("sev-high", "2.5", "2.5"), ("sev-low", "5.0", "95.0")]
+    seps = re.findall(r'<line class="sevbar-sep" x1="([0-9.]+)" y1="0" x2="([0-9.]+)" y2="10"/>', bar)
+    assert seps == [("2.5", "2.5"), ("5.0", "5.0")]
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    assert ".sevbar rect" not in css
+    assert re.search(r"\.sevbar-sep \{[^}]*stroke: var\(--card\);", css)
+
+
+def test_worst_images_show_the_image_name_and_a_short_tag(client, seed):
+    run_id = _run(seed)
+    long = "reg.example.com/kindest/kindnetd:v20251212-v0.29.0-alpha-105-g20ccfc88"
+    _add(seed, run_id, long, ["CRITICAL"])
+    _add(seed, run_id, "reg.example.com:5000/coredns/coredns:v1.13.1", ["HIGH"])
+    panel = _between(client.get("/").text, '<ul class="worst">', "</ul>")
+    assert ">kindnetd:v20251212-\u2026<" in panel and f'title="{long}"' in panel
+    assert ">coredns:v1.13.1<" in panel
