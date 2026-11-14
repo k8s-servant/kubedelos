@@ -22,7 +22,8 @@ SORTS = ("severity", "cve", "package", "image", "namespace", "fixed")
 # A full pass over a big table, also through a covering index. The queries alias these tables as f, r and w.
 FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|f|r|w)\b")
 REACHED = re.compile(r"^SEARCH (finding|f) ")
-KEYED = re.compile(r"\((image_result_id|vuln_id)=")
+KEYED = re.compile(r"\(image_result_id=")
+PRIOR_RUNS = 4  # earlier runs that share the CVEs, so a lookup that reads every run's rows shows in the plan
 
 
 def _plans(conn, call) -> list[str]:
@@ -38,7 +39,8 @@ def _plans(conn, call) -> list[str]:
 
 def test_query_plans_use_indexes(tmp_path):
     conn = connect(tmp_path / "small.db")
-    seed_large(conn, images=40, findings=2000, namespaces=5)
+    for _ in range(PRIOR_RUNS):
+        seed_large(conn, images=40, findings=2000, namespaces=5)
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
     calls = {
@@ -57,8 +59,8 @@ def test_query_plans_use_indexes(tmp_path):
         plan = _plans(conn, call)
         assert plan, name
         bad = [line for line in plan if FULL_SCAN.match(line)]
-        # Findings are found by their image row or by CVE (the sample and detail lookups); a severity-only index would
-        # read the Critical/High rows of every run in the database.
+        # Findings are found through the run's image rows only: a CVE or severity index would read the matching rows of
+        # every run kept, so the page would slow down as history grows.
         bad += [line for line in plan if REACHED.match(line) and not KEYED.search(line)]
         if bad:
             offenders[name] = bad
@@ -79,7 +81,8 @@ def _median(client: TestClient, path: str) -> float:
 @pytest.mark.perf
 def test_pages_under_300ms(settings):
     conn = connect(settings.db_path)
-    seed_large(conn)  # the previous comparable run, so the dashboard computes its deltas
+    for _ in range(PRIOR_RUNS):  # earlier comparable runs: the dashboard computes deltas and history is not free
+        seed_large(conn)
     run_id = seed_large(conn)
     _, total = queries.findings_page(conn, run_id, queries.FindingFilter(), 1)
     conn.close()

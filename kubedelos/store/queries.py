@@ -179,19 +179,19 @@ SAMPLE_CAP = 20
 
 # The units the fix lists need: Critical and High rows only, with the fix a unit has (MAX picks a version over an empty
 # one when platforms disagree). Only columns idx_finding_unit holds, so a run's units come from the index alone; the
-# CVE link is fetched for the page's groups. ``{columns}`` adds columns and ``{join}`` lets a caller narrow the rows
+# CVE link is fetched for the page's groups. ``{columns}`` adds columns and ``{source}`` lets a caller narrow the rows
 # early. ``:run`` as above.
 _FIX_UNITS_TEMPLATE = f"""
 SELECT r.ref, f.vuln_id, f.pkg_name, f.installed_version,
        MAX(COALESCE(f.fixed_version, '')) AS fixed_version,
        MAX({_RANK_SQL}) AS sev_rank{{columns}}
-FROM image_result r
-JOIN finding f ON f.image_result_id = r.id
-{{join}}
+FROM {{source}}
 WHERE r.run_id = :run AND f.severity IN ('CRITICAL', 'HIGH')
 GROUP BY {_UNIT_KEY_SQL}
 """  # noqa: S608 - only module constants are interpolated
-_FIX_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(columns="", join="")
+_FIX_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(
+    columns="", source="image_result r JOIN finding f ON f.image_result_id = r.id"
+)
 
 # The distinct namespaces each image runs in within the run (a second platform repeats its workloads). Every ref has a
 # row, with a NULL namespace when it has no workload, so an inner JOIN on ref never drops an image.
@@ -203,9 +203,13 @@ WHERE r.run_id = :run
 """
 
 # Only the rows of the CVE and package pairs on the page, so the sample query groups a few rows, not the whole run.
+# CROSS JOIN fixes the loop order: the run's image rows first, then each wanted pair by (image row, CVE) in
+# idx_finding_unit. Left to itself the planner looks the CVEs up in idx_finding_vuln, which reads them in every run
+# kept, and the top fix groups are exactly the CVEs found in the most images.
 _SAMPLE_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(
     columns=",\n       MAX(f.primary_url) AS primary_url",
-    join="JOIN wanted wa ON wa.vuln_id = f.vuln_id AND wa.pkg_name IS f.pkg_name",
+    source="image_result r CROSS JOIN wanted wa CROSS JOIN finding f"
+    " ON f.image_result_id = r.id AND f.vuln_id = wa.vuln_id AND f.pkg_name IS wa.pkg_name",
 )
 
 
