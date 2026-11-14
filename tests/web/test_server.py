@@ -1,4 +1,6 @@
+import errno
 import socket
+import sys
 
 import pytest
 import uvicorn
@@ -81,3 +83,11 @@ def test_bind_reuses_a_port_left_in_time_wait():
     client.close()
     again = server.bind("127.0.0.1", port)
     again.close()
+
+
+@pytest.mark.skipif(sys.platform.startswith("linux"), reason="the probe runs on macOS/BSD only")
+@pytest.mark.parametrize("result", [errno.ETIMEDOUT, errno.EHOSTUNREACH, 0])
+def test_bind_treats_an_unclear_probe_as_in_use(monkeypatch, result):
+    monkeypatch.setattr(server, "_probe", lambda family, address, port: result)
+    with pytest.raises(server.PortInUse):
+        server.bind("127.0.0.1", 9370)

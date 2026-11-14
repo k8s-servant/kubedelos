@@ -21,11 +21,11 @@ class PortInUse(Exception):
         self.port = port
 
 
-def _listening(family: int, address: str, port: int) -> bool:
-    """True when something accepts a TCP connection on ``address:port``."""
+def _probe(family: int, address: str, port: int) -> int:
+    """The errno of a short TCP connect to ``address:port`` (0 when something accepted it)."""
     with socket.socket(family, socket.SOCK_STREAM) as probe:
         probe.settimeout(0.2)
-        return probe.connect_ex((address, port)) == 0
+        return probe.connect_ex((address, port))
 
 
 def bind(host: str, port: int) -> socket.socket:
@@ -34,9 +34,11 @@ def bind(host: str, port: int) -> socket.socket:
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         # SO_REUSEADDR skips TIME_WAIT, so a restart works. On macOS/BSD it also lets this bind succeed beside a
-        # 0.0.0.0 listener, so probe first: TIME_WAIT refuses connections, a live listener answers.
+        # 0.0.0.0 listener, so probe first: the port counts as free only when the connect is refused outright (as
+        # TIME_WAIT is); an answer, a timeout or any other error counts as in use.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        if not sys.platform.startswith("linux") and _listening(family, LOOPBACK[host], port):
+        probed = port and not sys.platform.startswith("linux")  # port 0 asks the OS for a free one
+        if probed and _probe(family, LOOPBACK[host], port) != errno.ECONNREFUSED:
             raise PortInUse(port)
         sock.bind((LOOPBACK[host], port))
         sock.listen()
