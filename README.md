@@ -114,9 +114,33 @@ It exits 0 when the image is readable, 1 when the registry refuses access or the
 other errors. When images fail registry auth during `kubedelos scan`, a `hint:` line names each registry to log in
 to. Registry auth for the in-cluster mode (workload identity, pull secrets) comes with the Helm chart.
 
-## Coming soon
+## Local web UI
 
-`kubedelos ui`, a local web UI on top of the same scan data, is not available yet.
+`kubedelos ui` serves a read-only web UI on top of the scan data in your local SQLite database. It listens on loopback only
+(`127.0.0.1`, `::1` or `localhost`; other hosts are refused), prints a URL with a token, and opens it in your browser:
+
+```bash
+kubedelos ui                          # http://127.0.0.1:9370/?token=...
+kubedelos ui --port 9400 --no-browser
+```
+
+The token is swapped for a session cookie and stays valid until the server stops; a restart prints a new one. If the port
+is in use, it exits 2 with `error: port N is in use; pass --port`. `--context` and `--kubeconfig` choose the cluster whose
+runs are shown. `KUBEDELOS_LOG_LEVEL=info` prints one access line (path only) per request on stderr.
+
+To use it on a remote machine, forward the port over SSH and open the printed URL locally:
+
+```bash
+ssh -L 9370:127.0.0.1:9370 my-host
+```
+
+- **Dashboard (`/`)**: the latest run (scope, package types, age; a stale badge after 24 hours, and an incomplete marker when
+  some namespaces could not be listed), tiles with the change against the previous comparable run, severity bricks, a
+  fix-first list (grouped by fix, or by image with `?by=image`), and failed images with the cause and a registry login hint.
+- **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
+  100 per page.
+
+Add `?run_id=N` to pin a page to one run.
 
 ## License
 
