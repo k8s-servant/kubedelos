@@ -2,7 +2,8 @@
 
 ``create_app`` wires the security middleware, the templates and the static files. Pages call ``open_db`` for a
 read-only connection of their own (sqlite3 objects never cross threads) and ``render`` to fill a template with what
-every page needs: the request, the kube-context, the CSP nonce and the nav.
+every page needs: the request, the kube-context, the CSP nonce and the nav. A page may override the context and nav
+(the signed-out page shows neither).
 """
 
 import contextlib
@@ -23,9 +24,10 @@ from fastapi.templating import Jinja2Templates
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.security import SESSION_COOKIE, Guard, install
+from kubedelos.web.security import Guard, install
 
 _HERE = Path(__file__).parent
+MAX_ID = 2**63 - 1  # SQLite integers are signed 64-bit; a larger id would raise OverflowError
 NAV = (("Dashboard", "/"), ("Findings", "/findings"))
 
 
@@ -49,7 +51,7 @@ def _templates(guard: Guard) -> Jinja2Templates:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_HERE / "templates"), autoescape=True)
 
     def csrf_token(request: Request) -> str:
-        sid = request.cookies.get(SESSION_COOKIE)
+        sid = request.cookies.get(guard.cookie_name)
         return guard.csrf_token(sid) if guard.valid_session(sid) else ""
 
     env.globals["csrf_token"] = csrf_token
@@ -91,14 +93,14 @@ def open_db(request: Request) -> contextlib.closing[sqlite3.Connection]:
 
 
 def render(request: Request, name: str, ctx: dict[str, Any], status: int = 200) -> HTMLResponse:
-    """Render template ``name`` with ``ctx`` plus the request, the context label, the CSP nonce and the nav."""
+    """Render template ``name`` with ``ctx`` plus the request, the CSP nonce and, unless ``ctx`` sets them, the context and nav."""
     path = request.url.path
     nav = [{"label": label, "href": href, "active": path == href} for label, href in NAV]
     full = {
+        "context": request.app.state.context,
+        "nav": nav,
         **ctx,
         "request": request,
-        "context": request.app.state.context,
         "nonce": request.state.csp_nonce,
-        "nav": nav,
     }
     return request.app.state.templates.TemplateResponse(request, name, full, status_code=status)

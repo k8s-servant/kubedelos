@@ -1,9 +1,10 @@
 """Security controls for the local UI, applied to every request by one HTTP middleware.
 
 The UI listens on loopback only, but any web page the user visits can still send requests to it. These controls stop
-that: a Host check (DNS rebinding), a startup token exchanged for a session cookie (other local users and pages
-cannot read the data), an Origin check plus an HMAC token on every non-GET (CSRF), and a strict CSP with a per-response
-nonce. The access log never records query strings, because the startup token travels in one.
+that: a Host check (DNS rebinding), a startup token exchanged for a session cookie, an Origin check plus an HMAC token on every non-GET (CSRF), and a
+strict CSP with a per-response nonce. Cookies are not scoped to a port, so any server on another loopback port receives
+this cookie; its name carries the port so two instances do not clash. HttpOnly, the Host check and the Origin and CSRF
+checks still guard the routes. The access log never records query strings, because the startup token travels in one.
 """
 
 import hashlib
@@ -16,7 +17,6 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
-SESSION_COOKIE = "kubedelos_session"
 CSRF_HEADER = "x-csrf-token"
 CSRF_FIELD = "csrf_token"
 SESSION_HINT = "Open the URL printed in the terminal where you started kubedelos ui."
@@ -43,6 +43,7 @@ class Guard:
         self._token = token
         self._sessions: set[str] = set()
         self.csrf_secret = secrets.token_bytes(32)
+        self.cookie_name = f"kubedelos_session_{port}"
         self.allowed_hosts = {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
 
     def valid_token(self, sent: str | None) -> bool:
@@ -106,7 +107,12 @@ async def _sent_csrf(request: Request) -> str | None:
 def _forbidden(request: Request) -> Response:
     from kubedelos.web.app import render  # app imports this module; render is only needed once a request arrives
 
-    return render(request, "error.html", {"title": "Not signed in", "message": SESSION_HINT}, status=403)
+    return render(
+        request,
+        "error.html",
+        {"title": "Not signed in", "message": SESSION_HINT, "context": None, "nav": []},
+        status=403,
+    )
 
 
 def _set_headers(response: Response, nonce: str) -> None:
@@ -124,10 +130,10 @@ async def _check(request: Request, guard: Guard, call_next: Callable[[Request], 
         if not guard.valid_token(request.query_params["token"]):
             return _forbidden(request)
         response = RedirectResponse(_without_token(request), status_code=303)
-        response.set_cookie(SESSION_COOKIE, guard.new_session(), httponly=True, samesite="strict", path="/")
+        response.set_cookie(guard.cookie_name, guard.new_session(), httponly=True, samesite="strict", path="/")
         return response
 
-    sid = request.cookies.get(SESSION_COOKIE)
+    sid = request.cookies.get(guard.cookie_name)
     if not request.url.path.startswith("/static/") and not guard.valid_session(sid):
         return _forbidden(request)
 

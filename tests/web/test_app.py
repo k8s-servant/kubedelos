@@ -6,7 +6,6 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.web.app import open_db, render
-from kubedelos.web.security import SESSION_COOKIE
 
 
 @pytest.fixture(autouse=True)
@@ -66,7 +65,7 @@ def test_render_escapes_context(app, client):
 
 def test_csrf_token_global(client):
     body = client.get("/_csrf").text
-    expected = client.app.state.guard.csrf_token(client.cookies[SESSION_COOKIE])
+    expected = client.app.state.guard.csrf_token(client.cookies[client.app.state.guard.cookie_name])
     assert body == f"{expected} &lt;b&gt;"
 
 

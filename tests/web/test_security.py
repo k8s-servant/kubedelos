@@ -6,7 +6,7 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.web.app import render
-from kubedelos.web.security import SESSION_COOKIE, Guard
+from kubedelos.web.security import Guard
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."
 CSP = (
@@ -90,7 +90,7 @@ def test_no_session_is_403_with_hint(anon):
 
 
 def test_unknown_cookie_is_403(anon):
-    anon.cookies.set(SESSION_COOKIE, "forged")
+    anon.cookies.set(anon.app.state.guard.cookie_name, "forged")
     assert anon.get("/_page").status_code == 403
 
 
@@ -106,7 +106,7 @@ def test_token_sets_strict_httponly_cookie_and_redirects_without_token(anon, tok
     assert response.status_code == 303
     assert response.headers["location"] == "/"
     cookie = response.headers["set-cookie"].lower()
-    assert cookie.startswith(f"{SESSION_COOKIE}=")
+    assert cookie.startswith(f"{anon.app.state.guard.cookie_name}=")
     assert "httponly" in cookie
     assert "samesite=strict" in cookie
     assert "path=/" in cookie
@@ -166,7 +166,7 @@ def test_security_headers_on_non_html_responses(anon):
 
 
 def _csrf(client) -> str:
-    return client.app.state.guard.csrf_token(client.cookies[SESSION_COOKIE])
+    return client.app.state.guard.csrf_token(client.cookies[client.app.state.guard.cookie_name])
 
 
 def test_csrf_rejects(client):
@@ -228,3 +228,32 @@ def test_access_log_path_cannot_forge_lines(anon, caplog):
     caplog.set_level(logging.INFO, logger="kubedelos.web")
     anon.get("/a%0Afake%20line")
     assert [r.getMessage() for r in caplog.records if r.name == "kubedelos.web"] == ["GET /a%0Afake%20line 403"]
+
+
+def test_two_instances_on_different_ports_keep_both_sessions(seed, token):
+    from fastapi.testclient import TestClient
+
+    from kubedelos.web.app import create_app
+
+    apps = [
+        create_app(seed.settings, context="my-cluster", token=token, port=p, clock=seed.clock) for p in (9370, 9371)
+    ]
+    with (
+        TestClient(apps[0], base_url="http://127.0.0.1:9370") as one,
+        TestClient(apps[1], base_url="http://127.0.0.1:9371") as two,
+    ):
+        assert one.get(f"/?token={token}", follow_redirects=False).status_code == 303
+        assert two.get(f"/?token={token}", follow_redirects=False).status_code == 303
+        # A browser holds both cookies and sends both to either port.
+        both = {**one.cookies, **two.cookies}
+        for client in (one, two):
+            client.cookies.clear()
+            for name, value in both.items():
+                client.cookies.set(name, value)
+            assert client.get("/").status_code == 200
+
+
+def test_signed_out_page_does_not_show_the_context(anon):
+    response = anon.get("/_page")
+    assert response.status_code == 403
+    assert "my-cluster" not in response.text
