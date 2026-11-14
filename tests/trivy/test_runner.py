@@ -434,7 +434,7 @@ def test_redaction_of_a_huge_input_is_fast(unit):
 
 def test_redaction_patterns_are_linear():
     """Even uncapped, a 64 KB input of the worst shapes redacts fast: no pattern rescans the text from every start."""
-    for unit in ("http://a", "eyJ-", "eyJa", "a-b.c"):
+    for unit in ("http://a", "eyJ-", "eyJa", "a-b.c", "a.eyJ-", "token:\n", "://"):
         started = time.perf_counter()
         runner._redact(unit * (64 * 1024 // len(unit)))
         assert time.perf_counter() - started < 0.5, unit
@@ -459,3 +459,56 @@ def test_a_cut_never_leaves_part_of_a_secret():
     for redact in (error_cause, runner._short):
         assert "SSSS" not in redact(text)
     assert error_cause(text).endswith("b" * 20)
+
+
+TOKEN = "dG9rZW4tdmFsdWUtMTIzNDU2Nzg5MA"  # token-shaped: 16+ base64ish characters
+
+
+@pytest.mark.parametrize(
+    "text, shown",
+    [
+        (f"token:\n{TOKEN}", "token:\n<redacted>"),
+        (f"Authorization:\n  {TOKEN} retry", "Authorization:\n  <redacted> retry"),
+        (f'"access_token":\n"{TOKEN}"', '"access_token":\n"<redacted>"'),
+        ("token:\nshort", "token:\nshort"),  # not token-shaped: a word, kept
+    ],
+)
+def test_a_marker_at_a_line_end_redacts_the_next_lines_token(text, shown):
+    assert runner._redact(text) == shown
+
+
+def test_the_next_line_pass_keeps_trivy_causes():
+    text = "1 error occurred:\n\t* token:\n* GET https://example.com/v2/: denied"
+    assert runner._redact(text) == text
+    assert error_cause(text) == "token:; GET https://example.com/v2/: denied"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://h/redirect?u=https://b/x?sig=SECRET",
+        "https://h/redirect?u=https://b/x?x=SECRET",
+        "https://h/a://b?sig=SECRET",
+        "https://h/a://b?x=SECRET",
+        "https://h/a://?x=SECRET",
+        "https://h/_://?x=SECRET",
+        "https://user:pw@h/p?x=SECRET",
+    ],
+)
+def test_url_query_redaction_has_no_gaps(url):
+    shown = runner._redact(f"GET {url}: denied")
+    assert "SECRET" not in shown and "pw" not in shown and shown.endswith(": denied")
+
+
+@pytest.mark.parametrize("prefix", ["x-", "id_", "a.", " ", "token="])
+def test_a_jwt_after_a_dash_or_underscore_is_redacted(prefix):
+    assert JWT not in runner._redact(f"{prefix}{JWT} rejected")
+    assert runner._redact(f"{prefix}{JWT} rejected").endswith("<redacted> rejected")
+
+
+def test_a_cut_line_ending_in_a_marker_takes_the_next_line_with_it():
+    """The cut can drop a line ending in ``token:`` but keep the token on the next line: that line goes too."""
+    text = "y\n" + "x" * 16350 + " token:\n" + TOKEN + "\nthe end"  # the cut falls in the x line
+    for redact in (error_cause, runner._short):
+        shown = redact(text)
+        assert TOKEN not in shown and shown.endswith("the end")

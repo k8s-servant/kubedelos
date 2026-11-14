@@ -129,13 +129,16 @@ def _run_group(
 # values, bearer tokens, JWTs and ``token=`` / ``token: ``-style pairs are redacted wherever they appear, including
 # JSON-quoted keys. Best effort: other shapes are not recognised.
 #
-# Every pattern stays on one line and runs in linear time: a scheme starts only where a run of scheme characters
-# starts and is taken whole (possessive), a URL's host and path stop at the next ``://``, and a JWT starts only where a
-# run of base64url characters starts, so no attempt rescans text an earlier one already read.
-_SCHEME = r"(?<![a-z0-9+.-])[a-z0-9+.-]++://"
-_URL_QUERY = re.compile(rf"({_SCHEME}(?:(?!://)[^\s\"'?#])++)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
+# Every pattern runs in linear time: a scheme starts only where a run of scheme characters starts (or right at a bare
+# ``://``) and is taken whole (possessive), a URL's host and path stop at the next ``://``, where the next attempt
+# picks up, and JWTs are found per run of base64url characters, so no attempt rescans text an earlier one already
+# read. Every pattern stays on one line, except that a credential marker ending a line (``token:``, ``Authorization:``)
+# also redacts the next line's first word when that is token-shaped, so a Trivy bullet such as ``* GET`` stays.
+_SCHEME = r"(?<![a-z0-9+.-])[a-z0-9+.-]*+://"
+_URL_QUERY = re.compile(rf"({_SCHEME}(?:(?!://)[^\s\"'?#])*+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
 _URL_USERINFO = re.compile(rf"({_SCHEME})[^\s\"'/@]++@", re.IGNORECASE)
-_JWT = re.compile(r"(?<![A-Za-z0-9_-])eyJ[A-Za-z0-9_-]++\.[A-Za-z0-9_-]++\.[A-Za-z0-9_-]*+")
+_B64_RUN = re.compile(r"[A-Za-z0-9_.-]{5,}+")  # a run that may hold a JWT: base64url segments and their dots
+_JWT_START = re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]")
 _AUTH_HEADER = re.compile(
     r"\b(Authorization\"?[ \t]*:[ \t]*\"?)((?:Basic|Bearer|Digest|Negotiate|Token)[ \t]+)?[^\s,;\"']+", re.IGNORECASE
 )
@@ -144,6 +147,11 @@ _CREDENTIAL_NAMES = r"(?:access_|refresh_|id_)?token|password|passwd|secret|api[
 _SECRET_PAIR = re.compile(rf"\b({_CREDENTIAL_NAMES}|signature|sig)=[^\s,;&\"']+", re.IGNORECASE)
 # Not after a path or host character, so a URL such as ``https://example.com/token: DENIED`` keeps its message.
 _SECRET_COLON = re.compile(rf"(?<![\w/.-])({_CREDENTIAL_NAMES})(\"?[ \t]*:[ \t]*\"?)[^\s,;\"']+", re.IGNORECASE)
+_NEXT_LINE = re.compile(
+    rf"((?<![\w/.-])(?:Authorization|{_CREDENTIAL_NAMES})\"?[ \t]*+:[ \t]*+\"?[ \t]*+\r?\n[ \t]*+\"?)"
+    r"[A-Za-z0-9._~+/=-]{16,}+",
+    re.IGNORECASE,
+)
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
 _MAX_REDACT_CHARS = 16 * 1024  # only the end of a longer text is redacted and shown: the cause is there
 
@@ -152,20 +160,43 @@ def _tail(text: str) -> str:
     """The last :data:`_MAX_REDACT_CHARS` characters of ``text``, without the line the cut falls in.
 
     A cut inside a line could keep a secret but drop the ``sig=`` or ``token:`` before it that marks it for
-    redaction. Every pattern stays on one line, so dropping that partial line keeps the rest safe.
+    redaction, so that partial line goes. Only :data:`_NEXT_LINE` reaches past a line, from a marker ending in ``:``,
+    so when the partial line ends that way the line after it goes too.
     """
     if len(text) <= _MAX_REDACT_CHARS:
         return text
-    _, newline, rest = text[-_MAX_REDACT_CHARS:].partition("\n")
+    partial, newline, rest = text[-_MAX_REDACT_CHARS:].partition("\n")
+    if newline and partial.rstrip(' \t\r"').endswith(":"):
+        _, newline, rest = rest.partition("\n")
     return "\u2026\n" + rest if newline else "\u2026"
+
+
+def _redact_jwts(run: re.Match[str]) -> str:
+    """A run of base64url characters with each ``eyJ...``-headed JWT in it (three dot-separated segments) redacted.
+
+    The run is split on its dots once, so finding a JWT never rescans it; a JWT may follow ``-`` or ``_``.
+    """
+    parts = run[0].split(".")
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        start = _JWT_START.search(parts[i]) if i + 2 < len(parts) and parts[i + 1] else None
+        if start is None:
+            out.append(parts[i])
+            i += 1
+        else:  # this part from "eyJ" on, the next part and the one after it (which may be empty)
+            out.append(parts[i][: start.start()] + "<redacted>")
+            i += 3
+    return ".".join(out)
 
 
 def _redact(text: str) -> str:
     """``text`` with URL credentials, authorization values, JWTs and ``token=``/``token:``-style values redacted."""
     text = _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
-    text = _JWT.sub("<redacted>", text)
+    text = _B64_RUN.sub(_redact_jwts, text)
     text = _AUTH_HEADER.sub(lambda m: f"{m[1]}{m[2] or ''}<redacted>", text)
     text = _BEARER.sub(r"\1<redacted>", text)
+    text = _NEXT_LINE.sub(r"\1<redacted>", text)
     return _SECRET_COLON.sub(r"\1\2<redacted>", _SECRET_PAIR.sub(r"\1=<redacted>", text))
 
 
