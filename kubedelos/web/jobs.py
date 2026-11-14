@@ -81,20 +81,28 @@ class ScanRunner:
         self._clock = clock
         self._lock = threading.Lock()
         self._job: _Job | None = None
+        self._closed = False  # set by shutdown: the app is going away, so no new daemon scan may start
 
     def start(self, overrides: dict) -> None:
-        """Start a scan of the UI's context with ``overrides`` applied. Raises :class:`ScanBusy` if one is active."""
+        """Start a scan of the UI's context with ``overrides`` applied.
+
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        """
         # The context goes last so an override can never point the scan at another cluster.
         scan_settings = self._settings.model_copy(update={**overrides, "context": self._context})
         with self._lock:
+            if self._closed:
+                raise ScanBusy("the UI is shutting down")
             if self._job is not None and self._job.state in _ACTIVE:
                 raise ScanBusy("a scan is already running")
             job = _Job(cancel=threading.Event())
             job.thread = threading.Thread(
                 target=self._run, args=(job, scan_settings), name="kubedelos-ui-scan", daemon=True
             )
-            self._job = job
+            # Start before publishing: if the thread can't start, no job is left stuck at "starting". The worker
+            # touches job state only under this lock, so it waits until the job is published.
             job.thread.start()
+            self._job = job
 
     def cancel(self) -> None:
         """Ask the active scan to stop after the images in flight; the view says ``stopping`` at once."""
@@ -118,8 +126,9 @@ class ScanRunner:
             return JobView(job.state, job.run_id, progress, job.status, job.error, left)
 
     def shutdown(self, timeout: float = 10.0) -> None:
-        """Cancel the active scan, if any, and wait up to ``timeout`` seconds for its thread to end."""
+        """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end."""
         with self._lock:
+            self._closed = True
             job = self._job
             if job is None:
                 return

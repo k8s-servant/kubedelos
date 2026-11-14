@@ -43,8 +43,21 @@ def settings(tmp_path):
     return Settings(context="other-context", data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
 
 
+_RUNNERS: list[ScanRunner] = []
+
+
+@pytest.fixture(autouse=True)
+def _join_workers():
+    """Shut down every runner a test made, so no worker thread outlives its test."""
+    yield
+    while _RUNNERS:
+        _RUNNERS.pop().shutdown(timeout=5)
+
+
 def _runner(settings, scan, clock=lambda: T0):
-    return ScanRunner(settings, "my-cluster", scan=scan, clock=clock)
+    runner = ScanRunner(settings, "my-cluster", scan=scan, clock=clock)
+    _RUNNERS.append(runner)
+    return runner
 
 
 def _wait_for(runner, state):
@@ -192,10 +205,49 @@ def test_shutdown_cancels_and_joins(settings):
     runner.start({})
     assert scan.entered.wait(5)
     cancel = scan.calls[0]["cancel"]
+    worker = runner._job.thread
     runner.shutdown(timeout=5)
     assert cancel.is_set()
-    assert runner.view().state == "finished"  # joined: the thread has finished, not just been asked to
-    assert not any(t.name == "kubedelos-ui-scan" for t in threading.enumerate())
+    assert runner.view().state == "finished"
+    assert not worker.is_alive()  # joined: the thread has ended, not just been asked to
+
+
+def test_start_after_shutdown_is_refused(settings):
+    scan = FakeScan()
+    runner = _runner(settings, scan)
+    runner.shutdown()
+    with pytest.raises(ScanBusy, match="shutting down"):
+        runner.start({})
+    assert scan.calls == [] and runner.view() is None
+
+
+def test_start_after_a_finished_job_and_shutdown_is_refused(settings):
+    scan = FakeScan()
+    scan.release.set()
+    runner = _runner(settings, scan)
+    runner.start({})
+    _wait_for(runner, "finished")
+    runner.shutdown()
+    with pytest.raises(ScanBusy):
+        runner.start({})
+    assert len(scan.calls) == 1
+
+
+def test_a_thread_that_fails_to_start_leaves_the_runner_usable(settings, monkeypatch):
+    scan = FakeScan()
+    scan.release.set()
+    runner = _runner(settings, scan)
+
+    def boom(self):
+        raise RuntimeError("can't start new thread")
+
+    with monkeypatch.context() as m:
+        m.setattr(threading.Thread, "start", boom)
+        with pytest.raises(RuntimeError):
+            runner.start({})
+    assert runner.view() is None  # no job stuck at "starting"
+    runner.start({})  # and the next click works
+    assert _wait_for(runner, "finished").status == "ok"
 
 
 def test_shutdown_without_a_job_is_a_no_op(settings):
