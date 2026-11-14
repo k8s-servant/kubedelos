@@ -18,9 +18,10 @@
 - Every failed image is listed on stderr with its ref, platform, error kind and error.
 - The table shows `repo:tag` plus a short digest; JSON, CSV and SARIF keep the full ref.
 - Environment variables are documented, including the JSON list format.
-- `kubedelos ui` serves a local web UI (dashboard and findings, with a sidebar layout, the radar logo, a light and dark theme and a Worst images panel) on loopback only. The printed URL carries a token that is swapped for a session cookie and stays valid until the server stops (a restart prints a new one); `KUBEDELOS_LOG_LEVEL=info` prints an access line per request on stderr.
+- `kubedelos ui` serves a local web UI (dashboard, findings and scans, with a sidebar layout, the radar logo, a light and dark theme, a Worst images panel and a sidebar footer naming the Trivy version of the shown run) on loopback only. The Scans page starts a scan of the UI's context, one at a time, with live progress (phase, image counts, the last finished image and an estimate), cancel, and a paged run history. The printed URL carries a token that is swapped for a session cookie and stays valid until the server stops (a restart prints a new one); `KUBEDELOS_LOG_LEVEL=info` prints an access line per request on stderr.
 - The UI pages render in under 300 ms on a database of 1,000 images and 100,000 findings; schema migration 5 adds the indexes they need.
 - Each scan run stores the namespaces and resources the inventory could not list, so the UI marks such runs incomplete.
+- Each scan run, from the CLI or the UI, holds an owner lock file while it runs. `kubedelos ui` closes runs left `running` with no live owner as `failed` at startup (printing `note: closed N interrupted run(s)`) and before each UI scan; a scan running in another terminal is never closed.
 
 ### Bug Fixes
 
@@ -37,3 +38,4 @@
 - Results from `--trivy-path` no longer enter the cache under the pinned Trivy version.
 - When `--fail-on` fires on findings hidden by `--severity`, the count is printed.
 - Failed images, `registry test` and Trivy DB download errors show the cause Trivy reports (`MANIFEST_UNKNOWN`, `DENIED`, `no such host`) instead of the first 200 characters of its generic `FATAL` wrapper, and multi-line errors print on one line. Before Trivy errors are stored or printed, URL query strings and `user:password@`, bearer tokens and `token=`/`password=`-style values are redacted, so a signed storage URL doesn't leak its signature. This is best effort: other credential shapes aren't recognised.
+- Error redaction also covers `Basic` and bare `Authorization` header values, JWT-shaped values, and colon forms such as `token: ...`, `password: ...`, `secret: ...` and `api-key: ...`, including JSON-quoted keys. Errors shown in the UI go through the same redaction.
