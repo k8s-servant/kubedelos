@@ -306,3 +306,25 @@ def test_progress_skips_trivy_db_phase_when_everything_is_cached(env, monkeypatc
     assert "trivy-db" not in _phases(progress)
     assert _phases(progress) == ["inventory", "scanning", "saving"]
     assert progress[-1].cached == 2
+
+
+def test_cancel_during_inventory_never_reaches_trivy(env, monkeypatch):
+    settings, repo, calls = env
+    cancel = threading.Event()
+    real_collect = service.collect
+
+    def collect(api, settings):
+        cancel.set()  # Ctrl-C on the UI while the cluster is being listed
+        return real_collect(api, settings)
+
+    def refuse(settings):
+        raise AssertionError("a cancelled scan fetched Trivy")
+
+    phases: list[str] = []
+    monkeypatch.setattr(service, "collect", collect)
+    monkeypatch.setattr(service, "ensure_trivy", refuse)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel, on_progress=lambda p: phases.append(p.phase))
+    assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
+    assert FakeCache.started == 0 and calls == []
+    assert "trivy-db" not in phases

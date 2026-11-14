@@ -21,7 +21,7 @@ from kubernetes.config import ConfigException
 
 from kubedelos.config import Settings
 from kubedelos.scan.service import Progress, ScanOutcome, run_scan
-from kubedelos.trivy.runner import error_cause
+from kubedelos.trivy.runner import error_cause, kill_all_running
 
 logger = logging.getLogger("kubedelos.web")
 
@@ -29,6 +29,7 @@ State = Literal["starting", "running", "stopping", "finished", "error"]
 _ACTIVE: frozenset[str] = frozenset({"starting", "running", "stopping"})
 _ETA_MIN_DONE = 5
 _ERROR_LIMIT = 300
+_AFTER_KILL_S = 5.0  # how long shutdown waits, once Trivy is killed, for the scan to record its run
 
 
 class ScanBusy(Exception):
@@ -145,7 +146,12 @@ class ScanRunner:
             return JobView(job.state, job.run_id, progress, job.status, job.error, left)
 
     def shutdown(self, timeout: float = 10.0) -> None:
-        """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end."""
+        """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end.
+
+        Cancel lets the images in flight finish, which can take minutes, and Trivy, in its own session, never sees the
+        terminal's Ctrl-C. So once ``timeout`` passes, every Trivy process still running is killed, and the thread gets
+        a few more seconds to record its run as cancelled.
+        """
         with self._lock:
             self._closed = True
             job = self._job
@@ -156,6 +162,9 @@ class ScanRunner:
                 job.state = "stopping"
         if job.thread is not None:
             job.thread.join(timeout)
+            if job.thread.is_alive():
+                kill_all_running()
+                job.thread.join(_AFTER_KILL_S)
 
     def _run(self, job: _Job, scan_settings: Settings) -> None:
         def on_progress(progress: Progress) -> None:

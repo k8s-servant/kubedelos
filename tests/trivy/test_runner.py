@@ -1,5 +1,7 @@
 import json
 import os
+import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -392,3 +394,30 @@ def test_error_cause_redaction_keeps_the_separator_after_the_url():
 )
 def test_error_cause_redacts_other_credential_shapes(raw, shown):
     assert error_cause(raw) == shown
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out")
+        time.sleep(0.01)
+
+
+def test_kill_all_running_stops_every_live_trivy_group():
+    out = {}
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    thread = threading.Thread(target=lambda: out.update(result=runner._run_group(sleeper, dict(os.environ), 120)))
+    started = time.monotonic()
+    thread.start()
+    _wait_until(lambda: runner.running_groups())
+    pgid = runner.running_groups()[0]
+    runner.kill_all_running()
+    thread.join(5)
+    assert not thread.is_alive() and time.monotonic() - started < 5
+    assert out["result"][0] == -signal.SIGKILL
+    assert pgid not in runner.running_groups()
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
+    # The registry stays open: a later Trivy still runs.
+    assert runner._run_group([sys.executable, "-c", "pass"], dict(os.environ), 30)[0] == 0

@@ -140,7 +140,9 @@ def _scan(
         if result.status == "ok" and use_cache:
             repo.put_cache(result.image.key, result.platform, result, scan_level=settings.scan_level)
 
-    if todo:  # otherwise everything was cached or rejected: no Trivy needed
+    # Nothing to scan (everything was cached or rejected), or cancelled already: neither fetch Trivy nor wait for the
+    # DB, since neither download nor the DB lock wait would notice the cancel.
+    if todo and not cancel.is_set():
         emit("trivy-db")
         trivy = ensure_trivy(settings)
         with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:

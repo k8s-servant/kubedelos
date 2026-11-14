@@ -1,7 +1,11 @@
 """Tests for the in-process UI scan runner: one job at a time, cancel, pinned context, redacted errors and the ETA."""
 
 import logging
+import os
+import signal
+import sys
 import threading
+import time
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -10,6 +14,7 @@ from kubernetes.config import ConfigException
 
 from kubedelos.config import Settings
 from kubedelos.scan.service import Progress, ScanOutcome
+from kubedelos.trivy import runner as trivy_runner
 from kubedelos.web.jobs import ScanBusy, ScanRunner, eta
 
 T0 = datetime(2026, 1, 1, tzinfo=UTC)
@@ -335,3 +340,31 @@ def test_view_eta_counts_from_the_first_scanned_image_not_the_click(settings):
     scan.release.set()
     view = _wait_for(runner, "finished")
     assert view.eta is None
+
+
+def test_shutdown_kills_trivy_a_scan_ignores_cancel_for(settings):
+    """A scan stuck in an image (or a DB download) that ignores cancel: shutdown kills its Trivy process group."""
+    codes: list[int] = []
+    entered = threading.Event()
+
+    def stuck(scan_settings, **kw):
+        entered.set()
+        sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+        codes.append(trivy_runner._run_group(sleeper, dict(os.environ), 120)[0])
+        return ScanOutcome(run_id=7, warnings=[], status="cancelled")
+
+    runner = _runner(settings, stuck)
+    runner.start({})
+    assert entered.wait(5)
+    deadline = time.monotonic() + 5
+    while not trivy_runner.running_groups():
+        assert time.monotonic() < deadline, "the child never started"
+        time.sleep(0.01)
+    pgid = trivy_runner.running_groups()[0]
+    started = time.monotonic()
+    runner.shutdown(timeout=0.5)
+    assert time.monotonic() - started < 5
+    assert codes == [-signal.SIGKILL]
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
+    assert runner.view().state == "finished"  # the worker got to record its run after the kill

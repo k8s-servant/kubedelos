@@ -3,7 +3,8 @@
 The socket is bound here, before the URL is printed, so a busy port is reported cleanly and the browser never opens
 on a dead address. uvicorn's own access log is off because it prints the full request target, ``?token=`` included.
 When the server stops, ``serve`` shuts the app's scan runner down: a UI scan still running is told to stop after the
-images in flight, and the process waits a few seconds for it to record its run as cancelled. An ``atexit`` hook,
+images in flight, and the process waits a few seconds for it to record its run as cancelled, then kills any Trivy still
+running, since Trivy runs in its own session and never sees the terminal's Ctrl-C. An ``atexit`` hook,
 registered once per served app and dropped after, covers an exit that skips that ``finally``.
 """
 

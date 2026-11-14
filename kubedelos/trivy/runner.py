@@ -3,7 +3,9 @@
 Parallel Trivy processes fight over the BoltDB lock of the on-disk layer cache, so every scan keeps that cache in
 memory (``--cache-backend memory``) and only reads the shared vulnerability and Java DBs, which
 :class:`kubedelos.trivy.cache.TrivyCache` keeps up to date under a file lock. Every Trivy process runs in its own
-process group so that a stop or a timeout also reaches its children.
+process group so that a stop or a timeout also reaches its children. Being in its own session, a Trivy process never
+gets the terminal's Ctrl-C, so every group this process starts is also kept in a process-wide registry, and
+:func:`kill_all_running` stops them all when the UI shuts down mid-scan.
 """
 
 import contextlib
@@ -61,12 +63,31 @@ class _ClientGroups:
         with self._lock:
             self._pgids.discard(pgid)
 
-    def kill_all(self) -> None:
+    def pgids(self) -> list[int]:
         with self._lock:
-            self._closed = True
+            return list(self._pgids)
+
+    def kill_all(self, *, close: bool = True) -> None:
+        """SIGKILL every group; with ``close``, also any group added later."""
+        with self._lock:
+            self._closed = close
             pgids = list(self._pgids)
         for pgid in pgids:
             _kill_group(pgid, signal.SIGKILL)
+
+
+# Every Trivy process group this process started that is still running, whoever started it.
+_RUNNING = _ClientGroups()
+
+
+def running_groups() -> list[int]:
+    """The process groups of the Trivy processes still running."""
+    return _RUNNING.pgids()
+
+
+def kill_all_running() -> None:
+    """SIGKILL every Trivy process group still running in this process: scans and DB downloads alike."""
+    _RUNNING.kill_all(close=False)
 
 
 def _run_group(
@@ -87,6 +108,7 @@ def _run_group(
         errors="replace",
         start_new_session=True,
     )
+    _RUNNING.add(proc.pid)
     if groups is not None:
         groups.add(proc.pid)
     try:
@@ -96,6 +118,7 @@ def _run_group(
         proc.communicate()
         raise
     finally:
+        _RUNNING.discard(proc.pid)
         if groups is not None:
             groups.discard(proc.pid)
     return proc.returncode, stdout, stderr
