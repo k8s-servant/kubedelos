@@ -22,7 +22,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.app import open_db, render
+from kubedelos.web.app import MAX_ID, open_db, render
 
 router = APIRouter()
 
@@ -60,7 +60,7 @@ def _row(r) -> dict:
 @router.get("/findings", response_class=HTMLResponse)
 def findings(
     request: Request,
-    run_id: int | None = Query(None, ge=1),
+    run_id: int | None = Query(None, ge=1, le=MAX_ID),
     severity: list[Severity] = Query([]),  # noqa: B008 - FastAPI declares query parameters this way
     namespace: str | None = None,
     cve: str | None = None,
@@ -70,7 +70,7 @@ def findings(
     q: str | None = None,
     sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] | None = None,
     direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
-    page: int = Query(1, ge=1),
+    page: int = Query(1, ge=1, le=10**9),
 ) -> HTMLResponse:
     context = request.app.state.context
     ctx: dict = {"now": request.app.state.clock(), "run": None, "pinned": run_id is not None}

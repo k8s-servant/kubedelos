@@ -30,7 +30,7 @@ from kubedelos.store.queries import (
     previous_comparable,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.app import open_db, render
+from kubedelos.web.app import MAX_ID, open_db, render
 
 router = APIRouter()
 
@@ -85,7 +85,7 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
             "images-critical",
             "Images with a Critical",
             now.images_with_critical,
-            f"of {now.images} images",
+            f"of {now.images - now.images_failed} images scanned",
             prev and prev.images_with_critical,
             False,
         ),
@@ -110,7 +110,7 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
 
 @router.get("/", response_class=HTMLResponse)
 def dashboard(
-    request: Request, run_id: int | None = Query(None, ge=1), by: Literal["fix", "image"] = "fix"
+    request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID), by: Literal["fix", "image"] = "fix"
 ) -> HTMLResponse:
     context = request.app.state.context
     now = request.app.state.clock()
