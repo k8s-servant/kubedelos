@@ -36,10 +36,12 @@
   </ul>
 
   {% if kpis.findings == 0 %}
-    {% if kpis.images_failed == 0 %}
-    <p class="notice">No vulnerabilities found in {{ kpis.images }} images.</p>
-    {% else %}
+    {% if kpis.images_failed > 0 %}
     <p class="notice">No findings in the images that scanned, but {{ kpis.images_failed }} of {{ kpis.images }} images failed to scan, so this is not a clean result.</p>
+    {% elif run.gaps %}
+    <p class="notice">No vulnerabilities found in the {{ kpis.images }} images that could be listed; {{ run.gaps | length }} namespaces or resources could not be listed.</p>
+    {% else %}
+    <p class="notice">No vulnerabilities found in {{ kpis.images }} images.</p>
     {% endif %}
   {% endif %}
 

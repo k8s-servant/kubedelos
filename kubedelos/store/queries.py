@@ -95,17 +95,24 @@ def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
 
 _SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
+# The severity rank of a finding row (the mapping in ``Repo``'s run-findings query); shared so the counts and the units agree.
+_RANK_SQL = (
+    "CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END"
+)
+_SEVERITY_OF_RANK_SQL = (
+    "CASE {rank} WHEN 4 THEN 'CRITICAL' WHEN 3 THEN 'HIGH' WHEN 2 THEN 'MEDIUM' WHEN 1 THEN 'LOW' ELSE 'UNKNOWN' END"
+)
+_UNIT_KEY_SQL = "r.ref, f.vuln_id, f.pkg_name, f.installed_version"
+
 # One row per finding unit: a distinct (ref, vuln_id, pkg_name, installed_version) within the run, so a second platform
-# or a second target never counts twice. Disagreeing duplicates take the highest severity. The rank mapping is the one
-# in ``Repo``'s run-findings query. Use as ``WITH units AS (<this>)`` with the parameter ``:run``.
-FINDING_UNITS_SQL = """
-SELECT r.ref, r.repo, r.tag, r.digest,
+# or a second target never counts twice. Disagreeing duplicates take the highest severity. Use as
+# ``WITH units AS (<this>)`` with the parameter ``:run``.
+FINDING_UNITS_SQL = f"""
+SELECT r.ref, MAX(r.repo) AS repo, MAX(r.tag) AS tag, MAX(r.digest) AS digest,
        f.vuln_id, f.pkg_name, f.installed_version,
        MAX(f.fixed_version) AS fixed_version,
-       MAX(CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END)
-           AS sev_rank,
-       CASE MAX(CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END)
-           WHEN 4 THEN 'CRITICAL' WHEN 3 THEN 'HIGH' WHEN 2 THEN 'MEDIUM' WHEN 1 THEN 'LOW' ELSE 'UNKNOWN' END AS severity,
+       MAX({_RANK_SQL}) AS sev_rank,
+       {_SEVERITY_OF_RANK_SQL.format(rank=f"MAX({_RANK_SQL})")} AS severity,
        MAX(f.pkg_class) AS pkg_class,
        MAX(f.title) AS title,
        MAX(f.primary_url) AS primary_url,
@@ -113,8 +120,17 @@ SELECT r.ref, r.repo, r.tag, r.digest,
 FROM image_result r
 JOIN finding f ON f.image_result_id = r.id
 WHERE r.run_id = :run
-GROUP BY r.ref, r.repo, r.tag, r.digest, f.vuln_id, f.pkg_name, f.installed_version
-"""
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
+
+# The counting-only form of the units: no text columns, so it is several times cheaper on a large run.
+_UNIT_COUNTS_SQL = f"""
+SELECT r.ref, MAX({_RANK_SQL}) AS sev_rank
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+WHERE r.run_id = :run
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
 
 
 @dataclass(frozen=True)
@@ -133,13 +149,14 @@ def kpis(conn: sqlite3.Connection, run_id: int) -> Kpis:
     by_severity = dict.fromkeys(_SEVERITIES, 0)
     critical_images = 0
     rows = conn.execute(
-        f"WITH units AS ({FINDING_UNITS_SQL}) SELECT severity, COUNT(*) AS n, COUNT(DISTINCT ref) AS images"  # noqa: S608 - module constant
-        " FROM units GROUP BY severity",
+        f"WITH units AS ({_UNIT_COUNTS_SQL}) SELECT sev_rank, COUNT(*) AS n, COUNT(DISTINCT ref) AS images"  # noqa: S608
+        " FROM units GROUP BY sev_rank",
         {"run": run_id},
     )
     for row in rows:
-        by_severity[row["severity"]] = row["n"]
-        if row["severity"] == "CRITICAL":
+        severity = _SEVERITIES[4 - row["sev_rank"]]
+        by_severity[severity] = row["n"]
+        if severity == "CRITICAL":
             critical_images = row["images"]
     counts = conn.execute(
         "SELECT COUNT(DISTINCT ref) AS images, COUNT(DISTINCT CASE WHEN status = 'error' THEN ref END) AS failed"

@@ -9,6 +9,7 @@ from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Seve
 from kubedelos.store.db import connect
 from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
+    FINDING_UNITS_SQL,
     RESULT_STATUSES,
     RunNotShown,
     get_run,
@@ -223,3 +224,35 @@ def test_kpis_empty_run(db):
     got = kpis(conn, _run(repo))
     assert (got.findings, got.images, got.critical) == (0, 0, 0)
     assert set(got.by_severity) == {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}
+
+
+def test_kpis_agree_with_finding_units(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_findings(
+        repo, run_id, "a", "linux/amd64", [_finding("CVE-1", "CRITICAL"), _finding("CVE-1", "CRITICAL", "jar")]
+    )
+    _add_findings(repo, run_id, "a", "linux/arm64", [_finding("CVE-1", "LOW")])
+    _add_findings(repo, run_id, "b", "linux/amd64", [_finding("CVE-2", "HIGH"), _finding("CVE-3", "LOW")])
+    rows = conn.execute(
+        f"WITH units AS ({FINDING_UNITS_SQL}) SELECT severity, COUNT(*) AS n FROM units GROUP BY severity",  # noqa: S608
+        {"run": run_id},
+    ).fetchall()
+    expected = {r["severity"]: r["n"] for r in rows}
+    got = {k: v for k, v in kpis(conn, run_id).by_severity.items() if v}
+    assert got == expected
+
+
+def test_same_ref_with_differing_tag_and_digest_is_one_unit(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for platform, tag, digest in (
+        ("linux/amd64", "1", "sha256:" + "a" * 64),
+        ("linux/arm64", "2", "sha256:" + "b" * 64),
+    ):
+        image = ImageRef(ref="same", repo="reg.example.com/app", tag=tag, digest=digest)
+        item = InventoryItem(image=image, platform=platform, workloads=[])
+        result = ImageResult(image=image, platform=platform, status="ok", findings=[_finding("CVE-1", "HIGH")])
+        repo.add_result(run_id, item, result)
+    rows = conn.execute(f"WITH units AS ({FINDING_UNITS_SQL}) SELECT * FROM units", {"run": run_id}).fetchall()  # noqa: S608
+    assert len(rows) == 1

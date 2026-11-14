@@ -218,3 +218,14 @@ def test_page_renders_while_a_scan_is_writing(client, seed):
     finally:
         writer.rollback()
         writer.close()
+
+
+def test_zero_findings_with_gaps_is_not_called_clean(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a")
+    seed.repo.add_warnings(run_id, [InventoryWarning("namespace x: forbidden", coverage=True)])
+    html = client.get("/").text
+    assert (
+        "No vulnerabilities found in the 1 images that could be listed; 1 namespaces or resources could not be" in html
+    )
+    assert "No vulnerabilities found in 1 images." not in html
