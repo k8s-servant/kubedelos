@@ -1,9 +1,10 @@
 {#- The findings page: filter form, sortable table, paging. Every link is built in the route from the current filters. -#}
 {% extends "base.html" %}
+{% from "partials/macros.html" import versions %}
 {% block title %}Findings · kubedelos{% endblock %}
-{% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
+{% block page_title %}Findings{% endblock %}
+{% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
 {% block content %}
-<h1>Findings</h1>
 {% if not run %}
   <section class="notice">
     <p>No scans of <strong>{{ context }}</strong> yet. Run <code>kubedelos scan</code> and reload.</p>
@@ -13,15 +14,17 @@
   <p class="notice">this run scanned OS packages only; library findings were not collected</p>
   {% endif %}
 
-  <form method="get" action="/findings" class="filters">
+  <form method="get" action="/findings" class="card filters">
     <input type="hidden" name="run_id" value="{{ run.id }}">
     {%- if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
     {%- if direction %}<input type="hidden" name="dir" value="{{ direction }}">{% endif %}
     <fieldset class="filter-severity">
       <legend>Severity</legend>
+      <div class="pills">
       {%- for name in severities %}
-      <label><input type="checkbox" name="severity" value="{{ name }}"{% if name in selected.severity %} checked{% endif %}> {{ name | title }}</label>
+      <label class="pill sev-{{ name | lower }}"><input type="checkbox" name="severity" value="{{ name }}"{% if name in selected.severity %} checked{% endif %}>{{ name | title }}</label>
       {%- endfor %}
+      </div>
     </fieldset>
     <label>Namespace
       <select name="namespace">
@@ -51,8 +54,10 @@
       </select>
     </label>
     <label>Search <input type="search" name="q" value="{{ selected.q }}"></label>
-    <button type="submit">Apply filters</button>
-    <a href="{{ clear_href }}">clear filters</a>
+    <div class="filter-actions">
+      <button type="submit" class="btn">Apply filters</button>
+      <a class="clear" href="{{ clear_href }}">clear filters</a>
+    </div>
   </form>
 
   {% if total == 0 %}
@@ -62,9 +67,9 @@
     <p class="notice">No vulnerabilities found in this run.</p>
     {% endif %}
   {% elif past_end %}
-    <p class="notice">page {{ page }} is past the end ({{ total }} findings). <a href="{{ last_page_href }}">Go to the last page</a>.</p>
+    <p class="notice">page {{ page }} is past the end ({{ total }} {{ total | plural("finding") }}). <a href="{{ last_page_href }}">Go to the last page</a>.</p>
   {% else %}
-    <p class="findings-count">{{ first }}–{{ last }} of {{ total }}</p>
+    <div class="card">
     <div class="table-wrap">
       <table class="findings">
         <thead>
@@ -80,15 +85,15 @@
           {%- for row in rows %}
           <tr>
             <td><span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span></td>
-            <td>
+            <td class="cve">
               {%- set url = row.primary_url | safe_url -%}
               {%- if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif -%}
             </td>
             <td>{{ row.pkg_name }}</td>
-            <td>{{ row.installed }}</td>
-            <td>{{ row.fixed or "" }}</td>
+            <td class="version">{{ row.installed }}</td>
+            <td class="version{% if row.fixed %} fixed{% endif %}">{% if row.fixed %}{{ versions(row.fixed) }}{% endif %}</td>
             <td>{{ row.pkg_class or "unknown" }}</td>
-            <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
+            <td><span class="ref" title="{{ row.ref }}">{% for part in row.image.split("/") %}{{ part }}{% if not loop.last %}/<wbr>{% endif %}{% endfor %}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
           </tr>
           {%- endfor %}
@@ -96,10 +101,14 @@
       </table>
     </div>
     <nav class="pager" aria-label="Pages">
-      {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
-      <span>page {{ page }} of {{ last_page }}</span>
-      {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
+      <span class="findings-count">{{ first }}–{{ last }} of {{ total }}</span>
+      <div class="pages">
+        {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
+        <span>page <span class="current" aria-current="page">{{ page }}</span> of {{ last_page }}</span>
+        {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
+      </div>
     </nav>
+    </div>
   {% endif %}
 {% endif %}
 {% endblock %}

@@ -41,8 +41,19 @@ def test_base_page_has_nav_context_and_stylesheet(client):
     assert 'href="/"' in html and "Dashboard" in html
     assert 'href="/findings"' in html and "Findings" in html
     assert "my-cluster" in html
+    assert '<aside class="sidebar"' in html
+    assert '<link rel="icon" type="image/svg+xml" href="/static/logo.svg">' in html
+    assert '<img class="logo" src="/static/logo.svg" alt="" width="32" height="32">' in html
+    assert "site-header" not in html
     assert "<script" not in html and "<style" not in html and "style=" not in html
     assert not re.search(r"\son[a-z]+\s*=", html)  # no event-handler attributes such as onclick=
+
+
+def test_logo_is_served_without_a_session(anon):
+    response = anon.get("/static/logo.svg")
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("image/svg+xml")
+    assert "<script" not in response.text
 
 
 def test_csrf_token_global(client):

@@ -228,6 +228,44 @@ always agree:
 - **Print:** the dashboard prints cleanly; the nav is hidden in print.
 - **Severity colours:** Critical, High, Medium, Low and Unknown each get a colour, always paired with the word.
 
+### Look, version 2 (the restyle PR after PR 1)
+
+PR 1 works but reads as an unstyled admin page; the header strip in particular. The owner picked a Grafana/Lens-style
+direction from browser mockups: a Lens sidebar holding Grafana-style panels. All rules in "Look" above still hold (one
+hand-written stylesheet, no framework, no JavaScript, light and dark, readable at 360 px, print, severity in words).
+
+- **Approaches considered:** Grafana panels (dense flat grid, icon rail), Lens (grouped sidebar, soft cards, donut), and a
+  hybrid. The owner chose the hybrid, with Lens's lighter grey background. It lands as its own PR after PR 1, so PR 1 is
+  reviewed for behaviour and security and this one for looks.
+- **Shell:** the header strip goes. A left sidebar holds the wordmark (a small gradient mark plus "kubedelos"), a context
+  card (label "Context", the context name, and a freshness dot), and the nav. Below 760 px the sidebar becomes a top bar.
+- **Freshness dot:** "scanned N ago" under the context name, green when the shown run is under 24 hours old, amber when
+  `is_stale`. It never says "connected": the UI only reads the database.
+- **Nav:** only pages that exist. Images and Runs appear when PR 2 builds them.
+- **Run line:** the page title followed by chips: run number, scope, package classes, age, and "N images · M failed".
+  The images chip is green when nothing failed and red when something did. Incomplete, stale and narrower-run notes
+  stay as they are, restyled as callouts under the chips.
+- **Palette (dark):** background `#1e2124` with a faint violet radial glow at the top, sidebar `#25282c`, cards `#2a2e33`
+  with a soft top highlight, 12 px radius, hairline borders, violet accent `#7c5cff`. Severity: Critical `#ff5c7a`,
+  High `#ffab5c`, Medium `#f2cc4b`, Low `#5ea4ff`, Unknown `#7d8590`; "fixed in" versions in green. Light mode gets a
+  matching palette with the same accent and severity hues darkened for contrast.
+- **Type:** the system UI font stack; CVEs, versions and image refs in the system monospace stack. No webfont.
+- **KPI tiles:** uppercase label, large number (Critical and High in their severity colour), delta line below. The "all
+  findings" tile carries a stacked severity bar with a legend. The legend replaces the severity bricks: each entry is the
+  full severity word and count, and links to the findings filtered to that severity, as the bricks did.
+- **Fix first:** a card with "by fix · by image" in its header. Severity is a coloured dot plus the word. Installed
+  versions show the first one plus "+N" (the rest in a `title` and in the expander).
+- **Worst images (new panel, beside Fix first):** the 5 images of the run with the most Critical + High findings, counted
+  the same way as the fix lists (a finding once per image). Each row: the short image name, a bar scaled to the worst image,
+  and the counts in words ("12 Critical · 76 High"). Each links to the findings page filtered to that image. Ties sort by
+  Critical, then the ref. It hides when the run has no Critical or High findings. It must fit the 300 ms budget and use an
+  index (the query-plan test covers it).
+- **Findings page:** the filter form keeps PR 1's fields and order, in one card. Severity checkboxes look like coloured
+  toggle pills (still real checkboxes, so it works without JavaScript); Apply is an accent button. The table and pager sit
+  in a second card; the current page is an accent pill.
+- **Failed images and empty states:** cards in the same style; the failed-images card has a red left edge.
+- **Check:** screenshots at 1280 px and 360 px, in dark and light, of the dashboard and findings page on a real kind scan.
+
 ### Packaging
 
 - **New core dependencies:** `fastapi`, `jinja2` and `uvicorn` (plain, without the `[standard]` extras), with bounds per

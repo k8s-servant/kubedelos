@@ -1,0 +1,7 @@
+{#- Small markup helpers shared by the pages. -#}
+
+{#- A fixed-in list such as "1.24.13, 1.26.0-rc.3": one no-wrap span per version, so the list breaks only at its
+    commas and never inside a version (at a hyphen or mid-word). -#}
+{% macro versions(text) -%}
+{%- for version in (text or "").split(",") %}<span class="v">{{ version.strip() }}</span>{{ ", " if not loop.last }}{% endfor -%}
+{%- endmacro %}

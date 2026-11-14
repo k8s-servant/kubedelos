@@ -37,3 +37,8 @@ def render(request: Request, name: str, ctx: dict[str, Any], status: int = 200) 
         "nonce": request.state.csp_nonce,
     }
     return request.app.state.templates.TemplateResponse(request, name, full, status_code=status)
+
+
+def plural(count: int, singular: str, plural: str | None = None) -> str:
+    """The word for ``count`` things: ``singular`` for exactly one, else ``plural`` (``singular`` + "s" by default)."""
+    return singular if count == 1 else plural or singular + "s"

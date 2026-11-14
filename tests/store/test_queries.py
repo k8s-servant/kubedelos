@@ -13,6 +13,7 @@ from kubedelos.store.queries import (
     RESULT_STATUSES,
     FindingFilter,
     RunNotShown,
+    WorstImage,
     auth_failed_refs,
     failed_images,
     findings_page,
@@ -23,6 +24,7 @@ from kubedelos.store.queries import (
     newest_run,
     previous_comparable,
     run_namespaces,
+    worst_images,
 )
 from kubedelos.store.repo import Repo
 
@@ -643,3 +645,42 @@ def test_findings_page_rows_match_finding_units(db):
     columns = units[0].keys()
     got = {tuple(r[c] for c in columns) for r in rows}
     assert got == {tuple(u[c] for c in columns) for u in units}
+
+
+def test_worst_images_ranks_by_critical_plus_high(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "a", [_fx("C1", "CRITICAL"), _fx("H1", "HIGH"), _fx("H2", "HIGH", fixed=None)])
+    _add_in(repo, run_id, "b", [_fx("C1", "CRITICAL"), _fx("C2", "CRITICAL"), _fx("M1", "MEDIUM")])
+    _add_in(repo, run_id, "c", [_fx("H1", "HIGH"), _fx("H3", "HIGH"), _fx("H4", "HIGH")])
+    _add_in(repo, run_id, "d", [_fx("L1", "LOW")])
+    rows = worst_images(conn, run_id)
+    assert [(r.ref, r.critical, r.high) for r in rows] == [("a", 1, 2), ("c", 0, 3), ("b", 2, 0)]
+
+
+def test_worst_images_ties_break_on_critical_then_ref(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "z", [_fx("C1", "CRITICAL"), _fx("H1", "HIGH")])
+    _add_in(repo, run_id, "y", [_fx("H1", "HIGH"), _fx("H2", "HIGH")])
+    _add_in(repo, run_id, "x", [_fx("C1", "CRITICAL"), _fx("H2", "HIGH")])
+    assert [r.ref for r in worst_images(conn, run_id)] == ["x", "z", "y"]
+
+
+def test_worst_images_counts_a_finding_once_per_image_and_caps(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "multi", [_fx("C1", "CRITICAL")], platform="linux/amd64")
+    _add_in(repo, run_id, "multi", [_fx("C1", "CRITICAL")], platform="linux/arm64")
+    for i in range(7):
+        _add_in(repo, run_id, f"img{i}", [_fx("H1", "HIGH")])
+    rows = worst_images(conn, run_id)
+    assert len(rows) == 5
+    assert rows[0] == WorstImage("multi", 1, 0)
+
+
+def test_worst_images_empty_without_critical_or_high(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "a", [_fx("M1", "MEDIUM")])
+    assert worst_images(conn, run_id) == []

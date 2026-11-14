@@ -346,6 +346,26 @@ def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixL
     return FixList(result, rows[0]["total"] if rows else 0, found[0]["no_fix"], found[0]["no_fix_images"])
 
 
+@dataclass(frozen=True)
+class WorstImage:
+    """One image on the dashboard's worst images panel: its Critical and High counts."""
+
+    ref: str
+    critical: int
+    high: int
+
+
+def worst_images(conn: sqlite3.Connection, run_id: int, limit: int = 5) -> list[WorstImage]:
+    """The ``limit`` images with the most Critical plus High findings, fixable or not, worst first."""
+    rows = conn.execute(
+        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL})"  # noqa: S608 - only module constants are interpolated
+        " SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high FROM units GROUP BY ref"
+        " ORDER BY critical + high DESC, critical DESC, ref LIMIT :limit",
+        {"run": run_id, "limit": limit},
+    )
+    return [WorstImage(r["ref"], r["critical"], r["high"]) for r in rows]
+
+
 def failed_images(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[sqlite3.Row], int]:
     """The images of a run that failed to scan, ordered by ref and platform, and how many failed in all."""
     rows = conn.execute(

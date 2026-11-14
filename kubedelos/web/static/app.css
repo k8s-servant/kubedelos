@@ -1,44 +1,66 @@
-/* kubedelos ui: one hand-written stylesheet. Light and dark follow the system setting; each severity has a colour,
-   always shown next to its word, never instead of it. */
+/* kubedelos ui: one hand-written stylesheet, no framework and no webfont. A sidebar shell holding glassy cards on a
+   grey background with a violet accent. Dark is the default; the light theme uses the same hues, darkened until text
+   meets WCAG AA. Each severity has a colour, always shown next to its word, never instead of it. */
 
 :root {
-  color-scheme: light dark;
-  --bg: #ffffff;
-  --fg: #1b1f24;
-  --muted: #59636e;
-  --border: #d1d9e0;
-  --surface: #f6f8fa;
-  --link: #0550ae;
-  --critical-bg: #8b0000;
-  --critical-fg: #ffffff;
-  --high-bg: #c4320a;
-  --high-fg: #ffffff;
-  --medium-bg: #f2c94c;
-  --medium-fg: #1b1f24;
-  --low-bg: #3b82c4;
-  --low-fg: #ffffff;
-  --unknown-bg: #8c959f;
-  --unknown-fg: #1b1f24;
+  color-scheme: dark light;
+  --bg: #1e2124;
+  --sidebar: #25282c;
+  --sidebar-edge: #1a1c1e;
+  --card: #2a2e33;
+  --card-sheen: linear-gradient(180deg, rgb(255 255 255 / 5%), rgb(255 255 255 / 1.5%));
+  --line: rgb(255 255 255 / 7%);
+  --line-soft: rgb(255 255 255 / 3.5%);
+  --tint: rgb(255 255 255 / 4%);
+  --fg: #e3e6ea;
+  --fg-strong: #ffffff;
+  --muted: #9097a0;
+  --nav: #b5bcc6;
+  --link: #8fb6ff;
+  --accent: #7c5cff;
+  --accent-soft: rgb(124 92 255 / 18%);
+  --glow: rgb(124 92 255 / 10%);
+  --input: #1f2226;
+  --input-edge: #3a3f45;
+  --critical: #ff5c7a;
+  --high: #ffab5c;
+  --medium: #f2cc4b;
+  --low: #5ea4ff;
+  --unknown: #7d8590;
+  --unknown-text: #a0a7b0; /* --unknown is 3.7:1 on a card: fine for fills and dots, too dim for the word */
+  --ok: #73bf69;
+  --warn: #f2cc4b;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --bg: #0d1117;
-    --fg: #e6edf3;
-    --muted: #9198a1;
-    --border: #3d444d;
-    --surface: #161b22;
-    --link: #58a6ff;
-    --critical-bg: #f85149;
-    --critical-fg: #0d1117;
-    --high-bg: #f0883e;
-    --high-fg: #0d1117;
-    --medium-bg: #d29922;
-    --medium-fg: #0d1117;
-    --low-bg: #58a6ff;
-    --low-fg: #0d1117;
-    --unknown-bg: #6e7681;
-    --unknown-fg: #e6edf3;
+    --bg: #eef0f3;
+    --sidebar: #e6e8ec;
+    --sidebar-edge: #d5d9df;
+    --card: #ffffff;
+    --card-sheen: linear-gradient(180deg, rgb(255 255 255 / 60%), rgb(255 255 255 / 0%));
+    --line: rgb(16 24 40 / 10%);
+    --line-soft: rgb(16 24 40 / 6%);
+    --tint: rgb(16 24 40 / 4%);
+    --fg: #1d2125;
+    --fg-strong: #0d1013;
+    --muted: #545b64;
+    --nav: #3a4049;
+    --link: #1f5fbf;
+    --accent: #5b3fd9;
+    --accent-soft: rgb(91 63 217 / 12%);
+    --glow: rgb(91 63 217 / 7%);
+    --input: #ffffff;
+    --input-edge: #c3c8cf;
+    --critical: #c4163c;
+    --high: #a34f00;
+    --medium: #7d6300;
+    --low: #1b5fc0;
+    --unknown: #575e67;
+    --unknown-text: #575e67;
+    --ok: #256b25;
+    --warn: #7d6300;
   }
 }
 
@@ -50,191 +72,267 @@
 
 body {
   margin: 0;
-  background: var(--bg);
+  background-color: var(--bg);
+  background-image: radial-gradient(900px 300px at 80% -20%, var(--glow), transparent 60%);
+  background-repeat: no-repeat;
   color: var(--fg);
   font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-  font-size: 1rem;
+  font-size: 0.875rem;
   line-height: 1.5;
 }
 
 a {
   color: var(--link);
-}
-
-main {
-  max-width: 80rem;
-  margin: 0 auto;
-  padding: 1rem;
-}
-
-/* Header */
-
-.site-header {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 0.5rem 1.5rem;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface);
-}
-
-.wordmark {
-  color: var(--fg);
-  font-weight: 700;
-  font-size: 1.25rem;
   text-decoration: none;
 }
 
-.site-nav ul {
+a:hover,
+a:focus-visible {
+  text-decoration: underline;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+h1,
+h2,
+h3 {
+  color: var(--fg-strong);
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.25rem;
+}
+
+h2 {
+  font-size: 1rem;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.9em;
+}
+
+/* Shell: the sidebar and the main column */
+
+.shell {
   display: flex;
-  gap: 1rem;
+  min-height: 100vh;
+}
+
+.sidebar {
+  flex: 0 0 13.25rem;
+  padding: 1rem 0.75rem;
+  border-right: 1px solid var(--sidebar-edge);
+  background: var(--sidebar);
+}
+
+.main {
+  flex: 1;
+  min-width: 0;
+  padding: 1.125rem 1.375rem;
+}
+
+main {
+  max-width: 1800px;
+  margin-inline: auto;
+}
+
+.wordmark {
+  display: flex;
+  gap: 0.5625rem;
+  align-items: center;
+  margin: 0 0.375rem 1.125rem;
+  color: var(--fg-strong);
+  font-size: 1.125rem;
+  font-weight: 700;
+}
+
+.wordmark:hover,
+.wordmark:focus-visible {
+  text-decoration: none;
+}
+
+.logo {
+  display: block;
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+}
+
+/* Context card: the kube-context and how fresh the shown run is (never a live connection). */
+
+.context {
+  display: flex;
+  flex-direction: column;
+  margin: 0 0.125rem 1rem;
+  padding: 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--tint);
+}
+
+.context-label {
+  color: var(--muted);
+  font-size: 0.625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.context-name {
+  margin: 0.125rem 0 0.375rem;
+  color: var(--fg-strong);
+  font-size: 0.875rem;
+  overflow-wrap: anywhere;
+}
+
+.context .fresh,
+.context .stale,
+.context .none {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  font-size: 0.75rem;
+}
+
+.context .fresh {
+  color: var(--ok);
+}
+
+.context .stale {
+  color: var(--warn);
+}
+
+.context .none {
+  color: var(--muted);
+}
+
+.context .fresh::before,
+.context .stale::before {
+  content: "";
+  flex-shrink: 0;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
+}
+
+.sidebar nav ul {
   margin: 0;
   padding: 0;
   list-style: none;
 }
 
-.site-nav a {
+.sidebar nav a {
+  display: block;
+  margin-bottom: 2px;
+  padding: 0.5rem 0.625rem;
+  border-radius: 7px;
+  color: var(--nav);
+}
+
+.sidebar nav a:hover {
+  background: var(--tint);
   text-decoration: none;
 }
 
-.site-nav a[aria-current="page"] {
+.sidebar nav a[aria-current="page"] {
+  background: var(--accent-soft);
+  box-shadow: inset 2px 0 0 var(--accent);
+  color: var(--fg-strong);
   font-weight: 600;
-  text-decoration: underline;
 }
 
-.context-label {
+/* Page head: the title and the chips that name the run */
+
+.page-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.page-head h1 {
+  margin-right: 0.625rem;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
   margin: 0;
-  color: var(--muted);
+  padding: 0;
+  list-style: none;
 }
 
-.context-label strong {
-  color: var(--fg);
+.chip {
+  padding: 0.25rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--tint);
+  color: var(--nav);
+  font-size: 0.71875rem;
   overflow-wrap: anywhere;
 }
 
-/* Severity: the class goes on the element that holds the word. */
-
-.sev {
-  display: inline-block;
-  padding: 0 0.4em;
-  border-radius: 0.25em;
-  font-size: 0.875em;
-  font-weight: 600;
-  white-space: nowrap;
+.chip-ok {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+  color: var(--ok);
 }
 
-.sev-critical {
-  background: var(--critical-bg);
-  color: var(--critical-fg);
+.chip-bad {
+  border-color: color-mix(in srgb, var(--critical) 40%, transparent);
+  color: var(--critical);
 }
 
-.sev-high {
-  background: var(--high-bg);
-  color: var(--high-fg);
+.chip-stale {
+  border-color: color-mix(in srgb, var(--warn) 40%, transparent);
+  color: var(--warn);
 }
 
-.sev-medium {
-  background: var(--medium-bg);
-  color: var(--medium-fg);
+.chip-pinned {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  color: var(--fg-strong);
 }
 
-.sev-low {
-  background: var(--low-bg);
-  color: var(--low-fg);
+/* Cards and callouts */
+
+.card {
+  padding: 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--card-sheen), var(--card);
 }
 
-.sev-unknown {
-  background: var(--unknown-bg);
-  color: var(--unknown-fg);
+.callout {
+  margin: 0 0 1rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid color-mix(in srgb, var(--warn) 35%, transparent);
+  border-left: 3px solid var(--warn);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--warn) 7%, var(--card));
 }
 
-/* Tables scroll inside their own container, so the page never does at 360 px. */
-
-.table-wrap {
-  overflow-x: auto;
-  max-width: 100%;
-}
-
-table {
-  border-collapse: collapse;
-  width: 100%;
-}
-
-th,
-td {
-  padding: 0.375rem 0.5rem;
-  border-bottom: 1px solid var(--border);
-  text-align: left;
-  vertical-align: top;
-}
-
-th {
-  background: var(--surface);
-}
-
-.error {
-  max-width: 40rem;
-}
-
-@media (max-width: 30rem) {
-  main {
-    padding: 0.75rem;
-  }
-
-  .site-header {
-    padding: 0.5rem 0.75rem;
-  }
-}
-
-@media print {
-  .site-nav {
-    display: none;
-  }
-
-  .site-header {
-    background: none;
-  }
-
-  .table-wrap {
-    overflow: visible;
-  }
-}
-
-/* Run line, notices and the caution mark */
-
-.run-line {
-  flex-basis: 100%;
-  margin: 0;
-  color: var(--muted);
-  overflow-wrap: anywhere;
-}
-
-.run-gaps {
-  flex-basis: 100%;
-}
-
-.run-gaps summary {
+.callout summary {
   cursor: pointer;
   font-weight: 600;
 }
 
-.badge {
-  display: inline-block;
-  padding: 0 0.4em;
-  border: 1px solid var(--border);
-  border-radius: 0.25em;
-  font-size: 0.875em;
-  font-weight: 600;
-}
-
-.badge-stale {
-  background: var(--medium-bg);
-  color: var(--medium-fg);
-  border-color: var(--medium-bg);
+.callout ul {
+  margin: 0.5rem 0 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
 }
 
 .caution {
+  color: var(--warn);
   font-weight: 600;
 }
 
@@ -248,21 +346,139 @@ th {
 }
 
 .notice {
-  padding: 0.5rem 0.75rem;
-  border: 1px solid var(--border);
-  border-left-width: 0.3rem;
-  border-radius: 0.25rem;
-  background: var(--surface);
+  margin: 0 0 1rem;
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+  background: var(--card-sheen), var(--card);
 }
 
-/* KPI tiles and severity bricks */
+.notice p {
+  margin: 0;
+}
 
-.tiles,
-.bricks {
+.error {
+  max-width: 40rem;
+}
+
+/* Severity: colour on the element that holds the word; fill for SVG shapes. */
+
+.sev-critical {
+  color: var(--critical);
+  fill: var(--critical);
+}
+
+.sev-high {
+  color: var(--high);
+  fill: var(--high);
+}
+
+.sev-medium {
+  color: var(--medium);
+  fill: var(--medium);
+}
+
+.sev-low {
+  color: var(--low);
+  fill: var(--low);
+}
+
+.sev-unknown {
+  color: var(--unknown-text);
+  fill: var(--unknown);
+}
+
+.sev {
+  display: inline-flex;
+  gap: 0.375rem;
+  align-items: center;
+  font-size: 0.75rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.sev::before {
+  content: "";
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.sev.sev-unknown::before {
+  background: var(--unknown);
+}
+
+.fixed {
+  color: var(--ok);
+}
+
+/* Versions wrap only where they must (a long Go pseudo-version); a fixed-in list breaks only at its commas, because
+   each version in it is a no-wrap .v. Vulnerability ids never wrap. */
+
+.version {
+  max-width: 14rem;
+  font-family: var(--mono);
+  overflow-wrap: break-word;
+}
+
+.v {
+  white-space: nowrap;
+}
+
+.cve {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.more {
+  color: var(--muted);
+}
+
+/* Tables scroll inside their own container, so the page never does at 360 px. */
+
+.table-wrap {
+  overflow-x: auto;
+  max-width: 100%;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.78125rem;
+}
+
+th,
+td {
+  padding: 0.4375rem 0.5rem;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 500;
+}
+
+td {
+  border-bottom: 1px solid var(--line-soft);
+}
+
+tbody tr:hover td {
+  background: var(--tint);
+}
+
+/* Dashboard: the KPI tiles, then Fix first beside Worst images; stacked, Worst images first, below 1600 px, where Fix
+   first would otherwise be too narrow for its package names and fixed-in lists. */
+
+.tiles {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
   gap: 0.75rem;
-  margin: 1rem 0;
+  margin: 0 0 0.75rem;
   padding: 0;
   list-style: none;
 }
@@ -270,89 +486,500 @@ th {
 .tile {
   display: flex;
   flex-direction: column;
-  padding: 0.75rem;
-  border: 1px solid var(--border);
-  border-radius: 0.375rem;
-  background: var(--surface);
+  min-width: 0;
 }
 
 .tile-error {
-  border-color: var(--critical-bg);
-  border-width: 2px;
+  border-color: color-mix(in srgb, var(--critical) 55%, transparent);
 }
 
 .tile-label,
-.tile-suffix,
-.tile-change {
+.card-title {
+  margin: 0;
   color: var(--muted);
-  font-size: 0.875rem;
+  font-size: 0.6875rem;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.tile-figure {
+  margin-top: 0.375rem;
 }
 
 .tile-value {
-  font-size: 2rem;
-  font-weight: 700;
+  color: var(--fg-strong);
+  font-size: 1.875rem;
+  font-weight: 650;
+  letter-spacing: -0.02em;
   line-height: 1.2;
 }
 
-.brick {
+.tile-value.sev-critical {
+  color: var(--critical);
+}
+
+.tile-value.sev-high {
+  color: var(--high);
+}
+
+.tile-suffix {
+  color: var(--muted);
+  font-size: 0.9375rem;
+}
+
+/* Tiles stretch to the height of the all findings tile; the change line sits at the bottom of each, level with the
+   legend, so the tiles read as one row instead of four half-empty boxes. */
+
+.tile-change {
+  margin-top: auto;
+  padding-top: 0.125rem;
+  color: var(--muted);
+  font-size: 0.71875rem;
+}
+
+.tile[data-tile="findings"] .tile-change {
+  margin-top: 0.125rem;
+}
+
+/* The stacked severity bar: SVG rects sized in attributes, and a line of card colour only between segments, so the
+   bar's top and bottom edges are not inset. */
+
+.sevbar {
+  display: block;
+  width: 100%;
+  height: 10px;
+  margin: 0.625rem 0 0.375rem;
+  border-radius: 3px;
+  background: var(--line);
+  overflow: hidden;
+}
+
+.sevbar-sep {
+  stroke: var(--card);
+  stroke-width: 2px;
+  vector-effect: non-scaling-stroke;
+}
+
+.legend {
   display: flex;
-  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.125rem 0.625rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.6875rem;
+  line-height: 1.45;
+}
+
+.legend a {
+  display: inline-flex;
+  gap: 0.25rem;
   align-items: baseline;
-  padding: 0.75rem;
-  border-radius: 0.375rem;
-  font-weight: 700;
-  text-decoration: none;
+  color: var(--fg);
 }
 
-.brick-count {
-  font-size: 1.5rem;
+.legend .sev {
+  gap: 0.3125rem;
+  font-size: inherit;
 }
 
-.brick:hover,
-.brick:focus-visible {
-  outline: 2px solid var(--fg);
-  outline-offset: 2px;
+.legend .sev::before {
+  width: 6px;
+  height: 6px;
 }
 
-/* Fix first: one native <details> per fix; the summary is a grid that lines up with the header row. */
+.legend b {
+  font-weight: 600;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 0.75rem;
+  align-items: start;
+  margin: 0 0 1rem;
+}
+
+.row > :only-child {
+  grid-column: 1 / -1;
+}
+
+.row .worst-images {
+  order: -1;
+}
+
+@media (min-width: 100rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+  }
+
+  .row .worst-images {
+    order: 0;
+  }
+}
+
+.card-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  align-items: baseline;
+  margin-bottom: 0.5rem;
+}
+
+.fix-views {
+  margin: 0;
+  font-size: 0.75rem;
+}
+
+.fix-views strong {
+  color: var(--fg-strong);
+  font-weight: 600;
+}
+
+/* Fix first by fix: a grid of <details> rows. It scrolls inside the card when the column is narrow. */
+
+.fix-list {
+  overflow-x: auto;
+  font-size: 0.78125rem;
+}
+
+.fix-head,
+.fix-row {
+  min-width: 44rem;
+}
+
+/* The CVE column fits a 19-character id such as a GHSA one; each row is its own grid, so the tracks are fixed. */
 
 .fix-head,
 .fix-summary {
   display: grid;
-  grid-template-columns: 6rem 9rem minmax(6rem, 1fr) minmax(6rem, 1fr) minmax(6rem, 1fr) 6rem 8rem;
+  grid-template-columns: 5.25rem 9.5rem minmax(6rem, 1.2fr) minmax(5rem, 1fr) minmax(6rem, 1.4fr) 3.5rem 5.5rem;
   gap: 0.5rem;
   align-items: baseline;
-  padding: 0.375rem 0.5rem;
+  padding: 0.4375rem 0.5rem;
 }
 
 .fix-head {
-  background: var(--surface);
-  font-weight: 700;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-weight: 500;
 }
 
 .fix-row {
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--line-soft);
 }
 
 .fix-summary {
   cursor: pointer;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
-.fix-unit {
+.fix-summary:hover {
+  background: var(--tint);
+}
+
+.fix-unit,
+.fix-label {
   display: none;
   color: var(--muted);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
+.fix-installed,
 .fix-sample,
 .fix-more {
   margin: 0;
   padding: 0.25rem 0.5rem 0.5rem 1.5rem;
+  overflow-wrap: anywhere;
+}
+
+.fix-installed {
+  padding-bottom: 0;
+  color: var(--muted);
 }
 
 .fix-overflow,
 .fix-nofix {
-  margin: 0.5rem 0;
+  margin: 0.5rem 0 0;
+}
+
+/* Worst images: the short ref, a bar scaled to the worst image, and the counts in words. */
+
+.worst-images .card-title {
+  margin-bottom: 0.625rem;
+}
+
+.worst {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.worst {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem 1.75rem;
+}
+
+@media (min-width: 100rem) {
+  .worst {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.worst a {
+  display: block;
+  color: var(--fg);
+}
+
+.worst a:hover .worst-ref,
+.worst a:focus-visible .worst-ref {
+  color: var(--link);
+}
+
+.worst a:hover,
+.worst a:focus-visible {
+  text-decoration: none;
+}
+
+.worst-ref {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.worst-bar {
+  display: block;
+  width: 100%;
+  height: 7px;
+  margin: 0.25rem 0;
+  border-radius: 4px;
+  background: var(--line-soft);
+  overflow: hidden;
+}
+
+.worst-counts {
+  color: var(--muted);
+  font-size: 0.71875rem;
+}
+
+/* Failed images: a card with a red left edge. */
+
+.card-error {
+  margin: 0 0 1rem;
+  border-left: 3px solid var(--critical);
+}
+
+.failed-images h2 {
+  margin: 0 0 0.5rem;
+}
+
+.failed-list {
+  margin: 0;
+  padding-left: 1.25rem;
+  overflow-wrap: anywhere;
+}
+
+.failed-overflow,
+.failed-hint {
+  margin: 0.5rem 0 0;
+  color: var(--muted);
+}
+
+/* Findings: the filters card, severity pills, the table card and the pager. */
+
+/* The filters are an even grid; Severity spans two cells. Every label row sits at the top of its cell, so the
+   legend is floated: a fieldset otherwise draws its legend lower than the other labels. */
+
+.filters {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.875rem 1rem;
+  align-items: start;
+  margin: 0 0 0.75rem;
+}
+
+.filters > label,
+.filter-severity legend {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.filters > label :is(input, select) {
+  width: 100%;
+  min-width: 0;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.filter-severity {
+  grid-column: span 2;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.filter-severity legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 0.3125rem;
+  padding: 0;
+}
+
+.filter-severity .pills {
+  clear: both;
+}
+
+@media (min-width: 64rem) {
+  .filter-severity {
+    grid-column: span 3;
+  }
+}
+
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  align-self: end;
+}
+
+.pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.375rem;
+}
+
+/* The pill is the label; its checkbox stays in the page and in the tab order, only invisible. */
+
+.pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 0.3125rem 0.6875rem 0.3125rem 0.5rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--tint);
+  font-size: 0.75rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.pill input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.pill:has(input:checked) {
+  border-color: color-mix(in srgb, currentColor 50%, transparent);
+  background: color-mix(in srgb, currentColor 16%, transparent);
+}
+
+/* An unchecked pill shows its severity dot, a checked one a check mark, in the same 0.75rem box, so toggling a pill
+   never moves the row. */
+
+.pill::before {
+  content: "";
+  flex-shrink: 0;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.3125rem;
+  background: radial-gradient(circle, currentColor 0 3.5px, transparent 4px);
+  line-height: 0.75rem;
+  text-align: center;
+}
+
+.pill:has(input:checked)::before {
+  content: "\2713";
+  background: none;
+}
+
+.pill:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+input[type="text"],
+input[type="search"],
+select {
+  min-width: 7rem;
+  padding: 0.375rem 0.5625rem;
+  border: 1px solid var(--input-edge);
+  border-radius: 7px;
+  background: var(--input);
+  color: var(--fg);
+  font: inherit;
+  font-size: 0.78125rem;
+}
+
+.btn {
+  padding: 0.4375rem 0.875rem;
+  border: 0;
+  border-radius: 7px;
+  background: var(--accent);
+  color: #ffffff;
+  font: inherit;
+  font-size: 0.78125rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.filters .clear {
+  font-size: 0.78125rem;
+}
+
+/* An image ref breaks after its slashes (the page puts a <wbr> there) and at hyphens; break-word only splits a name
+   that still cannot fit, so the column keeps whole names instead of "kindn / etd". */
+
+.findings .ref {
+  display: inline-block;
+  min-width: 11rem;
+  max-width: 20rem;
+  font-family: var(--mono);
+  overflow-wrap: break-word;
+}
+
+.pager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 1rem;
+  align-items: center;
+  justify-content: space-between;
+  padding-top: 0.625rem;
+  color: var(--muted);
+  font-size: 0.75rem;
+}
+
+.pages {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.pages a,
+.pages .current {
+  padding: 0.1875rem 0.5625rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.pages .current {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #ffffff;
+  font-weight: 600;
 }
 
 @media (max-width: 40rem) {
@@ -360,68 +987,109 @@ th {
     display: none;
   }
 
+  .fix-head,
+  .fix-row {
+    min-width: 0;
+  }
+
   .fix-summary {
     grid-template-columns: 1fr 1fr;
   }
 
-  .fix-unit {
+  .fix-unit,
+  .fix-label {
     display: inline;
+  }
+
+  .filter-severity {
+    grid-column: 1 / -1;
   }
 }
 
-/* Failed images */
-.failed-images {
-  margin: 1rem 0;
+/* Below 760 px the sidebar becomes a top bar: wordmark and context on one row, the nav as a row below. */
+
+@media (max-width: 759px) {
+  .shell {
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .sidebar {
+    display: flex;
+    flex: none;
+    flex-wrap: wrap;
+    gap: 0.5rem 0.75rem;
+    align-items: center;
+    padding: 0.625rem 1rem;
+    border-right: 0;
+    border-bottom: 1px solid var(--sidebar-edge);
+  }
+
+  .wordmark {
+    margin: 0;
+  }
+
+  .context {
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: 0.25rem 0.5rem;
+    align-items: baseline;
+    min-width: 0;
+    margin: 0 0 0 auto;
+    padding: 0.25rem 0.5rem;
+  }
+
+  .context-name {
+    margin: 0;
+  }
+
+  .sidebar nav {
+    flex-basis: 100%;
+  }
+
+  .sidebar nav ul {
+    display: flex;
+    gap: 0.25rem;
+  }
+
+  .sidebar nav a {
+    margin: 0;
+    padding: 0.375rem 0.625rem;
+  }
+
+  .sidebar nav a[aria-current="page"] {
+    box-shadow: inset 0 -2px 0 var(--accent);
+  }
+
+  .main {
+    padding: 1rem;
+  }
 }
 
-.failed-list {
-  padding-left: 1.25rem;
+/* Below 480 px the context card is a full-width row of its own, flush with the wordmark, instead of a ragged
+   right-aligned box. */
+
+@media (max-width: 479px) {
+  .context {
+    flex-basis: 100%;
+    margin: 0;
+  }
 }
 
-.failed-overflow,
-.failed-hint {
-  color: var(--muted, inherit);
-}
+@media print {
+  .sidebar {
+    display: none;
+  }
 
-/* Findings page */
-.filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem 1rem;
-  margin: 1rem 0;
-}
+  body {
+    background: none;
+  }
 
-.filters label {
-  display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-}
+  .main {
+    padding: 0;
+  }
 
-.filter-severity {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
-  margin: 0;
-  border: 1px solid var(--border);
-  border-radius: 0.25rem;
-}
-
-.filter-severity label {
-  flex-direction: row;
-  align-items: center;
-}
-
-.findings-count {
-  color: var(--muted, inherit);
-}
-
-.findings .ref {
-  overflow-wrap: anywhere;
-}
-
-.pager {
-  display: flex;
-  gap: 1rem;
-  margin: 1rem 0;
+  .table-wrap {
+    overflow: visible;
+  }
 }
