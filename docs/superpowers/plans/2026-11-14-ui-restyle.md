@@ -35,8 +35,8 @@ are inline SVG whose geometry comes from the route, because the CSP (`style-src 
 - **Phone width:** the sidebar becomes a top bar below 760 px.
 - **Project rules:** TDD, one test file per module, Ruff at line length 120, a docstring per module, and placeholders only.
   Conventional Commits, lowercase, with no attribution lines.
-- **Logo:** the owner's pick from the browser mockups, saved as `kubedelos/web/static/logo.svg` (the pick is written into
-  Task 2 before execution).
+- **Logo:** option C, "Radar", saved as `kubedelos/web/static/logo.svg` (its source is in
+  Task 2).
 
 ## Review Focus
 
@@ -165,8 +165,26 @@ def test_worst_images_empty_without_critical_or_high(db):
   Expected: the new asserts FAIL.
 
 - [ ] **Step 3: Implement.**
-  - **`logo.svg`:** a standalone SVG with `viewBox="0 0 64 64"` and its own gradient `<defs>`. Draw option `<PICK>` from
-    the mockups (`.superpowers/brainstorm/*/content/logo-options.html`). It must stay legible at 16 px.
+  - **`logo.svg`:** the owner picked option C, "Radar": a radar sweep over four container blocks, with one block flagged
+    red. Write it exactly as below; it is a standalone file with its own gradient.
+
+```xml
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#3ec6ff"/>
+    </linearGradient>
+  </defs>
+  <circle cx="32" cy="32" r="27" fill="none" stroke="url(#g)" stroke-width="4"/>
+  <g fill="url(#g)" opacity=".4">
+    <rect x="19" y="19" width="11" height="11" rx="2"/><rect x="34" y="19" width="11" height="11" rx="2"/>
+    <rect x="19" y="34" width="11" height="11" rx="2"/>
+  </g>
+  <rect x="34" y="34" width="11" height="11" rx="2" fill="#ff5c7a"/>
+  <path d="M32 32 32 5A27 27 0 0 1 57.7 23.6Z" fill="url(#g)" opacity=".55"/>
+  <circle cx="32" cy="32" r="3" fill="#fff"/>
+</svg>
+```
   - **`base.html`:** `<div class="shell"><aside class="sidebar">…</aside><div class="main">…</div></div>`. The sidebar
     holds, in order:
     1. The wordmark: the logo `<img>` plus "kubedelos", linking to `/`.
