@@ -172,3 +172,150 @@ def kpis(conn: sqlite3.Connection, run_id: int) -> Kpis:
         images_failed=counts["failed"],
         by_severity=by_severity,
     )
+
+
+SAMPLE_CAP = 20
+
+# The units the fix lists need: Critical and High rows only, with the fix a unit has (MAX picks a version over an empty
+# one when platforms disagree). Only the columns the lists show, so it stays cheap on a large run. ``{join}`` lets a
+# caller narrow the rows early. ``:run`` as above.
+_FIX_UNITS_TEMPLATE = f"""
+SELECT r.ref, f.vuln_id, f.pkg_name, f.installed_version,
+       MAX(COALESCE(f.fixed_version, '')) AS fixed_version,
+       MAX({_RANK_SQL}) AS sev_rank,
+       MAX(f.primary_url) AS primary_url
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+{{join}}
+WHERE r.run_id = :run AND f.severity IN ('CRITICAL', 'HIGH')
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
+_FIX_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(join="")
+
+# The distinct namespaces each image runs in within the run (a second platform repeats its workloads). Every ref has a
+# row, with a NULL namespace when it has no workload, so an inner JOIN on ref never drops an image.
+_NAMESPACES_SQL = """
+SELECT DISTINCT r.ref, w.namespace
+FROM image_result r
+LEFT JOIN workload w ON w.image_result_id = r.id
+WHERE r.run_id = :run
+"""
+
+# Only the rows of the CVE and package pairs on the page, so the sample query groups a few rows, not the whole run.
+_SAMPLE_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(
+    join="JOIN wanted w ON w.vuln_id = f.vuln_id AND w.pkg_name IS f.pkg_name"
+)
+
+
+@dataclass(frozen=True)
+class FixRow:
+    vuln_id: str
+    pkg_name: str | None
+    fixed_version: str
+    severity: str
+    installed: list[str]
+    primary_url: str | None
+    images: int
+    namespaces: int
+    sample: list[tuple[str, list[str]]]
+
+
+@dataclass(frozen=True)
+class ImageFixRow:
+    ref: str
+    namespaces: list[str]
+    critical: int
+    high: int
+    fixable: int
+
+
+def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[FixRow], int]:
+    """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are."""
+    groups = conn.execute(
+        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL})"  # noqa: S608
+        " SELECT u.vuln_id, u.pkg_name, u.fixed_version, MAX(u.sev_rank) AS sev_rank, MAX(u.primary_url) AS primary_url,"
+        " json_group_array(DISTINCT u.installed_version) AS installed,"
+        " COUNT(DISTINCT u.ref) AS images, COUNT(DISTINCT ns.namespace) AS namespaces, COUNT(*) OVER () AS total"
+        " FROM units u JOIN ns ON ns.ref = u.ref WHERE u.fixed_version <> ''"
+        " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version"
+        " ORDER BY sev_rank DESC, images DESC, namespaces DESC, u.vuln_id, u.pkg_name, u.fixed_version LIMIT :limit",
+        {"run": run_id, "limit": limit},
+    ).fetchall()
+    if not groups:
+        return [], 0
+    samples = _samples(conn, run_id, groups)
+    rows = [
+        FixRow(
+            vuln_id=g["vuln_id"],
+            pkg_name=g["pkg_name"],
+            fixed_version=g["fixed_version"],
+            severity=_SEVERITIES[4 - g["sev_rank"]],
+            installed=sorted(v for v in json.loads(g["installed"]) if v is not None),
+            primary_url=g["primary_url"],
+            images=g["images"],
+            namespaces=g["namespaces"],
+            sample=samples.get((g["vuln_id"], g["pkg_name"], g["fixed_version"]), []),
+        )
+        for g in groups
+    ]
+    return rows, groups[0]["total"]
+
+
+def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -> dict[tuple, list]:
+    """Up to ``SAMPLE_CAP`` (ref, namespaces) pairs for each of the page's groups, in one query."""
+    params: dict[str, object] = {"run": run_id, "cap": SAMPLE_CAP}
+    values = []
+    for i, g in enumerate(groups):
+        params.update({f"v{i}": g["vuln_id"], f"p{i}": g["pkg_name"], f"f{i}": g["fixed_version"]})
+        values.append(f"(:v{i}, :p{i}, :f{i})")
+    rows = conn.execute(
+        f"WITH wanted(vuln_id, pkg_name, fixed_version) AS (VALUES {', '.join(values)}),"  # noqa: S608
+        f" units AS MATERIALIZED ({_SAMPLE_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}),"
+        " ranked AS (SELECT g.vuln_id, g.pkg_name, g.fixed_version, g.ref,"
+        "   ROW_NUMBER() OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version ORDER BY g.ref) AS rn"
+        "   FROM (SELECT DISTINCT u.vuln_id, u.pkg_name, u.fixed_version, u.ref FROM units u"
+        "     JOIN wanted w ON w.vuln_id = u.vuln_id AND w.pkg_name IS u.pkg_name AND w.fixed_version = u.fixed_version"
+        "   ) g)"
+        " SELECT k.vuln_id, k.pkg_name, k.fixed_version, k.ref, ns.namespace"
+        " FROM ranked k JOIN ns ON ns.ref = k.ref WHERE k.rn <= :cap ORDER BY k.ref, ns.namespace",
+        params,
+    )
+    out: dict[tuple, dict[str, list[str]]] = {}
+    for row in rows:
+        refs = out.setdefault((row["vuln_id"], row["pkg_name"], row["fixed_version"]), {})
+        namespaces = refs.setdefault(row["ref"], [])
+        if row["namespace"] is not None:
+            namespaces.append(row["namespace"])
+    return {key: list(refs.items()) for key, refs in out.items()}
+
+
+def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tuple[list[ImageFixRow], int]:
+    """The first ``limit`` images with a fixable Critical/High finding, worst first, and how many there are."""
+    rows = conn.execute(
+        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL})"  # noqa: S608
+        " SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high, SUM(fixed_version <> '') AS fixable,"
+        " COUNT(*) OVER () AS total FROM units GROUP BY ref HAVING fixable > 0"
+        " ORDER BY critical DESC, high DESC, ref LIMIT :limit",
+        {"run": run_id, "limit": limit},
+    ).fetchall()
+    if not rows:
+        return [], 0
+    namespaces: dict[str, list[str]] = {}
+    for row in conn.execute(
+        f"WITH ns AS MATERIALIZED ({_NAMESPACES_SQL}) SELECT ref, namespace FROM ns"  # noqa: S608
+        " WHERE namespace IS NOT NULL AND ref IN (SELECT value FROM json_each(:refs)) ORDER BY namespace",
+        {"run": run_id, "refs": json.dumps([r["ref"] for r in rows])},
+    ):
+        namespaces.setdefault(row["ref"], []).append(row["namespace"])
+    result = [ImageFixRow(r["ref"], namespaces.get(r["ref"], []), r["critical"], r["high"], r["fixable"]) for r in rows]
+    return result, rows[0]["total"]
+
+
+def no_fix_summary(conn: sqlite3.Connection, run_id: int) -> tuple[int, int]:
+    """How many Critical/High units have no released fix, and across how many images."""
+    row = conn.execute(
+        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL}) SELECT COUNT(*) AS n, COUNT(DISTINCT ref) AS images"  # noqa: S608
+        " FROM units WHERE fixed_version = ''",
+        {"run": run_id},
+    ).fetchone()
+    return row["n"], row["images"]

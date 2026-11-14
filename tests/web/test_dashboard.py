@@ -1,5 +1,7 @@
+import re
 import time
 from datetime import datetime, timedelta
+from html import unescape
 
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
@@ -229,3 +231,70 @@ def test_zero_findings_with_gaps_is_not_called_clean(client, seed):
         "No vulnerabilities found in the 1 images that could be listed; 1 namespaces or resources could not be" in html
     )
     assert "No vulnerabilities found in 1 images." not in html
+
+
+def _add_fix(seed, run_id, ref, vuln, severity="CRITICAL", *, pkg="openssl", fixed="1.2", url=None, ns="web"):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
+    item = InventoryItem(
+        image=image,
+        platform="linux/amd64",
+        workloads=[Workload(namespace=ns, kind="Deployment", name="a", container="c")],
+    )
+    finding = Finding(
+        vuln_id=vuln,
+        pkg_name=pkg,
+        installed_version="1.1",
+        fixed_version=fixed,
+        severity=Severity(severity),
+        primary_url=url,
+        target="os",
+        pkg_type="os",
+    )
+    result = ImageResult(image=image, platform="linux/amd64", status="ok", findings=[finding])
+    seed.repo.add_result(run_id, item, result)
+
+
+def test_fix_list_default_and_by_image(client, seed):
+    run_id = _run(seed)
+    _add_fix(seed, run_id, "reg.example.com/app:1", "CVE-9", url="https://example.com/CVE-9")
+    _add_fix(seed, run_id, "reg.example.com/app:2", "CVE-8", "HIGH", fixed=None)
+    html = client.get("/").text
+    assert 'data-fix="CVE-9"' in html and "1.1" in html and "1.2" in html
+    assert 'href="https://example.com/CVE-9"' in html and 'rel="noopener noreferrer"' in html
+    assert "1 Critical/High findings have no released fix yet, across 1 images" in html
+    assert "/findings?run_id=1&severity=CRITICAL&severity=HIGH&has_fix=no" in unescape(html)
+    by_image = client.get("/?by=image").text
+    assert 'data-image="reg.example.com/app:1"' in by_image and 'data-fix="CVE-9"' not in by_image
+    assert 'data-image="reg.example.com/app:2"' not in by_image
+    assert client.get("/?by=bogus").status_code == 400
+
+
+def test_fix_list_unsafe_url_is_not_linked(client, seed):
+    run_id = _run(seed)
+    _add_fix(seed, run_id, "a", "CVE-9", url="javascript:alert(1)")
+    html = client.get("/").text
+    assert "javascript:" not in html and "CVE-9" in html
+
+
+def test_fix_list_overflow_and_more_links(client, seed):
+    run_id = _run(seed)
+    for i in range(30):
+        _add_fix(seed, run_id, f"img{i:02d}", "CVE-9")
+        _add_fix(seed, run_id, f"img{i:02d}", f"CVE-L{i:02d}", "HIGH", pkg=f"p{i:02d}")
+    html = client.get("/").text
+    assert "showing 25 of 31" in html
+    assert "/findings?run_id=1&severity=CRITICAL&severity=HIGH&has_fix=yes" in unescape(html)
+    assert "and 10 more" in html
+    assert "/findings?run_id=1&cve=CVE-9&package=openssl" in unescape(html)
+    assert html.count('data-fix="') == 25
+
+
+def test_dashboard_links_carry_run_id(client, seed):
+    run_id = _run(seed)
+    for i in range(30):
+        _add_fix(seed, run_id, f"img{i:02d}", "CVE-9")
+    _add_fix(seed, run_id, "x", "CVE-1", "HIGH", fixed=None)
+    for query in ("/", "/?by=image", "/?run_id=1"):
+        main = client.get(query).text.split("<main", 1)[1]  # the site nav's bare /findings link is not page content
+        links = [unescape(link) for link in re.findall(r'href="(/findings[^"]*)"', main)]
+        assert links and all("run_id=1" in link for link in links), query

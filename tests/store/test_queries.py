@@ -12,9 +12,12 @@ from kubedelos.store.queries import (
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
     RunNotShown,
+    fix_by_fix,
+    fix_by_image,
     get_run,
     kpis,
     newest_run,
+    no_fix_summary,
     previous_comparable,
 )
 from kubedelos.store.repo import Repo
@@ -256,3 +259,134 @@ def test_same_ref_with_differing_tag_and_digest_is_one_unit(db):
         repo.add_result(run_id, item, result)
     rows = conn.execute(f"WITH units AS ({FINDING_UNITS_SQL}) SELECT * FROM units", {"run": run_id}).fetchall()  # noqa: S608
     assert len(rows) == 1
+
+
+def _fx(vuln, sev, pkg="openssl", version="1.1", fixed="1.2"):
+    return Finding(
+        vuln_id=vuln,
+        pkg_name=pkg,
+        installed_version=version,
+        fixed_version=fixed,
+        severity=Severity(sev),
+        target="os",
+        pkg_type="os",
+    )
+
+
+def _add_in(repo, run_id, ref, findings, namespaces=("ns",), platform="linux/amd64"):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
+    workloads = [Workload(namespace=ns, kind="Deployment", name="a", container="c") for ns in namespaces]
+    item = InventoryItem(image=image, platform=platform, workloads=workloads)
+    repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status="ok", findings=findings))
+
+
+def test_fix_by_fix_groups_one_base_image_rebuild(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for i in range(30):
+        _add_in(repo, run_id, f"img{i:02d}", [_fx("CVE-9", "CRITICAL")], namespaces=("b", "a"))
+    _add_in(repo, run_id, "solo", [_fx("CVE-8", "CRITICAL")])
+    rows, total = fix_by_fix(conn, run_id)
+    assert total == 2 and [r.vuln_id for r in rows] == ["CVE-9", "CVE-8"]
+    top = rows[0]
+    assert (top.pkg_name, top.fixed_version, top.severity, top.images, top.namespaces) == (
+        "openssl",
+        "1.2",
+        "CRITICAL",
+        30,
+        2,
+    )
+    assert len(top.sample) == 20
+    assert top.sample[0] == ("img00", ["a", "b"])
+    assert [ref for ref, _ in top.sample] == sorted(ref for ref, _ in top.sample)
+
+
+def test_fix_by_fix_sort_and_total(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "h1", [_fx("CVE-H", "HIGH", pkg="a")], namespaces=("x",))
+    _add_in(repo, run_id, "h2", [_fx("CVE-H", "HIGH", pkg="a")], namespaces=("x",))
+    _add_in(repo, run_id, "c1", [_fx("CVE-C", "CRITICAL", pkg="b")], namespaces=("x",))
+    _add_in(repo, run_id, "t1", [_fx("CVE-T1", "HIGH", pkg="c")], namespaces=("x", "y"))
+    _add_in(repo, run_id, "t2", [_fx("CVE-T2", "HIGH", pkg="d")], namespaces=("x", "y"))
+    _add_in(repo, run_id, "t3", [_fx("CVE-T2", "HIGH", pkg="d")], namespaces=("x",))
+    rows, total = fix_by_fix(conn, run_id)
+    assert total == 4
+    # Critical first, then more images, then (equal images) more namespaces, then fewer images
+    assert rows[0].vuln_id == "CVE-C"
+    assert [r.vuln_id for r in rows[1:]] == ["CVE-T2", "CVE-H", "CVE-T1"]
+    many = _run(repo)
+    for i in range(30):
+        _add_in(repo, many, f"i{i}", [_fx(f"CVE-{i:02d}", "HIGH")])
+    rows, total = fix_by_fix(conn, many, limit=25)
+    assert len(rows) == 25 and total == 30
+
+
+def test_fix_lists_skip_unfixed_medium_and_low(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(
+        repo,
+        run_id,
+        "a",
+        [
+            _fx("CVE-M", "MEDIUM"),
+            _fx("CVE-L", "LOW"),
+            _fx("CVE-N", "HIGH", fixed=None),
+            _fx("CVE-E", "HIGH", fixed=""),
+            _fx("CVE-OK", "HIGH"),
+        ],
+    )
+    rows, total = fix_by_fix(conn, run_id)
+    assert [r.vuln_id for r in rows] == ["CVE-OK"] and total == 1
+    images, total = fix_by_image(conn, run_id)
+    assert [(r.ref, r.critical, r.high, r.fixable) for r in images] == [("a", 0, 3, 1)] and total == 1
+    _add_in(repo, run_id, "b", [_fx("CVE-M", "MEDIUM"), _fx("CVE-N", "CRITICAL", fixed=None)])
+    assert fix_by_image(conn, run_id)[1] == 1
+
+
+def test_installed_versions_distinct_sorted(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "a", [_fx("CVE-1", "HIGH", version="1.1.0")])
+    _add_in(repo, run_id, "b", [_fx("CVE-1", "HIGH", version="1.0.9")])
+    _add_in(repo, run_id, "c", [_fx("CVE-1", "HIGH", version="1.1.0")])
+    rows, _ = fix_by_fix(conn, run_id)
+    assert rows[0].installed == ["1.0.9", "1.1.0"] and rows[0].images == 3
+
+
+def test_fix_by_image_counts_and_sort(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(
+        repo,
+        run_id,
+        "z-crit",
+        [_fx("CVE-1", "CRITICAL"), _fx("CVE-2", "CRITICAL", fixed=None), _fx("CVE-3", "HIGH")],
+        namespaces=("b", "a"),
+    )
+    _add_in(repo, run_id, "b-high", [_fx("CVE-4", "HIGH"), _fx("CVE-5", "HIGH")])
+    _add_in(repo, run_id, "a-high", [_fx("CVE-4", "HIGH"), _fx("CVE-5", "HIGH")])
+    _add_in(repo, run_id, "z-arm", [_fx("CVE-6", "HIGH")], platform="linux/arm64")
+    _add_in(repo, run_id, "z-arm", [_fx("CVE-6", "HIGH")], platform="linux/amd64")
+    rows, total = fix_by_image(conn, run_id)
+    assert total == 4
+    assert [(r.ref, r.critical, r.high, r.fixable) for r in rows] == [
+        ("z-crit", 2, 1, 2),
+        ("a-high", 0, 2, 2),
+        ("b-high", 0, 2, 2),
+        ("z-arm", 0, 1, 1),
+    ]
+    assert rows[0].namespaces == ["a", "b"]
+    assert len(fix_by_image(conn, run_id, limit=2)[0]) == 2
+
+
+def test_no_fix_summary(db):
+    conn, repo = db
+    run_id = _run(repo)
+    assert no_fix_summary(conn, run_id) == (0, 0)
+    _add_in(repo, run_id, "a", [_fx("CVE-1", "HIGH", fixed=None), _fx("CVE-2", "CRITICAL", fixed="")])
+    _add_in(
+        repo, run_id, "b", [_fx("CVE-1", "HIGH", fixed=None), _fx("CVE-3", "HIGH"), _fx("CVE-4", "LOW", fixed=None)]
+    )
+    assert no_fix_summary(conn, run_id) == (3, 2)

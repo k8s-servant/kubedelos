@@ -313,3 +313,58 @@ th {
   outline: 2px solid var(--fg);
   outline-offset: 2px;
 }
+
+/* Fix first: one native <details> per fix; the summary is a grid that lines up with the header row. */
+
+.fix-head,
+.fix-summary {
+  display: grid;
+  grid-template-columns: 6rem 9rem minmax(6rem, 1fr) minmax(6rem, 1fr) minmax(6rem, 1fr) 6rem 8rem;
+  gap: 0.5rem;
+  align-items: baseline;
+  padding: 0.375rem 0.5rem;
+}
+
+.fix-head {
+  background: var(--surface);
+  font-weight: 700;
+}
+
+.fix-row {
+  border-bottom: 1px solid var(--border);
+}
+
+.fix-summary {
+  cursor: pointer;
+  overflow-wrap: anywhere;
+}
+
+.fix-unit {
+  display: none;
+  color: var(--muted);
+}
+
+.fix-sample,
+.fix-more {
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.5rem 1.5rem;
+}
+
+.fix-overflow,
+.fix-nofix {
+  margin: 0.5rem 0;
+}
+
+@media (max-width: 40rem) {
+  .fix-head {
+    display: none;
+  }
+
+  .fix-summary {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .fix-unit {
+    display: inline;
+  }
+}

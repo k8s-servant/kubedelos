@@ -1,4 +1,4 @@
-{#- The dashboard: the run line, the KPI tiles and the severity bricks. -#}
+{#- The dashboard: the run line, the KPI tiles, the severity bricks and the fix-first list. -#}
 {% extends "base.html" %}
 {% block title %}Dashboard · kubedelos{% endblock %}
 {% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
@@ -53,5 +53,68 @@
     </a></li>
     {%- endfor %}
   </ul>
+  <section class="fix-first" aria-labelledby="fix-first-title">
+    <h2 id="fix-first-title">Fix first</h2>
+    <p class="fix-views">Group by:
+      {% if by == "fix" %}<strong>fix</strong>{% else %}<a href="{{ by_fix_href }}">fix</a>{% endif %}
+      |
+      {% if by == "image" %}<strong>image</strong>{% else %}<a href="{{ by_image_href }}">image</a>{% endif %}
+    </p>
+    {% if not fix_rows %}
+    <p class="notice">No Critical or High findings have a released fix.</p>
+    {% elif by == "fix" %}
+    <div class="fix-list">
+      <div class="fix-head" aria-hidden="true">
+        <span>Severity</span><span>CVE</span><span>Package</span><span>Installed</span><span>Fixed in</span>
+        <span>Images</span><span>Namespaces</span>
+      </div>
+      {%- for row in fix_rows %}
+      <details class="fix-row" data-fix="{{ row.vuln_id }}">
+        <summary class="fix-summary">
+          <span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span>
+          {%- set url = row.primary_url | safe_url %}
+          <span>{% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif %}</span>
+          <span>{{ row.pkg_name or "unknown" }}</span>
+          <span>{{ row.installed | join(", ") }}</span>
+          <span>{{ row.fixed_version }}</span>
+          <span>{{ row.images }} <span class="fix-unit">images</span></span>
+          <span>{{ row.namespaces }} <span class="fix-unit">namespaces</span></span>
+        </summary>
+        <ul class="fix-sample">
+          {%- for ref, namespaces in row.sample %}
+          <li><code>{{ ref }}</code>{% if namespaces %} in {{ namespaces | join(", ") }}{% endif %}</li>
+          {%- endfor %}
+        </ul>
+        {%- if row.images > sample_cap %}
+        <p class="fix-more">and {{ row.images - sample_cap }} more: <a href="{{ more_href(row) }}">see them in findings</a></p>
+        {%- endif %}
+      </details>
+      {%- endfor %}
+    </div>
+    {% else %}
+    <div class="table-wrap">
+      <table class="fix-images">
+        <thead><tr><th>Image</th><th>Namespaces</th><th>Critical</th><th>High</th><th>With a fix</th></tr></thead>
+        <tbody>
+          {%- for row in fix_rows %}
+          <tr data-image="{{ row.ref }}">
+            <td><code>{{ row.ref }}</code></td>
+            <td>{{ row.namespaces | join(", ") }}</td>
+            <td>{{ row.critical }}</td>
+            <td>{{ row.high }}</td>
+            <td>{{ row.fixable }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
+    {% if fix_total > fix_rows | length %}
+    <p class="fix-overflow">showing {{ fix_rows | length }} of {{ fix_total }}: <a href="{{ all_fix_href }}">see the full list in findings</a></p>
+    {% endif %}
+    {% if no_fix %}
+    <p class="fix-nofix"><a href="{{ no_fix_href }}">{{ no_fix }} Critical/High findings have no released fix yet, across {{ no_fix_images }} images</a></p>
+    {% endif %}
+  </section>
 {% endif %}
 {% endblock %}

@@ -1,17 +1,30 @@
-"""The dashboard (``GET /``): which run is shown, the KPI tiles and the severity bricks.
+"""The dashboard (``GET /``): which run is shown, the KPI tiles, the severity bricks and the fix-first list.
 
 The page answers "how is this cluster doing", so it shows the newest whole-cluster run and never lets an incomplete run
 read as a clean cluster: coverage gaps and failed images mark the run line and the tiles.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from kubedelos.analytics import ago, delta, describe_scope
-from kubedelos.store.queries import Kpis, Run, RunNotShown, get_run, kpis, newest_run, previous_comparable
+from kubedelos.store.queries import (
+    SAMPLE_CAP,
+    Kpis,
+    Run,
+    RunNotShown,
+    fix_by_fix,
+    fix_by_image,
+    get_run,
+    kpis,
+    newest_run,
+    no_fix_summary,
+    previous_comparable,
+)
 from kubedelos.web.app import open_db, render
 
 router = APIRouter()
@@ -39,7 +52,13 @@ class Brick:
 
 
 def findings_href(**params: object) -> str:
-    return "/findings?" + urlencode({k: v for k, v in params.items() if v is not None})
+    return "/findings?" + urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+
+
+def dashboard_href(**params: object) -> str:
+    """A link back to the dashboard that keeps the pinned run, if any."""
+    query = urlencode({k: v for k, v in params.items() if v is not None})
+    return "/?" + query if query else "/"
 
 
 def _change(current: int, previous: int | None) -> str:
@@ -85,7 +104,9 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
 
 
 @router.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, run_id: int | None = Query(None, ge=1)) -> HTMLResponse:
+def dashboard(
+    request: Request, run_id: int | None = Query(None, ge=1), by: Literal["fix", "image"] = "fix"
+) -> HTMLResponse:
     context = request.app.state.context
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "pinned": run_id is not None, "caution": CAUTION}
@@ -104,6 +125,8 @@ def dashboard(request: Request, run_id: int | None = Query(None, ge=1)) -> HTMLR
         current = kpis(conn, run.id)
         previous = previous_comparable(conn, run)
         before = (previous, kpis(conn, previous.id)) if previous else None
+        fix_rows, fix_total = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
+        no_fix, no_fix_images = no_fix_summary(conn, run.id)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
     if run_id is None and newest_any is not None and newest_any.id > run.id:
         ctx["newer"] = {
@@ -111,6 +134,20 @@ def dashboard(request: Request, run_id: int | None = Query(None, ge=1)) -> HTMLR
             "when": ago(newest_any.finished_at, now) if newest_any.finished_at else "an unknown time ago",
             "href": findings_href(run_id=newest_any.id),
         }
+    fix_links = {"severity": ["CRITICAL", "HIGH"]}
+    ctx.update(
+        by=by,
+        fix_rows=fix_rows,
+        fix_total=fix_total,
+        sample_cap=SAMPLE_CAP,
+        by_fix_href=dashboard_href(run_id=run_id),
+        by_image_href=dashboard_href(run_id=run_id, by="image"),
+        all_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="yes"),
+        no_fix=no_fix,
+        no_fix_images=no_fix_images,
+        no_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="no"),
+        more_href=lambda row: findings_href(run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
+    )
     ctx["bricks"] = [
         Brick(sev, count, findings_href(run_id=run.id, severity=sev))
         for sev, count in current.by_severity.items()
