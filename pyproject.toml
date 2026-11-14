@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kubedelos"
-version = "0.0.0" # x-release-please-version
+version = "0.1.0" # x-release-please-version
 description = "Scan the container images running in a Kubernetes cluster with Trivy"
 readme = "README.pypi.md" # the PyPI page; README.md may use relative links that break there
 license = "Apache-2.0"

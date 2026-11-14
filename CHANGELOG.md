@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0 (2026-11-14)
+
+
+### Features
+
+* add --pkg-types to choose os packages, libraries or both ([#25](https://github.com/k8s-servant/kubedelos/issues/25)) ([18573d4](https://github.com/k8s-servant/kubedelos/commit/18573d4b06af17964077a136761c44a657e90d00))
+* add kubedelos registry test and registry login hints ([#6](https://github.com/k8s-servant/kubedelos/issues/6)) ([818f93e](https://github.com/k8s-servant/kubedelos/commit/818f93edb65f1e89f63ef1a38b8a20f3477a88aa))
+* add kubedelos ui with the dashboard and findings pages ([#29](https://github.com/k8s-servant/kubedelos/issues/29)) ([a84eb88](https://github.com/k8s-servant/kubedelos/commit/a84eb88f984bec6c2f8ab496bf564a08be161224))
+* add label selectors and image exclusion to scan ([#26](https://github.com/k8s-servant/kubedelos/issues/26)) ([f3e92aa](https://github.com/k8s-servant/kubedelos/commit/f3e92aa6184253d531d9ca823914aa0e54b51a05))
+* bootstrap repo and add kubedelos scan ([#1](https://github.com/k8s-servant/kubedelos/issues/1)) ([c5bc930](https://github.com/k8s-servant/kubedelos/commit/c5bc93096dfbb1e458f9735dba7acd35454bcf89))
+* restyle kubedelos ui with a sidebar, radar logo and worst images panel ([#30](https://github.com/k8s-servant/kubedelos/issues/30)) ([38935df](https://github.com/k8s-servant/kubedelos/commit/38935df1c57ef04234db7d907160a4958427d49a))
+
+
+### Bug fixes
+
+* show the cause of trivy errors instead of their first 200 characters ([#27](https://github.com/k8s-servant/kubedelos/issues/27)) ([cf176f6](https://github.com/k8s-servant/kubedelos/commit/cf176f6632cef353acf3def2d55f4ba14ffdc645))
+
+## Changelog
+
 ## Unreleased
 
 ### Features
