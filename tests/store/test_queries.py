@@ -12,6 +12,7 @@ from kubedelos.store.queries import (
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
     RunNotShown,
+    auth_failed_refs,
     failed_images,
     fix_by_fix,
     fix_by_image,
@@ -409,3 +410,11 @@ def test_failed_images_cap_and_total(db):
     ]
     assert set(rows[0].keys()) == {"ref", "platform", "error_kind", "error"}
     assert failed_images(conn, run_id)[1] == 31
+
+
+def test_auth_failed_refs_ignores_other_failures(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for i in range(30):
+        _add(repo, run_id, f"reg.example.com/app{i:02d}:1", "linux/amd64", status="error")
+    assert auth_failed_refs(conn, run_id) == []

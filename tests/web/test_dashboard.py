@@ -375,3 +375,15 @@ def test_hostile_strings_are_escaped(client, seed):
         assert "<img" not in html
         assert "<b>ns" not in html
         assert 'href="javascript:' not in html
+
+
+def test_login_hint_covers_auth_failures_past_the_list_cap(client, seed):
+    run_id = _run(seed)
+    for i in range(26):
+        _add_failed(seed, run_id, f"a-{i:02d}.example.com/team/app:1", "not_found", FATAL)
+    _add_failed(seed, run_id, "zz.example.com/<b>x</b>:1", "auth", FATAL)
+    _add_failed(seed, run_id, "zz.example.com/<b>y</b>:1", "auth", FATAL)
+    html = client.get("/").text
+    assert "showing 25 of 28" in html
+    assert "<b>x" not in html
+    assert unescape(html).count("docker login zz.example.com`") == 1

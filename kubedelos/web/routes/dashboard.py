@@ -20,6 +20,7 @@ from kubedelos.store.queries import (
     Kpis,
     Run,
     RunNotShown,
+    auth_failed_refs,
     failed_images,
     fix_by_fix,
     fix_by_image,
@@ -133,8 +134,9 @@ def dashboard(
         fix_rows, fix_total = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
         no_fix, no_fix_images = no_fix_summary(conn, run.id)
         failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
+        auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
-    hosts = sorted({registry_host(parse_image_id(r["ref"], "")) for r in failed_rows if r["error_kind"] == "auth"})
+    hosts = sorted({registry_host(parse_image_id(ref, "")) for ref in auth_refs})
     ctx.update(
         failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
         failed_total=failed_total,

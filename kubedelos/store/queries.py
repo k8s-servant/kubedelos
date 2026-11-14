@@ -332,3 +332,13 @@ def failed_images(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tup
         "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
     ).fetchone()[0]
     return rows, total
+
+
+def auth_failed_refs(conn: sqlite3.Connection, run_id: int) -> list[str]:
+    """Every distinct ref of a run that failed with an authentication error, uncapped, for the login hints."""
+    rows = conn.execute(
+        "SELECT DISTINCT ref FROM image_result WHERE run_id = ? AND status = 'error' AND error_kind = 'auth'"
+        " ORDER BY ref",
+        (run_id,),
+    )
+    return [row["ref"] for row in rows]
