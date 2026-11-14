@@ -1,5 +1,5 @@
-{#- The page shell: a sidebar (wordmark, context card with the freshness dot, nav) and the main column, which holds
-    the page head with the run chips above the content. No inline scripts, styles or handlers. -#}
+{#- The page shell: a sidebar (wordmark, context card with the freshness dot, nav) and the main column, whose <main>
+    holds the page head with the run chips above the content. No inline scripts, styles or handlers. -#}
 <!doctype html>
 <html lang="en">
 <head>
@@ -19,10 +19,9 @@
         <strong class="context-name">{{ context }}</strong>
         {%- if run is defined %}
         {%- if run %}
-        {%- set when = ago(run.finished_at, now) if run.finished_at else "at an unknown time" %}
-        <span class="{{ 'stale' if is_stale(run.finished_at, now) else 'fresh' }}">scanned {{ when }}</span>
+        <span class="{{ 'stale' if is_stale(run.finished_at, now) else 'fresh' }}">scanned {{ finished_text(run, now) }}</span>
         {%- else %}
-        <span class="none">no scans yet</span>
+        <span class="none">{{ "no cluster-wide scan yet" if narrower_href else "no scans yet" }}</span>
         {%- endif %}
         {%- endif %}
       </div>
@@ -38,8 +37,8 @@
       {%- endif %}
     </aside>
     <div class="main">
-      {% block run_line %}{% endblock %}
       <main>
+        {% block run_line %}{% endblock %}
         {% block content %}{% endblock %}
       </main>
     </div>

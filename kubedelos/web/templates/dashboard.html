@@ -1,4 +1,5 @@
-{#- The dashboard: the run line, the KPI tiles, the severity bricks and the fix-first list. -#}
+{#- The dashboard: the run line, the KPI tiles (all findings carries the severity bar and its legend), then Fix first
+    beside Worst images. Bars are SVG with their geometry in attributes: the CSP allows no inline style. -#}
 {% extends "base.html" %}
 {% block title %}Dashboard · kubedelos{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
@@ -23,14 +24,30 @@
 
   <ul class="tiles">
     {%- for tile in tiles %}
-    <li class="tile{% if tile.error %} tile-error{% endif %}" data-tile="{{ tile.key }}">
+    <li class="card tile{% if tile.error %} tile-error{% endif %}" data-tile="{{ tile.key }}">
       <span class="tile-label">{{ tile.label }}</span>
-      <span class="tile-value">{{ tile.value }}</span>
-      {%- if tile.suffix %} <span class="tile-suffix">{{ tile.suffix }}</span>{% endif %}
-      {%- if tile.caution %} <span class="caution" title="This run is incomplete: some namespaces or resources could not be listed">⚠<span class="visually-hidden"> incomplete run</span></span>{% endif %}
+      <span class="tile-figure">
+        <span class="tile-value{% if tile.key in ('critical', 'high') %} sev-{{ tile.key }}{% endif %}">{{ tile.value }}</span>
+        {%- if tile.suffix %} <span class="tile-suffix">{{ tile.suffix }}</span>{% endif %}
+        {%- if tile.caution %} <span class="caution" title="This run is incomplete: some namespaces or resources could not be listed">⚠<span class="visually-hidden"> incomplete run</span></span>{% endif %}
+      </span>
       <span class="tile-change">{{ tile.change }}
         {%- if tile.change_caution %} <span class="caution" title="{{ caution }}">⚠<span class="visually-hidden"> {{ caution }}</span></span>{% endif %}
       </span>
+      {%- if tile.key == "findings" %}
+      {%- if kpis.findings %}
+      <svg class="sevbar" viewBox="0 0 100 10" preserveAspectRatio="none" role="img" aria-label="Findings by severity: {% for share in shares %}{{ share.count }} {{ share.severity | title }}{{ ", " if not loop.last }}{% endfor %}">
+        {%- for share in shares if share.count %}
+        <rect class="sev-{{ share.severity | lower }}" x="{{ share.x }}" y="0" width="{{ share.width }}" height="10"/>
+        {%- endfor %}
+      </svg>
+      {%- endif %}
+      <ul class="legend">
+        {%- for share in shares %}
+        <li><a href="{{ share.href }}"><span class="sev sev-{{ share.severity | lower }}">{{ share.severity | title }}</span> <b>{{ share.count }}</b></a></li>
+        {%- endfor %}
+      </ul>
+      {%- endif %}
     </li>
     {%- endfor %}
   </ul>
@@ -46,7 +63,7 @@
   {% endif %}
 
   {% if failed %}
-  <section class="failed-images" aria-labelledby="failed-images-title">
+  <section class="card card-error failed-images" aria-labelledby="failed-images-title">
     <h2 id="failed-images-title">Failed images</h2>
     <ul class="failed-list">
       {%- for ref, platform, kind, cause in failed %}
@@ -62,21 +79,16 @@
   </section>
   {% endif %}
 
-  <ul class="bricks">
-    {%- for brick in bricks %}
-    <li><a class="brick sev-{{ brick.severity | lower }}" href="{{ brick.href }}">
-      <span class="brick-name">{{ brick.severity | title }}</span>
-      <span class="brick-count">{{ brick.count }}</span>
-    </a></li>
-    {%- endfor %}
-  </ul>
-  <section class="fix-first" aria-labelledby="fix-first-title">
-    <h2 id="fix-first-title">Fix first</h2>
-    <p class="fix-views">Group by:
-      {% if by == "fix" %}<strong>fix</strong>{% else %}<a href="{{ by_fix_href }}">fix</a>{% endif %}
-      |
-      {% if by == "image" %}<strong>image</strong>{% else %}<a href="{{ by_image_href }}">image</a>{% endif %}
-    </p>
+  <div class="row">
+  <section class="card fix-first" aria-labelledby="fix-first-title">
+    <div class="card-head">
+      <h2 class="card-title" id="fix-first-title">Fix first</h2>
+      <p class="fix-views">
+        {% if by == "fix" %}<strong aria-current="true">by fix</strong>{% else %}<a href="{{ by_fix_href }}">by fix</a>{% endif %}
+        ·
+        {% if by == "image" %}<strong aria-current="true">by image</strong>{% else %}<a href="{{ by_image_href }}">by image</a>{% endif %}
+      </p>
+    </div>
     {% if not fix_rows %}
     <p class="notice">No Critical or High findings have a released fix.</p>
     {% elif by == "fix" %}
@@ -92,11 +104,18 @@
           {%- set url = row.primary_url | safe_url %}
           <span>{% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif %}</span>
           <span>{{ row.pkg_name or "unknown" }}</span>
-          <span>{{ row.installed | join(", ") }}</span>
-          <span>{{ row.fixed_version }}</span>
+          {%- if row.installed | length > 1 %}
+          <span class="version" title="{{ row.installed | join(', ') }}">{{ row.installed[0] }} <span class="more">+{{ row.installed | length - 1 }}</span></span>
+          {%- else %}
+          <span class="version">{{ row.installed | join(", ") }}</span>
+          {%- endif %}
+          <span class="version"><span class="fixed">{{ row.fixed_version }}</span></span>
           <span>{{ row.images }} <span class="fix-unit">images</span></span>
           <span>{{ row.namespaces }} <span class="fix-unit">namespaces</span></span>
         </summary>
+        {%- if row.installed | length > 1 %}
+        <p class="fix-installed">Installed: {{ row.installed | join(", ") }}</p>
+        {%- endif %}
         <ul class="fix-sample">
           {%- for ref, namespaces in row.sample %}
           <li><code>{{ ref }}</code>{% if namespaces %} in {{ namespaces | join(", ") }}{% endif %}</li>
@@ -133,5 +152,27 @@
     <p class="fix-nofix"><a href="{{ no_fix_href }}">{{ no_fix }} Critical/High findings have no released fix yet, across {{ no_fix_images }} images</a></p>
     {% endif %}
   </section>
+  {% if worst %}
+  <section class="card worst-images" aria-labelledby="worst-images-title">
+    <h2 class="card-title" id="worst-images-title">Worst images</h2>
+    <svg class="defs" width="0" height="0" aria-hidden="true" focusable="false">
+      <defs>
+        <linearGradient id="worst-fill"><stop class="stop-critical" offset="0"/><stop class="stop-high" offset="1"/></linearGradient>
+      </defs>
+    </svg>
+    <ul class="worst">
+      {%- for bar in worst %}
+      <li><a href="{{ bar.href }}">
+        <code class="worst-ref" title="{{ bar.ref }}">{{ bar.short }}</code>
+        <svg class="worst-bar" viewBox="0 0 100 6" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <rect x="0" y="0" width="{{ bar.width }}" height="6" fill="url(#worst-fill)"/>
+        </svg>
+        <span class="worst-counts">{{ bar.critical }} Critical · {{ bar.high }} High</span>
+      </a></li>
+      {%- endfor %}
+    </ul>
+  </section>
+  {% endif %}
+  </div>
 {% endif %}
 {% endblock %}

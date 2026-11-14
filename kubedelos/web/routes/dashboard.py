@@ -1,4 +1,4 @@
-"""The dashboard (``GET /``): which run is shown, the KPI tiles, the severity bricks and the fix-first list.
+"""The dashboard (``GET /``): which run is shown, the KPI tiles, the severity bar, the fix-first list and the worst images.
 
 The page answers "how is this cluster doing", so it shows the newest whole-cluster run and never lets an incomplete run
 read as a clean cluster: coverage gaps and failed images mark the run line and the tiles.
@@ -15,11 +15,13 @@ from kubedelos.analytics import ago, delta, describe_scope
 from kubedelos.hints import login_hint
 from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import registry_host
+from kubedelos.output import short_image
 from kubedelos.store.queries import (
     SAMPLE_CAP,
     Kpis,
     Run,
     RunNotShown,
+    WorstImage,
     auth_failed_refs,
     failed_images,
     fix_by_fix,
@@ -28,6 +30,7 @@ from kubedelos.store.queries import (
     kpis,
     newest_run,
     previous_comparable,
+    worst_images,
 )
 from kubedelos.trivy.runner import error_cause
 from kubedelos.web.pages import MAX_ID, open_db, render
@@ -50,9 +53,28 @@ class Tile:
 
 
 @dataclass(frozen=True)
-class Brick:
+class SeverityShare:
+    """One severity in the all-findings tile: a legend entry and, when ``count`` is non-zero, a bar segment.
+
+    ``x`` and ``width`` are percentages of the bar, drawn as SVG attributes (the CSP allows no inline style).
+    """
+
     severity: str
     count: int
+    x: float
+    width: float
+    href: str
+
+
+@dataclass(frozen=True)
+class WorstBar:
+    """One row of the worst images panel: a bar as wide as its Critical plus High against the worst image's."""
+
+    ref: str
+    short: str
+    critical: int
+    high: int
+    width: float
     href: str
 
 
@@ -64,6 +86,45 @@ def dashboard_href(**params: object) -> str:
     """A link back to the dashboard that keeps the pinned run, if any."""
     query = urlencode({k: v for k, v in params.items() if v is not None})
     return "/?" + query if query else "/"
+
+
+def _shares(run_id: int, by_severity: dict[str, int]) -> list[SeverityShare]:
+    """Critical, High, Medium and Low always, Unknown only when non-zero; each placed after the ones before it."""
+    total = sum(by_severity.values())
+    shares: list[SeverityShare] = []
+    x: float = 0  # an int, so the first segment starts at x="0"
+    for sev, count in by_severity.items():
+        if sev == "UNKNOWN" and not count:
+            continue
+        width = round(100 * count / total, 1) if total else 0.0
+        shares.append(SeverityShare(sev, count, x, width, findings_href(run_id=run_id, severity=sev)))
+        if count:
+            x = round(x + width, 1)
+    return shares
+
+
+def _short_ref(ref: str) -> str:
+    """``short_image`` of a bare ref: a digest ref keeps its repo and the first 8 hex of the digest."""
+    repo, at, digest = ref.partition("@")
+    return short_image({"repo": repo if at else "", "tag": None, "digest": digest or None, "image": ref})
+
+
+def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
+    """The worst images as bars scaled to the first (worst) one; empty when the run has no Critical or High."""
+    if not rows:
+        return []
+    top = rows[0].critical + rows[0].high
+    return [
+        WorstBar(
+            ref=w.ref,
+            short=_short_ref(w.ref),
+            critical=w.critical,
+            high=w.high,
+            width=round(100 * (w.critical + w.high) / top, 1),
+            href=findings_href(run_id=run_id, q=w.ref),
+        )
+        for w in rows
+    ]
 
 
 def _change(current: int, previous: int | None) -> str:
@@ -133,6 +194,7 @@ def dashboard(
         fixes = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
         failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
         auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
+        worst = worst_images(conn, run.id)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
     hosts = sorted({registry_host(parse_image_id(ref, "")) for ref in auth_refs})
     ctx.update(
@@ -160,9 +222,5 @@ def dashboard(
         no_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="no"),
         more_href=lambda row: findings_href(run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
     )
-    ctx["bricks"] = [
-        Brick(sev, count, findings_href(run_id=run.id, severity=sev))
-        for sev, count in current.by_severity.items()
-        if sev != "UNKNOWN" or count
-    ]
+    ctx.update(shares=_shares(run.id, current.by_severity), worst=_worst(run.id, worst))
     return render(request, "dashboard.html", ctx)

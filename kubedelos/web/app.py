@@ -8,6 +8,7 @@ can import the routes at the top level without an import cycle.
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import jinja2
@@ -42,6 +43,11 @@ def safe_url(url: object) -> str | None:
     return url if parts.scheme.lower() in ("http", "https") and parts.netloc else None
 
 
+def finished_text(run: Any, now: datetime) -> str:
+    """When ``run`` finished, as the run chips and the sidebar say it: "N ago", or "at an unknown time"."""
+    return ago(run.finished_at, now) if run.finished_at else "at an unknown time"
+
+
 def _templates(guard: Guard) -> Jinja2Templates:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_HERE / "templates"), autoescape=True)
 
@@ -51,7 +57,13 @@ def _templates(guard: Guard) -> Jinja2Templates:
 
     env.globals["csrf_token"] = csrf_token
     env.filters["safe_url"] = safe_url
-    env.globals.update(ago=ago, describe_scope=describe_scope, describe_pkg_types=describe_pkg_types, is_stale=is_stale)
+    env.globals.update(
+        ago=ago,
+        describe_scope=describe_scope,
+        describe_pkg_types=describe_pkg_types,
+        finished_text=finished_text,
+        is_stale=is_stale,
+    )
     return Jinja2Templates(env=env)
 
 

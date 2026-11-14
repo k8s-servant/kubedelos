@@ -7,8 +7,8 @@
     <li class="chip">Run {{ run.id }}</li>
     <li class="chip">{{ describe_scope(run.scope) }}</li>
     <li class="chip">{{ describe_pkg_types(run.pkg_types) }}</li>
-    <li class="chip">finished {{ ago(run.finished_at, now) if run.finished_at else "at an unknown time" }}</li>
-    <li class="chip {{ 'chip-bad' if run.images_failed else 'chip-ok' }}">{{ run.images }} images · {{ run.images_failed }} failed</li>
+    <li class="chip">finished {{ finished_text(run, now) }}</li>
+    <li class="chip {{ 'chip-bad' if run.images_failed else 'chip-ok' }}">{{ run.images }} image{{ "" if run.images == 1 else "s" }} · {{ run.images_failed }} failed</li>
     {%- if pinned %}
     <li class="chip chip-pinned">pinned</li>
     {%- endif %}

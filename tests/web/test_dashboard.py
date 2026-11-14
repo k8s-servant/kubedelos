@@ -2,7 +2,9 @@ import re
 import time
 from datetime import datetime, timedelta
 from html import unescape
+from pathlib import Path
 
+import kubedelos.web
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
@@ -51,6 +53,28 @@ def _tile(html, label):
     return html[start : html.index("</li>", start)]
 
 
+def _between(html, opener, closer):
+    start = html.index(opener)
+    return html[start : html.index(closer, start)]
+
+
+def _hex_luminance(color):
+    channels = [int(color[i : i + 2], 16) / 255 for i in (1, 3, 5)]
+    linear = [c / 12.92 if c <= 0.04045 else ((c + 0.055) / 1.055) ** 2.4 for c in channels]
+    return 0.2126 * linear[0] + 0.7152 * linear[1] + 0.0722 * linear[2]
+
+
+def _contrast(a, b):
+    high, low = sorted((_hex_luminance(a), _hex_luminance(b)), reverse=True)
+    return (high + 0.05) / (low + 0.05)
+
+
+def _theme_tokens(css, block_start):
+    start = css.index(block_start)
+    block = css[start : css.index("}", start)]
+    return dict(re.findall(r"--([a-z-]+):\s*(#[0-9a-f]{6});", block))
+
+
 def test_no_runs_empty_state(client):
     html = client.get("/").text
     assert "No scans of" in html and "my-cluster" in html and "kubedelos scan" in html
@@ -61,6 +85,8 @@ def test_only_narrower_runs(client, seed):
     html = client.get("/").text
     assert "no cluster-wide run" in html
     assert "/findings?run_id=1" in html
+    sidebar = _sidebar(html)
+    assert "no cluster-wide scan yet" in sidebar and "no scans yet" not in sidebar
 
 
 def test_uses_newest_cluster_run_and_mentions_newer_narrower(client, seed):
@@ -141,7 +167,7 @@ def test_run_chips(client, seed):
     broken = _run(seed)
     _add(seed, broken, "b", status="error")
     chips = _chips(client.get("/").text)
-    assert '<li class="chip chip-bad">1 images · 1 failed</li>' in chips
+    assert '<li class="chip chip-bad">1 image · 1 failed</li>' in chips
     assert "chip-ok" not in chips and "pinned" not in chips
 
 
@@ -161,6 +187,14 @@ def test_page_title_shows_without_a_run(client):
     html = client.get("/").text
     assert '<div class="page-head">' in html and "<h1>Dashboard</h1>" in html
     assert '<ul class="chips">' not in html
+
+
+def test_page_head_and_chips_sit_inside_main(client, seed):
+    _run(seed)
+    html = client.get("/").text
+    before, main = html.split("<main", 1)
+    assert "<h1>" not in before and '<ul class="chips">' not in before
+    assert "<h1>Dashboard</h1>" in main and '<ul class="chips">' in main
 
 
 def test_gaps_mark_incomplete(client, seed):
@@ -247,15 +281,75 @@ def test_images_with_critical_tile_counts_only_images_that_scanned(client, seed)
     assert "of 1 images scanned" in _tile(client.get("/").text, "images-critical")
 
 
-def test_bricks_link_and_unknown_hidden_when_zero(client, seed):
+def test_severity_legend_links_and_unknown_hidden_when_zero(client, seed):
     run_id = _run(seed)
     _add(seed, run_id, "a", ["CRITICAL", "LOW"])
     html = client.get("/").text
+    legend = _between(html, '<ul class="legend">', "</ul>")
     for sev in ("CRITICAL", "HIGH", "MEDIUM", "LOW"):
         assert f"/findings?run_id={run_id}&amp;severity={sev}" in html
+        assert f">{sev.title()}</span>" in legend
     assert "severity=UNKNOWN" not in html
     _add(seed, run_id, "b", ["UNKNOWN"])
-    assert "severity=UNKNOWN" in client.get("/").text
+    html = client.get("/").text
+    assert "severity=UNKNOWN" in html
+    assert ">Unknown</span>" in _between(html, '<ul class="legend">', "</ul>")
+
+
+def test_severity_bar_geometry(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL", "LOW", "LOW", "LOW"])
+    bar = _between(_tile(client.get("/").text, "findings"), '<svg class="sevbar"', "</svg>")
+    assert 'viewBox="0 0 100 10"' in bar and 'preserveAspectRatio="none"' in bar and 'role="img"' in bar
+    label = re.search(r'aria-label="([^"]*)"', bar).group(1)
+    for words in ("1 Critical", "0 High", "0 Medium", "3 Low"):
+        assert words in label
+    rects = re.findall(r"<rect [^>]*>", bar)
+    assert len(rects) == 2
+    assert 'class="sev-critical"' in rects[0] and 'x="0"' in rects[0] and 'width="25.0"' in rects[0]
+    assert 'class="sev-low"' in rects[1] and 'x="25.0"' in rects[1] and 'width="75.0"' in rects[1]
+    assert "sev-high" not in bar and "sev-medium" not in bar
+    assert "style=" not in bar
+
+
+def test_worst_images_panel(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "reg.example.com/b:1", ["HIGH", "LOW"])
+    _add(seed, run_id, "reg.example.com/a:1", ["CRITICAL", "HIGH", "HIGH"])
+    html = client.get("/").text
+    assert "Worst images" in html
+    panel = _between(html, '<ul class="worst">', "</ul>")
+    assert panel.index("reg.example.com/a:1") < panel.index("reg.example.com/b:1")
+    assert "1 Critical · 2 High" in panel and "0 Critical · 1 High" in panel
+    widths = re.findall(r'<rect [^>]*width="([0-9.]+)"', panel)
+    assert widths == ["100.0", "33.3"]
+    assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fa%3A1"' in panel
+    assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fb%3A1"' in panel
+    assert 'viewBox="0 0 100 6"' in panel and "style=" not in panel
+
+
+def test_worst_images_shows_a_short_digest(client, seed):
+    run_id = _run(seed)
+    ref = "reg.example.com/app@sha256:" + "c" * 64
+    _add(seed, run_id, ref, ["CRITICAL"])
+    panel = _between(client.get("/").text, '<ul class="worst">', "</ul>")
+    assert ">reg.example.com/app@sha256:cccccccc<" in panel
+    assert f'title="{ref}"' in panel
+
+
+def test_worst_images_hidden_without_critical_or_high(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["MEDIUM", "LOW"])
+    assert "Worst images" not in client.get("/").text
+
+
+def test_unknown_word_is_readable_in_both_themes():
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    for block in (":root {", "@media (prefers-color-scheme: light)"):
+        tokens = _theme_tokens(css, block)
+        for name in ("critical", "high", "medium", "low", "unknown-text", "ok"):
+            assert _contrast(tokens[name], tokens["card"]) >= 4.5, (block, name)
+    assert re.search(r"\.sev-unknown \{[^}]*color: var\(--unknown-text\);[^}]*fill: var\(--unknown\);", css)
 
 
 def test_zero_findings_with_failures_is_not_called_clean(client, seed):
@@ -307,7 +401,9 @@ def test_zero_findings_with_gaps_is_not_called_clean(client, seed):
     assert "No vulnerabilities found in 1 images." not in html
 
 
-def _add_fix(seed, run_id, ref, vuln, severity="CRITICAL", *, pkg="openssl", fixed="1.2", url=None, ns="web"):
+def _add_fix(
+    seed, run_id, ref, vuln, severity="CRITICAL", *, pkg="openssl", fixed="1.2", url=None, ns="web", installed="1.1"
+):
     image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
     item = InventoryItem(
         image=image,
@@ -317,7 +413,7 @@ def _add_fix(seed, run_id, ref, vuln, severity="CRITICAL", *, pkg="openssl", fix
     finding = Finding(
         vuln_id=vuln,
         pkg_name=pkg,
-        installed_version="1.1",
+        installed_version=installed,
         fixed_version=fixed,
         severity=Severity(severity),
         primary_url=url,
@@ -341,6 +437,18 @@ def test_fix_list_default_and_by_image(client, seed):
     assert 'data-image="reg.example.com/app:1"' in by_image and 'data-fix="CVE-9"' not in by_image
     assert 'data-image="reg.example.com/app:2"' not in by_image
     assert client.get("/?by=bogus").status_code == 400
+
+
+def test_fix_row_installed_shows_first_plus_n(client, seed):
+    run_id = _run(seed)
+    for i, version in enumerate(("1.2", "1.0", "1.1")):
+        _add_fix(seed, run_id, f"img{i}", "CVE-9", fixed="2.0", installed=version)
+    row = _between(client.get("/").text, 'data-fix="CVE-9"', "</details>")
+    assert 'title="1.0, 1.1, 1.2"' in row
+    installed = _between(row, 'title="1.0, 1.1, 1.2"', "</span></span>")
+    assert ">1.0 <" in installed and "+2" in installed
+    assert '<span class="fixed">2.0</span>' in row
+    assert '<span class="sev sev-critical">Critical</span>' in row
 
 
 def test_fix_list_unsafe_url_is_not_linked(client, seed):
