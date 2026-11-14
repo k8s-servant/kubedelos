@@ -940,12 +940,15 @@ select {
   font-size: 0.78125rem;
 }
 
+/* An image ref breaks after its slashes (the page puts a <wbr> there) and at hyphens; break-word only splits a name
+   that still cannot fit, so the column keeps whole names instead of "kindn / etd". */
+
 .findings .ref {
   display: inline-block;
-  font-family: var(--mono);
   min-width: 11rem;
   max-width: 20rem;
-  overflow-wrap: anywhere;
+  font-family: var(--mono);
+  overflow-wrap: break-word;
 }
 
 .pager {

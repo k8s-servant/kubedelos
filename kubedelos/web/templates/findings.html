@@ -93,7 +93,7 @@
             <td class="version">{{ row.installed }}</td>
             <td class="version{% if row.fixed %} fixed{% endif %}">{% if row.fixed %}{{ versions(row.fixed) }}{% endif %}</td>
             <td>{{ row.pkg_class or "unknown" }}</td>
-            <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
+            <td><span class="ref" title="{{ row.ref }}">{% for part in row.image.split("/") %}{{ part }}{% if not loop.last %}/<wbr>{% endif %}{% endfor %}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
           </tr>
           {%- endfor %}

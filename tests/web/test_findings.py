@@ -66,7 +66,7 @@ def test_row_columns(client, seed):
     assert '<a href="https://example.com/CVE-1" rel="noopener noreferrer">CVE-1</a>' in html
     assert "javascript:" not in html
     assert ">High<" in html and "1.0" in html and "1.1" in html
-    assert 'title="reg.example.com/app:1"' in html and "reg.example.com/app:1@sha256:aaaaaaaa" in html
+    assert 'title="reg.example.com/app:1"' in html and "reg.example.com/<wbr>app:1@sha256:aaaaaaaa" in html
 
 
 def test_filters_round_trip_in_links(client, seed):
@@ -256,3 +256,17 @@ def test_filters_are_an_even_grid_with_steady_pills(client, seed):
     assert re.search(r"\.pill::before \{[^}]*width: 0\.75rem;", css)
     assert re.search(r"\.pill:has\(input:checked\)::before \{\s*content: \"\\2713\";\s*background: none;\s*\}", css)
     assert ".pill:focus-within" not in css and ".pill:has(input:focus-visible)" in css
+
+
+def test_image_refs_break_at_their_slashes():
+    """A ref breaks after each slash, never mid-name, so the image column stays narrow enough for namespaces."""
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    block = re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
+    assert "overflow-wrap: break-word" in block and "anywhere" not in block
+
+
+def test_image_ref_has_a_break_after_each_slash(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "reg.example.com/team/app:1", [_f("CVE-1")])
+    html = client.get(f"/findings?run_id={run_id}").text
+    assert ">reg.example.com/<wbr>app:1@sha256:aaaaaaaa</span>" in html
