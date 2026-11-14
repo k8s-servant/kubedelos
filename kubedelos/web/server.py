@@ -6,6 +6,7 @@ on a dead address. uvicorn's own access log is off because it prints the full re
 
 import errno
 import socket
+import sys
 
 import uvicorn
 from fastapi import FastAPI
@@ -25,7 +26,9 @@ def bind(host: str, port: int) -> socket.socket:
     family = socket.AF_INET6 if host == "::1" else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
-        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if sys.platform.startswith("linux"):
+            # Skips TIME_WAIT on restart. On macOS/BSD it would let this bind succeed beside a 0.0.0.0 listener.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         sock.bind((LOOPBACK[host], port))
         sock.listen()
     except OSError as exc:

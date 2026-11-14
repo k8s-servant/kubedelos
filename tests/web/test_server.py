@@ -56,3 +56,15 @@ def test_serve_turns_the_access_log_off_so_the_token_is_never_logged(monkeypatch
     assert seen["config"].access_log is False
     assert seen["config"].workers == 1
     assert seen["sockets"] == [sentinel]
+
+
+def test_bind_detects_a_wildcard_listener_on_the_same_port():
+    wildcard = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        wildcard.bind(("0.0.0.0", 0))  # noqa: S104 - the point of the test
+        wildcard.listen()
+        port = wildcard.getsockname()[1]
+        with pytest.raises(server.PortInUse):
+            server.bind("127.0.0.1", port)
+    finally:
+        wildcard.close()
