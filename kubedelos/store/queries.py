@@ -22,7 +22,7 @@ CLUSTER_SCOPE_SQL = (
 )
 
 _RUN_SQL = """
-SELECT id, context, status, finished_at, pkg_types, scope,
+SELECT id, context, status, finished_at, pkg_types, scope, trivy_version,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS images_failed
 FROM scan_run
@@ -47,6 +47,7 @@ class Run:
     scope: dict | None
     images: int
     images_failed: int
+    trivy_version: str | None = None
     gaps: list[str] = field(default_factory=list)
 
 
@@ -61,6 +62,7 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
         scope=json.loads(row["scope"]) if row["scope"] else None,
         images=row["images"],
         images_failed=row["images_failed"],
+        trivy_version=row["trivy_version"],
         gaps=[r["text"] for r in gaps.fetchall()],
     )
 

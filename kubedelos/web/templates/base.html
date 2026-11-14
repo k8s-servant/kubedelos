@@ -1,5 +1,6 @@
-{#- The page shell: a sidebar (wordmark, context card with the freshness dot, nav) and the main column, whose <main>
-    holds the page head with the run chips above the content. No inline scripts, styles or handlers. -#}
+{#- The page shell: a sidebar (wordmark, context card with the freshness dot, nav, and a footer naming the shown run's
+    Trivy) and the main column, whose <main> holds the page head with the run chips above the content. No inline
+    scripts, styles or handlers. -#}
 <!doctype html>
 <html lang="en">
 <head>
@@ -35,6 +36,9 @@
           {%- endfor %}
         </ul>
       </nav>
+      {%- endif %}
+      {%- if run is defined and run and run.trivy_version %}
+      <p class="sidebar-foot">Scanned with {{ "a custom Trivy" if run.trivy_version == "custom" else "Trivy v" ~ run.trivy_version }}</p>
       {%- endif %}
     </aside>
     <div class="main">

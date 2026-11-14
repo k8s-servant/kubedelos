@@ -154,6 +154,16 @@ def test_run_counts_distinct_refs(db):
     assert (run.images, run.images_failed) == (2, 1)
 
 
+def test_run_carries_its_trivy_version(db):
+    conn, repo = db
+    pinned = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
+    repo.finish_run(pinned, "ok")
+    custom = repo.start_run("ctx", "ui", "custom", scan_level="os", scope=CLUSTER)
+    repo.finish_run(custom, "ok")
+    assert get_run(conn, "ctx", pinned).trivy_version == "0.76.1"
+    assert newest_run(conn, "ctx", cluster_scope=True).trivy_version == "custom"
+
+
 def test_run_gaps(db):
     conn, repo = db
     run_id = _run(repo)
