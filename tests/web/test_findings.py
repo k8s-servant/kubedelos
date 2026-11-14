@@ -1,7 +1,9 @@
 import re
 from html import unescape
+from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
+import kubedelos.web
 from kubedelos.config import Settings
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
 
@@ -209,3 +211,10 @@ def test_filters_are_one_card_with_severity_pills(client, seed):
     assert '<td class="version nowrap fixed">1.1</td>' in html
     assert re.search(r'<td class="version nowrap">1\.0</td>', html)
     assert re.search(r'<td class="nowrap">\s*(<a [^>]*>)?CVE-0', html)
+
+
+def test_image_column_keeps_a_readable_width_instead_of_collapsing():
+    """overflow-wrap: anywhere alone shrinks the column's min-content to one character per line."""
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    block = re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
+    assert "min-width" in block

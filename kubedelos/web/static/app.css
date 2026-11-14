@@ -876,6 +876,9 @@ select {
 }
 
 .findings .ref {
+  display: inline-block;
+  min-width: 11rem;
+  max-width: 20rem;
   overflow-wrap: anywhere;
 }
 
