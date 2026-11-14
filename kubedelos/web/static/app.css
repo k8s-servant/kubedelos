@@ -940,6 +940,46 @@ select {
   font-size: 0.78125rem;
 }
 
+/* The start form on the scans page reuses the filter grid. Each field says what the saved settings hold, under it. */
+
+.scan-start .card-title {
+  margin-bottom: 0.75rem;
+}
+
+.filter-pkg {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3125rem;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.filter-pkg legend {
+  margin-bottom: 0.3125rem;
+  padding: 0;
+  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: 0.04em;
+  line-height: 1.5;
+  text-transform: uppercase;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.6875rem;
+  letter-spacing: normal;
+  text-transform: none;
+  overflow-wrap: anywhere;
+}
+
+.history .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
 /* An image ref breaks after its slashes (the page puts a <wbr> there) and at hyphens; break-word only splits a name
    that still cannot fit, so the column keeps whole names instead of "kindn / etd". */
 

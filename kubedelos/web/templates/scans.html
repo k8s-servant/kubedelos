@@ -1,0 +1,86 @@
+{#- The scans page: the start form (prefilled with the saved settings) and the paged run history. -#}
+{% extends "base.html" %}
+{% block title %}Scans · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Scans</h1></div>{% endblock %}
+{% block content %}
+  <section class="card scan-start" aria-labelledby="start-title">
+    <h2 class="card-title" id="start-title">Start a scan of {{ context }}</h2>
+    <form method="post" action="/scans" class="filters">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <label>Namespaces
+        <input type="text" name="namespaces" value="{{ form.namespaces }}" placeholder="all namespaces">
+        <span class="hint">saved: {{ form.namespaces_saved }}</span>
+      </label>
+      <label>Namespace selector
+        <input type="text" name="namespace_selector" value="{{ form.namespace_selector }}">
+        <span class="hint">saved: {{ form.namespace_selector_saved }}</span>
+      </label>
+      <label>Label selector
+        <input type="text" name="selector" value="{{ form.selector }}">
+        <span class="hint">saved: {{ form.selector_saved }}</span>
+      </label>
+      <label>Exclude images
+        <input type="text" name="exclude_images" value="{{ form.exclude_images }}">
+        <span class="hint">saved: {{ form.exclude_images_saved }}</span>
+      </label>
+      <fieldset class="filter-pkg">
+        <legend>Package types</legend>
+        <div class="pills">
+        {%- for name in pkg_choices %}
+          <label class="pill"><input type="checkbox" name="pkg_types" value="{{ name }}"{% if name in form.pkg_types %} checked{% endif %}>{{ "OS" if name == "os" else name }}</label>
+        {%- endfor %}
+        </div>
+        <span class="hint">saved: {{ form.pkg_types_saved }}</span>
+      </fieldset>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Start scan</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card" aria-labelledby="history-title">
+    <h2 class="card-title" id="history-title">Run history</h2>
+  {% if total == 0 %}
+    <p class="notice">No scans of <strong>{{ context }}</strong> yet.</p>
+  {% elif past_end %}
+    <p class="notice">page {{ page }} is past the end ({{ total }} {{ total | plural("run") }}). <a href="{{ last_page_href }}">Go to the last page</a>.</p>
+  {% else %}
+    <div class="table-wrap">
+      <table class="history">
+        <thead>
+          <tr>
+            <th scope="col">Status</th>
+            <th scope="col">Run</th>
+            <th scope="col">Scope</th>
+            <th scope="col">Packages</th>
+            <th scope="col">Images</th>
+            <th scope="col">Failed</th>
+            <th scope="col">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr>
+            <td><span class="chip{% if row.chip %} {{ row.chip }}{% endif %}">{{ row.status }}</span></td>
+            <td>{% if row.href %}<a href="{{ row.href }}">Run {{ row.id }}</a>{% else %}Run {{ row.id }}{% endif %}</td>
+            <td>{{ describe_scope(row.scope) }}</td>
+            <td>{{ describe_pkg_types(row.pkg_types) }}</td>
+            <td class="num">{{ row.images }}</td>
+            <td class="num">{{ row.failed }}</td>
+            <td class="num">{{ row.duration }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    <nav class="pager" aria-label="Pages">
+      <span>{{ first }}–{{ last }} of {{ total }}</span>
+      <div class="pages">
+        {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
+        <span>page <span class="current" aria-current="page">{{ page }}</span> of {{ last_page }}</span>
+        {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
+      </div>
+    </nav>
+  {% endif %}
+  </section>
+{% endblock %}

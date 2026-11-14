@@ -17,7 +17,7 @@ from fastapi.responses import HTMLResponse
 from kubedelos.store.db import connect_readonly
 
 MAX_ID = 2**63 - 1  # SQLite integers are signed 64-bit; a larger id would raise OverflowError
-NAV = (("Dashboard", "/"), ("Findings", "/findings"))
+NAV = (("Dashboard", "/"), ("Findings", "/findings"), ("Scans", "/scans"))
 
 
 def open_db(request: Request) -> contextlib.closing[sqlite3.Connection]:

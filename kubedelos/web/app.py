@@ -21,7 +21,7 @@ from fastapi.templating import Jinja2Templates
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
 from kubedelos.web.pages import plural, render
-from kubedelos.web.routes import dashboard, findings
+from kubedelos.web.routes import dashboard, findings, scans
 from kubedelos.web.security import Guard, install
 
 _HERE = Path(__file__).parent
@@ -89,5 +89,6 @@ def create_app(
 
     app.include_router(dashboard.router)
     app.include_router(findings.router)
+    app.include_router(scans.router)
     install(app, guard)
     return app
