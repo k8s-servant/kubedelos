@@ -102,14 +102,21 @@ def _run_group(
 
 
 # Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
-# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors.
-_URL_QUERY = re.compile(r"(https?://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?")
-_URL_USERINFO = re.compile(r"(https?://)[^\s\"'/@]+@")
+# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Bearer tokens and
+# ``token=``-style pairs are redacted wherever they appear. Best effort: other shapes are not recognised.
+_URL_QUERY = re.compile(r"([a-z][a-z0-9+.-]*://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
+_URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s\"'/@]+@", re.IGNORECASE)
+_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
+_SECRET_PAIR = re.compile(
+    r"\b((?:access_|refresh_|id_)?token|password|passwd|secret|signature|sig)=[^\s,;&\"']+", re.IGNORECASE
+)
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
 
 
 def _redact(text: str) -> str:
-    return _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
+    """``text`` with URL query strings, URL userinfo, bearer tokens and ``token=``-style values redacted."""
+    text = _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
+    return _SECRET_PAIR.sub(r"\1=<redacted>", _BEARER.sub(r"\1<redacted>", text))
 
 
 def _short(text: str) -> str:
@@ -121,8 +128,9 @@ def error_cause(text: str | None, limit: int = 300) -> str:
     """The cause of a failed Trivy run, as one printable line of at most ``limit`` characters.
 
     Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
-    is on the ``* `` lines of the "N errors occurred:" list below it. URL credentials are redacted. Without those, the ``FATAL`` message, or else the whole text, is used. A cut
-    keeps the end, where the cause is.
+    is on the ``* `` lines of the "N errors occurred:" list below it. Without those, the ``FATAL`` message, or
+    else the whole text, is used. A cut keeps the end, where the cause is. Credentials are redacted as in
+    :func:`_redact`.
     """
     lines = [line.strip() for line in _redact(text or "").splitlines() if line.strip()]
     causes: list[str] = []

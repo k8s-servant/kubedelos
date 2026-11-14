@@ -326,3 +326,17 @@ def test_runner_redacts_url_credentials_in_stored_error(monkeypatch):
 def test_error_cause_redaction_keeps_the_separator_after_the_url():
     text = "1 error occurred:\n\t* remote error: GET https://ghcr.io/token?scope=x&service=ghcr.io: DENIED: denied\n"
     assert error_cause(text) == "remote error: GET https://ghcr.io/token?<redacted>: DENIED: denied"
+
+
+@pytest.mark.parametrize(
+    ("raw", "shown"),
+    [
+        ("oci://user:hunter2@registry.example/app", "oci://<redacted>@registry.example/app"),
+        ("s3://bucket/layer?X-Amz-Signature=abc", "s3://bucket/layer?<redacted>"),
+        ("Authorization: Bearer abc.def-ghi", "Authorization: Bearer <redacted>"),
+        ("refresh token=abc123 rejected", "refresh token=<redacted> rejected"),
+        ("password=hunter2, retrying", "password=<redacted>, retrying"),
+    ],
+)
+def test_error_cause_redacts_other_credential_shapes(raw, shown):
+    assert error_cause(raw) == shown
