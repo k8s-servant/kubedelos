@@ -102,21 +102,30 @@ def _run_group(
 
 
 # Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
-# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Bearer tokens and
-# ``token=``-style pairs are redacted wherever they appear. Best effort: other shapes are not recognised.
+# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Authorization header
+# values, bearer tokens, JWTs and ``token=`` / ``token: ``-style pairs are redacted wherever they appear, including
+# JSON-quoted keys. Best effort: other shapes are not recognised.
 _URL_QUERY = re.compile(r"([a-z][a-z0-9+.-]*://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
 _URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s\"'/@]+@", re.IGNORECASE)
-_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
-_SECRET_PAIR = re.compile(
-    r"\b((?:access_|refresh_|id_)?token|password|passwd|secret|signature|sig)=[^\s,;&\"']+", re.IGNORECASE
+_JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]*")
+_AUTH_HEADER = re.compile(
+    r"\b(Authorization\"?\s*:\s*\"?)((?:Basic|Bearer|Digest|Negotiate|Token)\s+)?[^\s,;\"']+", re.IGNORECASE
 )
+_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
+_CREDENTIAL_NAMES = r"(?:access_|refresh_|id_)?token|password|passwd|secret|api[-_]?key"
+_SECRET_PAIR = re.compile(rf"\b({_CREDENTIAL_NAMES}|signature|sig)=[^\s,;&\"']+", re.IGNORECASE)
+# Not after a path or host character, so a URL such as ``https://example.com/token: DENIED`` keeps its message.
+_SECRET_COLON = re.compile(rf"(?<![\w/.-])({_CREDENTIAL_NAMES})(\"?\s*:\s*\"?)[^\s,;\"']+", re.IGNORECASE)
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
 
 
 def _redact(text: str) -> str:
-    """``text`` with URL query strings, URL userinfo, bearer tokens and ``token=``-style values redacted."""
+    """``text`` with URL credentials, authorization values, JWTs and ``token=``/``token:``-style values redacted."""
     text = _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
-    return _SECRET_PAIR.sub(r"\1=<redacted>", _BEARER.sub(r"\1<redacted>", text))
+    text = _JWT.sub("<redacted>", text)
+    text = _AUTH_HEADER.sub(lambda m: f"{m[1]}{m[2] or ''}<redacted>", text)
+    text = _BEARER.sub(r"\1<redacted>", text)
+    return _SECRET_COLON.sub(r"\1\2<redacted>", _SECRET_PAIR.sub(r"\1=<redacted>", text))
 
 
 def _short(text: str) -> str:

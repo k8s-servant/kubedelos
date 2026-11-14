@@ -1,9 +1,11 @@
 """Tests for the in-process UI scan runner: one job at a time, cancel, pinned context, redacted errors and the ETA."""
 
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
+from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
 
 from kubedelos.config import Settings
@@ -197,6 +199,49 @@ def test_error_text_is_redacted(settings):
     view = _wait_for(runner, "error")
     assert "SECRET" not in view.error and "tok123" not in view.error
     assert "\n" not in view.error
+
+
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlLXZhbHVl"
+
+
+def test_api_error_shows_only_status_and_reason(settings, caplog):
+    exc = ApiException(status=401, reason="Unauthorized")
+    exc.headers = {"WWW-Authenticate": "Bearer tok123"}
+    exc.body = '{"message": "Bearer tok123 rejected"}'
+    runner = _runner(settings, FakeScan(raises=exc))
+    with caplog.at_level(logging.DEBUG, logger="kubedelos.web"):
+        runner.start({})
+        view = _wait_for(runner, "error")
+    assert view.error == "Kubernetes API error 401: Unauthorized"
+    assert "tok123" not in caplog.text
+
+
+def test_config_error_shows_the_redacted_message(settings):
+    runner = _runner(settings, FakeScan(raises=ConfigException("no context my-cluster, token: tok123")))
+    runner.start({})
+    assert _wait_for(runner, "error").error == "no context my-cluster, token: <redacted>"
+
+
+def test_other_errors_show_their_type_and_a_redacted_message(settings, caplog):
+    runner = _runner(settings, FakeScan(raises=RuntimeError(f"login failed for {JWT}\nretry later")))
+    with caplog.at_level(logging.DEBUG, logger="kubedelos.web"):
+        runner.start({})
+        view = _wait_for(runner, "error")
+    assert view.error == "RuntimeError: login failed for <redacted> retry later"
+    assert JWT not in caplog.text and "<redacted>" in caplog.text  # logged in full, but redacted
+
+
+def test_a_long_error_is_capped(settings):
+    runner = _runner(settings, FakeScan(raises=RuntimeError("x" * 1000)))
+    runner.start({})
+    error = _wait_for(runner, "error").error
+    assert error.startswith("RuntimeError: ") and len(error) <= 300
+
+
+def test_an_error_without_a_message_shows_its_type(settings):
+    runner = _runner(settings, FakeScan(raises=RuntimeError()))
+    runner.start({})
+    assert _wait_for(runner, "error").error == "RuntimeError"
 
 
 def test_shutdown_cancels_and_joins(settings):

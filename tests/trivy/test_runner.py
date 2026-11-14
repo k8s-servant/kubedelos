@@ -292,6 +292,52 @@ def test_error_cause_redacts_an_authorization_header():
     assert cause == "GET https://example.com/x?<redacted> Authorization: Bearer <redacted>"
 
 
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlLXZhbHVl"
+
+
+@pytest.mark.parametrize(
+    ("text", "redacted"),
+    [
+        ("Authorization: Basic dXNlcjpwYXNz", "Authorization: Basic <redacted>"),
+        ("authorization:dXNlcjpwYXNz failed", "authorization:<redacted> failed"),
+        ("Authorization: tok123", "Authorization: <redacted>"),
+    ],
+)
+def test_error_cause_redacts_any_authorization_header_value(text, redacted):
+    assert error_cause(text) == redacted
+
+
+def test_error_cause_redacts_a_jwt():
+    assert error_cause(f"service account {JWT} rejected") == "service account <redacted> rejected"
+
+
+@pytest.mark.parametrize(
+    ("text", "redacted"),
+    [
+        ("token: tok123", "token: <redacted>"),
+        ("Password:hunter2, retry", "Password:<redacted>, retry"),
+        ("SECRET: s3cr3t", "SECRET: <redacted>"),
+        ("api-key: k1 api_key: k2 apikey: k3", "api-key: <redacted> api_key: <redacted> apikey: <redacted>"),
+        ('{"access_token": "tok123"}', '{"access_token": "<redacted>"}'),
+        ("api_key=k1", "api_key=<redacted>"),
+    ],
+)
+def test_error_cause_redacts_colon_style_secrets(text, redacted):
+    assert error_cause(text) == redacted
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Get https://example.com/v2/: connection refused (Basic auth not configured)",
+        "remote error: GET https://example.com/token: DENIED: requested access to the resource is denied",
+        "open /var/run/secret: no such file",
+    ],
+)
+def test_error_cause_leaves_ordinary_text_alone(text):
+    assert error_cause(text) == text
+
+
 def test_runner_keeps_full_stderr_for_error_cause(monkeypatch):
     monkeypatch.setenv("FAKE_TRIVY_STDERR", _NO_HOST)
     monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")

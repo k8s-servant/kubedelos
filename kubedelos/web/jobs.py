@@ -4,23 +4,31 @@ A scan started from the UI runs :func:`kubedelos.scan.service.run_scan` on a dae
 started it returns at once and the page polls :meth:`ScanRunner.view` for progress. ``run_scan`` opens its own kube
 API client and SQLite connection on that thread, so no sqlite object crosses threads. The scan always targets the
 UI's context, never the kubeconfig's current context at click time. Errors are shown through
-:func:`kubedelos.trivy.runner.error_cause`, which redacts credentials and keeps them to one line.
+:func:`kubedelos.trivy.runner.error_cause`, which redacts credentials and keeps them to one line; a Kubernetes API
+error shows only its status and reason, never the response headers or body it carries.
 """
 
 import dataclasses
+import logging
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
 
+from kubernetes.client.exceptions import ApiException
+from kubernetes.config import ConfigException
+
 from kubedelos.config import Settings
 from kubedelos.scan.service import Progress, ScanOutcome, run_scan
-from kubedelos.trivy.runner import error_cause
+from kubedelos.trivy.runner import _redact, error_cause
+
+logger = logging.getLogger("kubedelos.web")
 
 State = Literal["starting", "running", "stopping", "finished", "error"]
 _ACTIVE: frozenset[str] = frozenset({"starting", "running", "stopping"})
 _ETA_MIN_DONE = 5
+_ERROR_LIMIT = 300
 
 
 class ScanBusy(Exception):
@@ -41,6 +49,17 @@ class JobView:
 
 def _utcnow() -> datetime:
     return datetime.now(UTC)
+
+
+def describe_error(exc: BaseException) -> str:
+    """One redacted, printable line for ``exc``, safe to show on a page."""
+    if isinstance(exc, ApiException):  # its str() dumps the response headers and body: show neither
+        return error_cause(f"Kubernetes API error {exc.status}: {exc.reason}", limit=_ERROR_LIMIT)
+    if isinstance(exc, ConfigException):
+        return error_cause(str(exc), limit=_ERROR_LIMIT) or type(exc).__name__
+    prefix = f"{type(exc).__name__}: "
+    message = error_cause(str(exc), limit=_ERROR_LIMIT - len(prefix))
+    return prefix + message if message else type(exc).__name__
 
 
 def eta(started: datetime, now: datetime, done: int, total: int) -> timedelta | None:
@@ -155,7 +174,8 @@ class ScanRunner:
         except BaseException as exc:  # anything, including a failure before the run row exists: never stuck
             with self._lock:
                 job.state = "error"
-                job.error = error_cause(str(exc)) or type(exc).__name__
+                job.error = describe_error(exc)
+            logger.debug("ui scan failed: %s", _redact(str(exc)))
             return
         with self._lock:
             job.run_id = outcome.run_id
