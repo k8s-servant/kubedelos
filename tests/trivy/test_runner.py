@@ -321,3 +321,8 @@ def test_runner_redacts_url_credentials_in_stored_error(monkeypatch):
     result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
     assert "abc" not in result.error
     assert "https://s3.example.com/l?<redacted>" in result.error
+
+
+def test_error_cause_redaction_keeps_the_separator_after_the_url():
+    text = "1 error occurred:\n\t* remote error: GET https://ghcr.io/token?scope=x&service=ghcr.io: DENIED: denied\n"
+    assert error_cause(text) == "remote error: GET https://ghcr.io/token?<redacted>: DENIED: denied"

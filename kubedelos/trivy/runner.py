@@ -103,7 +103,7 @@ def _run_group(
 
 # Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
 # ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors.
-_URL_QUERY = re.compile(r"(https?://[^\s\"'?#]+)\?[^\s\"']*")
+_URL_QUERY = re.compile(r"(https?://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?")
 _URL_USERINFO = re.compile(r"(https?://)[^\s\"'/@]+@")
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
 
