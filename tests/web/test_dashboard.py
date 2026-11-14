@@ -174,7 +174,14 @@ def test_images_with_critical_tile(client, seed):
     _add(seed, run_id, "a", ["CRITICAL", "LOW"])
     _add(seed, run_id, "b", ["LOW"])
     tile = _tile(client.get("/").text, "images-critical")
-    assert "1" in tile and "of 2" in tile
+    assert "1" in tile and "of 2 images scanned" in tile
+
+
+def test_images_with_critical_tile_counts_only_images_that_scanned(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    _add(seed, run_id, "b", status="error")
+    assert "of 1 images scanned" in _tile(client.get("/").text, "images-critical")
 
 
 def test_bricks_link_and_unknown_hidden_when_zero(client, seed):

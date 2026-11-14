@@ -161,3 +161,29 @@ def test_dashboard_links_work(client, seed):
     )
     assert "CVE-1" in html.text and "CVE-2" not in html.text
     assert "1\u20131 of 1" in html.text
+
+
+def test_findings_table_scrolls_inside_its_own_container(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "reg.example.com/app:1", [_f("CVE-1")])
+    html = client.get("/findings").text
+    wrap = re.search(r'<div class="table-wrap">(.*?)</div>', html, re.S)
+    assert wrap and '<table class="findings">' in wrap.group(1)
+
+
+def test_oversized_integers_are_a_400_page_with_security_headers(client, seed):
+    _run(seed)
+    big = "1" + "0" * 20
+    for path in (f"/findings?run_id={big}", f"/?run_id={big}", f"/findings?page={big}"):
+        response = client.get(path)
+        assert response.status_code == 400, path
+        assert "Content-Security-Policy" in response.headers, path
+
+
+def test_hostile_strings_are_escaped_on_the_findings_page(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "reg.example.com/<script>x</script>:1", [_f("CVE-1")], namespaces=("<b>ns</b>",))
+    html = client.get("/findings").text
+    assert "<script>x</script>" not in html and "<b>ns</b>" not in html
+    assert 'title="reg.example.com/&lt;script&gt;x&lt;/script&gt;:1"' in html
+    assert re.search(r"<option[^>]*>&lt;b&gt;ns&lt;/b&gt;</option>", html)
