@@ -1,9 +1,13 @@
 """The `kubedelos` command line, a Typer app."""
 
 import contextlib
+import logging
+import os
+import secrets
 import signal
 import sys
 import threading
+import webbrowser
 from collections.abc import Iterator
 from datetime import timedelta
 from enum import StrEnum
@@ -31,6 +35,8 @@ from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
+from kubedelos.web import server
+from kubedelos.web.app import create_app
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -340,3 +346,51 @@ def registry_test(
         raise typer.Exit(1)
     typer.echo(f"error: {ref.ref}: {result.error_kind}: {detail}", err=True)
     raise typer.Exit(2)
+
+
+@app.command()
+def ui(
+    port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 9370,
+    host: Annotated[
+        str, typer.Option(help="Loopback address to listen on: 127.0.0.1, ::1 or localhost.")
+    ] = "127.0.0.1",
+    no_browser: Annotated[bool, typer.Option("--no-browser", help="Do not open the browser.")] = False,
+    context: Annotated[str | None, typer.Option(help="Kubeconfig context to show.")] = None,
+    kubeconfig: Annotated[Path | None, typer.Option(help="Path to the kubeconfig file.")] = None,
+) -> None:
+    """Serve the local web UI for the current kube-context, on loopback only.
+
+    The address carries a one-time token; the first visit swaps it for a session cookie.
+    Set KUBEDELOS_LOG_LEVEL=info to print an access line per request on stderr.
+    """
+    if host not in server.LOOPBACK:
+        typer.echo("error: --host must be 127.0.0.1, ::1 or localhost", err=True)
+        raise typer.Exit(2)
+    settings = _load_settings(context=context, kubeconfig=kubeconfig)
+    try:
+        name = _one_line(kube_client.load(settings).current_context())
+        connect(settings.db_path).close()  # creates the database and runs the migrations
+    except Exception as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    token = secrets.token_urlsafe(32)
+    try:
+        sock = server.bind(host, port)
+    except server.PortInUse as exc:
+        typer.echo(f"error: port {port} is in use; pass --port", err=True)
+        raise typer.Exit(2) from exc
+    except OSError as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    if os.environ.get("KUBEDELOS_LOG_LEVEL", "").lower() == "info":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        web_log = logging.getLogger("kubedelos.web")
+        web_log.addHandler(handler)
+        web_log.setLevel(logging.INFO)
+    address = server.url(host, port, token)
+    typer.echo(f"kubedelos ui for context {name}: {address}")
+    typer.echo("Press Ctrl-C to stop.")
+    if not no_browser:
+        webbrowser.open(address)
+    server.serve(create_app(settings, context=name, token=token, port=port), sock)

@@ -18,6 +18,7 @@
 - Every failed image is listed on stderr with its ref, platform, error kind and error.
 - The table shows `repo:tag` plus a short digest; JSON, CSV and SARIF keep the full ref.
 - Environment variables are documented, including the JSON list format.
+- `kubedelos ui` serves a local web UI (dashboard and findings) on loopback only. The printed URL carries a one-time token that is swapped for a session cookie; `KUBEDELOS_LOG_LEVEL=info` prints an access line per request on stderr.
 
 ### Bug Fixes
 

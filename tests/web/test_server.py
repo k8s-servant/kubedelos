@@ -1,0 +1,58 @@
+import socket
+
+import pytest
+import uvicorn
+
+from kubedelos.web import server
+
+
+def test_bind_port_in_use_raises():
+    first = server.bind("127.0.0.1", 0)
+    try:
+        port = first.getsockname()[1]
+        with pytest.raises(server.PortInUse) as exc:
+            server.bind("127.0.0.1", port)
+        assert exc.value.port == port
+    finally:
+        first.close()
+
+
+def test_url_forms():
+    assert server.url("127.0.0.1", 9370, "tok") == "http://127.0.0.1:9370/?token=tok"
+    assert server.url("::1", 9370, "tok") == "http://[::1]:9370/?token=tok"
+    assert server.url("localhost", 9370, "tok") == "http://localhost:9370/?token=tok"
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
+def test_bind_ipv6_loopback():
+    sock = server.bind("::1", 0)
+    try:
+        assert sock.family == socket.AF_INET6
+    finally:
+        sock.close()
+
+
+def test_localhost_binds_the_ipv4_loopback():
+    sock = server.bind("localhost", 0)
+    try:
+        assert sock.getsockname()[0] == "127.0.0.1"
+    finally:
+        sock.close()
+
+
+def test_serve_turns_the_access_log_off_so_the_token_is_never_logged(monkeypatch):
+    seen = {}
+
+    class FakeServer:
+        def __init__(self, config):
+            seen["config"] = config
+
+        def run(self, sockets=None):
+            seen["sockets"] = sockets
+
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    sentinel = object()
+    server.serve(object(), sentinel)  # type: ignore[arg-type]
+    assert seen["config"].access_log is False
+    assert seen["config"].workers == 1
+    assert seen["sockets"] == [sentinel]
