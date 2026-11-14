@@ -49,6 +49,7 @@ def test_query_plans_use_indexes(tmp_path):
         "kpis": lambda: queries.kpis(conn, run_id),
         "fix_by_fix": lambda: queries.fix_by_fix(conn, run_id),
         "fix_by_image": lambda: queries.fix_by_image(conn, run_id),
+        "worst_images": lambda: queries.worst_images(conn, run_id),
         "findings_page": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(), 2, per_page=10),
         "findings_page q": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(q="lib"), 1),
         "failed_images": lambda: queries.failed_images(conn, run_id),
