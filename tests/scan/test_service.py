@@ -231,3 +231,25 @@ def test_service_records_scope(env, monkeypatch):
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings.model_copy(update={"selector": "app=web"}), api=_api(), repo=repo)
     assert json.loads(repo.get_run(out.run_id)["scope"])["selector"] == "app=web"
+
+
+def test_service_stores_inventory_warnings(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    settings = settings.model_copy(update={"namespaces": ["default", "missing"]})
+    outcome = service.run_scan(settings, api=_api(), repo=repo)
+    rows = repo.run_warnings(outcome.run_id)
+    assert [(r["text"], r["coverage"]) for r in rows] == [("namespace missing not found", 1)]
+
+
+def test_service_failed_when_storing_warnings_fails(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+
+    def add_warnings(run_id, warnings):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(repo, "add_warnings", add_warnings)
+    with pytest.raises(RuntimeError, match="disk full"):
+        service.run_scan(settings, api=_api(), repo=repo)
+    assert _status(repo, repo.latest_run_id()) == "failed"

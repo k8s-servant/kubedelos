@@ -1,9 +1,13 @@
 """The `kubedelos` command line, a Typer app."""
 
 import contextlib
+import logging
+import os
+import secrets
 import signal
 import sys
 import threading
+import webbrowser
 from collections.abc import Iterator
 from datetime import timedelta
 from enum import StrEnum
@@ -19,6 +23,7 @@ from rich.progress import Progress as RichProgress
 
 from kubedelos import __version__
 from kubedelos.config import Settings
+from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import Severity, is_valid_ref, registry_host
@@ -30,6 +35,8 @@ from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
+from kubedelos.web import server
+from kubedelos.web.app import create_app
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -49,21 +56,6 @@ trivy_app = typer.Typer(help="Manage the pinned Trivy binary.", no_args_is_help=
 app.add_typer(trivy_app, name="trivy")
 registry_app = typer.Typer(help="Check access to container registries.", no_args_is_help=True)
 app.add_typer(registry_app, name="registry")
-
-
-def _login_hint(host: str) -> str:
-    """How to log in to ``host`` so that Docker, and with it kubedelos, can read it."""
-    name = host.split(":", 1)[0]
-    if name.endswith(".azurecr.io"):
-        command = f"az acr login --name {name.split('.', 1)[0]}"
-    elif name == "gcr.io" or name.endswith((".gcr.io", "-docker.pkg.dev")):
-        command = f"gcloud auth configure-docker {host}"
-    elif ".dkr.ecr." in name and name.endswith(".amazonaws.com"):
-        region = name.split(".dkr.ecr.", 1)[1].removesuffix(".amazonaws.com")
-        command = f"aws ecr get-login-password --region {region} | docker login --username AWS --password-stdin {host}"
-    else:
-        command = f"docker login {host}"
-    return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
 
 
 def _load_settings(**flags: Any) -> Settings:
@@ -289,7 +281,7 @@ def scan(
     for host in sorted(
         {registry_host(parse_image_id(row["ref"], "")) for row in failed if row["error_kind"] == "auth"}
     ):
-        typer.echo("hint: " + _login_hint(host), err=True)
+        typer.echo("hint: " + login_hint(host), err=True)
     errors = run["images_error"] or 0
     if errors:
         typer.echo(f"{errors} image(s) failed to scan", err=True)
@@ -347,10 +339,58 @@ def registry_test(
     detail = error_cause(result.error)
     if result.error_kind == "auth":
         typer.echo(f"error: {ref.ref}: authentication failed on {host}: {detail}", err=True)
-        typer.echo("hint: " + _login_hint(host), err=True)
+        typer.echo("hint: " + login_hint(host), err=True)
         raise typer.Exit(1)
     if result.error_kind == "not_found":
         typer.echo(f"error: {ref.ref}: not found on {host}: {detail}", err=True)
         raise typer.Exit(1)
     typer.echo(f"error: {ref.ref}: {result.error_kind}: {detail}", err=True)
     raise typer.Exit(2)
+
+
+@app.command()
+def ui(
+    port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 9370,
+    host: Annotated[
+        str, typer.Option(help="Loopback address to listen on: 127.0.0.1, ::1 or localhost.")
+    ] = "127.0.0.1",
+    no_browser: Annotated[bool, typer.Option("--no-browser", help="Do not open the browser.")] = False,
+    context: Annotated[str | None, typer.Option(help="Kubeconfig context to show.")] = None,
+    kubeconfig: Annotated[Path | None, typer.Option(help="Path to the kubeconfig file.")] = None,
+) -> None:
+    """Serve the local web UI for the current kube-context, on loopback only.
+
+    The address carries a startup token, valid until the server stops; the first visit swaps it for a session cookie.
+    Set KUBEDELOS_LOG_LEVEL=info to print an access line per request on stderr.
+    """
+    if host not in server.LOOPBACK:
+        typer.echo("error: --host must be 127.0.0.1, ::1 or localhost", err=True)
+        raise typer.Exit(2)
+    settings = _load_settings(context=context, kubeconfig=kubeconfig)
+    try:
+        name = _one_line(kube_client.load(settings).current_context())
+        connect(settings.db_path).close()  # creates the database and runs the migrations
+    except Exception as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    token = secrets.token_urlsafe(32)
+    try:
+        sock = server.bind(host, port)
+    except server.PortInUse as exc:
+        typer.echo(f"error: port {port} is in use; pass --port", err=True)
+        raise typer.Exit(2) from exc
+    except OSError as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    if os.environ.get("KUBEDELOS_LOG_LEVEL", "").lower() == "info":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        web_log = logging.getLogger("kubedelos.web")
+        web_log.addHandler(handler)
+        web_log.setLevel(logging.INFO)
+    address = server.url(host, port, token)
+    typer.echo(f"kubedelos ui for context {name}: {address}")
+    typer.echo("Press Ctrl-C to stop.")
+    if not no_browser:
+        webbrowser.open(address)
+    server.serve(create_app(settings, context=name, token=token, port=port), sock)

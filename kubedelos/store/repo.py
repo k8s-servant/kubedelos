@@ -2,11 +2,12 @@
 
 import re
 import sqlite3
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 
 from pydantic import ValidationError
 
+from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import ImageResult, InventoryItem
 from kubedelos.trivy.pins import TRIVY_VERSION
 
@@ -58,6 +59,19 @@ class Repo:
                 (self._now(), context, trigger, trivy_version, scan_level, scope),
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
+
+    def add_warnings(self, run_id: int, warnings: Sequence[InventoryWarning]) -> None:
+        with self._conn:
+            self._conn.executemany(
+                "INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, ?)",
+                [(run_id, w.text, int(w.coverage)) for w in warnings],
+            )
+
+    def run_warnings(self, run_id: int) -> list[sqlite3.Row]:
+        """The inventory warnings recorded for a run, in the order they were raised."""
+        return self._conn.execute(
+            "SELECT text, coverage FROM run_warning WHERE run_id = ? ORDER BY id", (run_id,)
+        ).fetchall()
 
     def add_result(self, run_id: int, item: InventoryItem, result: ImageResult) -> None:
         image = result.image

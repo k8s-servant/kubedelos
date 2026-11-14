@@ -18,9 +18,14 @@
 - Every failed image is listed on stderr with its ref, platform, error kind and error.
 - The table shows `repo:tag` plus a short digest; JSON, CSV and SARIF keep the full ref.
 - Environment variables are documented, including the JSON list format.
+- `kubedelos ui` serves a local web UI (dashboard and findings) on loopback only. The printed URL carries a token that is swapped for a session cookie and stays valid until the server stops (a restart prints a new one); `KUBEDELOS_LOG_LEVEL=info` prints an access line per request on stderr.
+- The UI pages render in under 300 ms on a database of 1,000 images and 100,000 findings; schema migration 5 adds the indexes they need.
+- Each scan run stores the namespaces and resources the inventory could not list, so the UI marks such runs incomplete.
 
 ### Bug Fixes
 
+- The local UI keeps at most 64 sessions, so repeated token visits no longer grow its memory.
+- Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.
 - Valid image refs with an uppercase or IPv6 registry host, repeated separators or a non-sha256 digest are no longer rejected.
 - Locally loaded images (kind's `import-<date>` imageID) are scanned by their tag instead of a digest that no registry has.
 - SIGTERM and SIGHUP no longer leave Trivy scans running and the run stuck in `running`.

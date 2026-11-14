@@ -1,0 +1,9 @@
+{#- One error page for 400, 403 and 404: a heading and a plain message, both escaped. -#}
+{% extends "base.html" %}
+{% block title %}{{ title or "Error" }} · kubedelos{% endblock %}
+{% block content %}
+<section class="error">
+  <h1>{{ title or "Error" }}</h1>
+  <p>{{ message }}</p>
+</section>
+{% endblock %}

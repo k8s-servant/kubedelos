@@ -1,0 +1,105 @@
+{#- The findings page: filter form, sortable table, paging. Every link is built in the route from the current filters. -#}
+{% extends "base.html" %}
+{% block title %}Findings · kubedelos{% endblock %}
+{% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
+{% block content %}
+<h1>Findings</h1>
+{% if not run %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Run <code>kubedelos scan</code> and reload.</p>
+  </section>
+{% else %}
+  {% if os_only %}
+  <p class="notice">this run scanned OS packages only; library findings were not collected</p>
+  {% endif %}
+
+  <form method="get" action="/findings" class="filters">
+    <input type="hidden" name="run_id" value="{{ run.id }}">
+    {%- if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {%- if direction %}<input type="hidden" name="dir" value="{{ direction }}">{% endif %}
+    <fieldset class="filter-severity">
+      <legend>Severity</legend>
+      {%- for name in severities %}
+      <label><input type="checkbox" name="severity" value="{{ name }}"{% if name in selected.severity %} checked{% endif %}> {{ name | title }}</label>
+      {%- endfor %}
+    </fieldset>
+    <label>Namespace
+      <select name="namespace">
+        <option value="">any</option>
+        {%- for ns in namespaces %}
+        <option value="{{ ns }}"{% if ns == selected.namespace %} selected{% endif %}>{{ ns }}</option>
+        {%- endfor %}
+        {%- if selected.namespace and selected.namespace not in namespaces %}
+        <option value="{{ selected.namespace }}" selected>{{ selected.namespace }}</option>
+        {%- endif %}
+      </select>
+    </label>
+    <label>CVE <input type="text" name="cve" value="{{ selected.cve }}"></label>
+    <label>Package <input type="text" name="package" value="{{ selected.package }}"></label>
+    <label>Fix
+      <select name="has_fix">
+        <option value="any"{% if selected.has_fix == "any" %} selected{% endif %}>any</option>
+        <option value="yes"{% if selected.has_fix == "yes" %} selected{% endif %}>has a fix</option>
+        <option value="no"{% if selected.has_fix == "no" %} selected{% endif %}>no fix</option>
+      </select>
+    </label>
+    <label>Package class
+      <select name="pkg">
+        <option value="all"{% if selected.pkg == "all" %} selected{% endif %}>all</option>
+        <option value="os"{% if selected.pkg == "os" %} selected{% endif %}>OS</option>
+        <option value="library"{% if selected.pkg == "library" %} selected{% endif %}>library</option>
+      </select>
+    </label>
+    <label>Search <input type="search" name="q" value="{{ selected.q }}"></label>
+    <button type="submit">Apply filters</button>
+    <a href="{{ clear_href }}">clear filters</a>
+  </form>
+
+  {% if total == 0 %}
+    {% if filtered %}
+    <p class="notice">No findings match these filters. <a href="{{ clear_href }}">clear filters</a></p>
+    {% else %}
+    <p class="notice">No vulnerabilities found in this run.</p>
+    {% endif %}
+  {% elif past_end %}
+    <p class="notice">page {{ page }} is past the end ({{ total }} findings). <a href="{{ last_page_href }}">Go to the last page</a>.</p>
+  {% else %}
+    <p class="findings-count">{{ first }}–{{ last }} of {{ total }}</p>
+    <div class="table-wrap">
+      <table class="findings">
+        <thead>
+          <tr>
+            {%- for h in headers %}
+            <th scope="col"{% if h.aria_sort %} aria-sort="{{ h.aria_sort }}"{% endif %}>
+              {%- if h.href %}<a href="{{ h.href }}">{{ h.label }}</a>{% else %}{{ h.label }}{% endif -%}
+            </th>
+            {%- endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr>
+            <td><span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span></td>
+            <td>
+              {%- set url = row.primary_url | safe_url -%}
+              {%- if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif -%}
+            </td>
+            <td>{{ row.pkg_name }}</td>
+            <td>{{ row.installed }}</td>
+            <td>{{ row.fixed or "" }}</td>
+            <td>{{ row.pkg_class or "unknown" }}</td>
+            <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
+            <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    <nav class="pager" aria-label="Pages">
+      {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
+      <span>page {{ page }} of {{ last_page }}</span>
+      {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
+    </nav>
+  {% endif %}
+{% endif %}
+{% endblock %}

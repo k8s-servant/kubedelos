@@ -169,3 +169,95 @@ def test_registry_test_shows_the_trivy_cause(fake_env, monkeypatch):
         "remote error: GET https://registry.example/token: DENIED: requested access to the resource is denied\n"
     ) in r.stderr
     assert "FATAL" not in r.stderr
+
+
+class _FakeApi:
+    def __init__(self, context="my-cluster", error=None):
+        self._context, self._error = context, error
+
+    def current_context(self):
+        if self._error:
+            raise self._error
+        return self._context
+
+
+@pytest.fixture
+def ui_env(fake_env, monkeypatch):
+    """Fake out kube, the socket, the server and the browser; record what ``ui`` hands them."""
+    from kubedelos import cli
+    from kubedelos.web import server
+
+    calls = {"opened": [], "served": [], "app": {}}
+    monkeypatch.setattr(cli.kube_client, "load", lambda settings: _FakeApi())
+    monkeypatch.setattr(server, "bind", lambda host, port: ("sock", host, port))
+    monkeypatch.setattr(server, "serve", lambda app, sock: calls["served"].append((app, sock)))
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: calls["opened"].append(url))
+
+    def fake_create_app(settings, **kwargs):
+        calls["app"] = kwargs
+        return "the-app"
+
+    monkeypatch.setattr(cli, "create_app", fake_create_app)
+    return calls
+
+
+def test_ui_rejects_non_loopback_host(ui_env):
+    r = CliRunner().invoke(app, ["ui", "--host", "0.0.0.0"])  # noqa: S104 - checks the rejection
+    assert r.exit_code == 2
+    assert "error: --host must be 127.0.0.1, ::1 or localhost" in r.output
+    assert ui_env["served"] == []
+
+
+def test_ui_port_in_use_exits_2(ui_env, monkeypatch):
+    from kubedelos.web import server
+
+    def busy(host, port):
+        raise server.PortInUse(port)
+
+    monkeypatch.setattr(server, "bind", busy)
+    r = CliRunner().invoke(app, ["ui", "--port", "9444"])
+    assert r.exit_code == 2
+    assert "error: port 9444 is in use; pass --port" in r.output
+
+
+def test_ui_bad_context_exits_2(ui_env, monkeypatch):
+    from kubedelos import cli
+
+    monkeypatch.setattr(cli.kube_client, "load", lambda settings: _FakeApi(error=RuntimeError("no such\ncontext")))
+    r = CliRunner().invoke(app, ["ui"])
+    assert r.exit_code == 2
+    assert "error: no such context" in r.output
+
+
+def test_ui_prints_url_and_opens_browser(ui_env):
+    r = CliRunner().invoke(app, ["ui", "--port", "9444"])
+    assert r.exit_code == 0, r.output
+    token = ui_env["app"]["token"]
+    expected = f"http://127.0.0.1:9444/?token={token}"
+    assert f"kubedelos ui for context my-cluster: {expected}" in r.stdout
+    assert "Ctrl-C" in r.stdout
+    assert ui_env["opened"] == [expected]
+    assert ui_env["app"]["context"] == "my-cluster"
+    assert ui_env["app"]["port"] == 9444
+    assert ui_env["served"] == [("the-app", ("sock", "127.0.0.1", 9444))]
+
+
+def test_ui_no_browser_does_not_open_one(ui_env):
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert ui_env["opened"] == []
+
+
+def test_ui_creates_and_migrates_db(ui_env):
+    import sqlite3
+
+    from kubedelos.config import Settings
+    from kubedelos.store.db import MIGRATIONS
+
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    conn = sqlite3.connect(Settings().db_path)
+    try:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    finally:
+        conn.close()

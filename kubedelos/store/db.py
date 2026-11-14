@@ -89,6 +89,28 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE scan_run ADD COLUMN scope TEXT;
     """,
+    # 4: the inventory warnings of each run, so a reader can tell a run that could not see everything.
+    """
+    CREATE TABLE run_warning (
+        id INTEGER PRIMARY KEY,
+        run_id INTEGER NOT NULL REFERENCES scan_run(id),
+        text TEXT NOT NULL,
+        coverage INTEGER NOT NULL CHECK (coverage IN (0, 1))
+    );
+    CREATE INDEX idx_run_warning_run ON run_warning(run_id);
+    """,
+    # 5: the indexes the UI's reads need on a large database. idx_finding_unit holds every column the unit counts,
+    # the fix lists and the findings filter read, keyed by image row then the unit key, so a run's units are read from
+    # the index alone and a page's rows are found by (image row, CVE). It replaces idx_finding_image_result (its prefix)
+    # and idx_finding_severity, which led the planner to read the Critical/High rows of every run in the database.
+    """
+    CREATE INDEX idx_scan_run_context ON scan_run(context, status, id);
+    CREATE INDEX idx_finding_vuln ON finding(vuln_id);
+    CREATE INDEX idx_finding_unit
+        ON finding(image_result_id, vuln_id, pkg_name, installed_version, severity, fixed_version, pkg_class);
+    DROP INDEX idx_finding_image_result;
+    DROP INDEX idx_finding_severity;
+    """,
 ]
 
 
@@ -129,4 +151,13 @@ def connect(path: Path) -> sqlite3.Connection:
         if sidecar.exists():
             sidecar.chmod(0o600)
     _migrate(conn)
+    return conn
+
+
+def connect_readonly(path: Path) -> sqlite3.Connection:
+    """Open an existing database read-only. Never creates, migrates or writes; raises if the file is missing."""
+    # as_uri() percent-escapes spaces and '#', which would otherwise end the URI path.
+    conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA busy_timeout = 5000")
     return conn
