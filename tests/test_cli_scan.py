@@ -253,9 +253,10 @@ def test_failed_images_listed_on_stderr(make_run):
     r = _run()
     assert r.exit_code == 0
     line = next(x for x in r.stderr.splitlines() if x.startswith("error: reg.io/b:1"))
-    assert line.startswith("error: reg.io/b:1 [linux/amd64] auth: UNAUTHORIZED: authentication required y")
-    assert len(line.removeprefix("error: reg.io/b:1 [linux/amd64] auth: ")) <= 200
-    assert "second line" not in r.stderr
+    detail = line.removeprefix("error: reg.io/b:1 [linux/amd64] auth: ")
+    assert detail.startswith("\u2026y")  # the end of the message is kept: that is where the cause is
+    assert detail.endswith("y second line")
+    assert len(detail) <= 300
     assert "1 image(s) failed to scan" in r.stderr
 
 
@@ -365,3 +366,27 @@ def test_cli_scan_invalid_selector_exits_2(make_run):
     r = _run("-l", "x(")
     assert r.exit_code == 2
     assert "invalid label selector" in r.stderr
+
+
+_TRIVY_NO_HOST = (
+    "2026-11-14T08:37:11+02:00\tFATAL\tFatal error\trun error: image scan error: scan error: unable to initialize a "
+    'scan service: unable to find the specified image "reg.io/b:1" in ["remote"]: 1 error occurred:\n'
+    '\t* remote error: Get "https://reg.io/v2/": dial tcp: lookup reg.io: no such host\n\n'
+)
+
+
+def test_failed_image_line_shows_the_trivy_cause(make_run):
+    make_run([], error=True, error_msg=_TRIVY_NO_HOST)
+    r = _run()
+    line = next(x for x in r.stderr.splitlines() if x.startswith("error: reg.io/b:1"))
+    assert (
+        line
+        == 'error: reg.io/b:1 [linux/amd64] auth: remote error: Get "https://reg.io/v2/": dial tcp: lookup reg.io: no such host'
+    )
+
+
+def test_scan_multiline_exception_is_one_line(make_run):
+    make_run([], raises=RuntimeError("trivy failed:\n\tsecond\n\nthird"))
+    r = _run()
+    assert r.exit_code == 2
+    assert "error: trivy failed: second third\n" in r.stderr

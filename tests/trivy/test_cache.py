@@ -217,3 +217,16 @@ def test_no_wait_message_when_nobody_else_holds_the_cache(tmp_path, capfd):
     with TrivyCache(FAKE_TRIVY, tmp_path, java_db=True):
         pass
     assert "waiting" not in capfd.readouterr().err
+
+
+def test_download_failure_shows_the_trivy_cause(tmp_path, monkeypatch):
+    monkeypatch.setenv(
+        "FAKE_TRIVY_DOWNLOAD_FAIL",
+        "2026-11-14T08:37:11+02:00\tFATAL\tFatal error\tinit error: DB error: failed to download vulnerability DB: "
+        "1 error occurred:\n\t* dial tcp: lookup mirror.example: no such host\n",
+    )
+    with pytest.raises(RuntimeError) as exc:
+        TrivyCache(FAKE_TRIVY, tmp_path).__enter__()
+    assert str(exc.value) == (
+        "trivy image --download-db-only failed with exit code 1: dial tcp: lookup mirror.example: no such host"
+    )

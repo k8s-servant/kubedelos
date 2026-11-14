@@ -9,6 +9,7 @@ process group so that a stop or a timeout also reaches its children.
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import threading
@@ -100,9 +101,52 @@ def _run_group(
     return proc.returncode, stdout, stderr
 
 
+# Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
+# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Bearer tokens and
+# ``token=``-style pairs are redacted wherever they appear. Best effort: other shapes are not recognised.
+_URL_QUERY = re.compile(r"([a-z][a-z0-9+.-]*://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
+_URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s\"'/@]+@", re.IGNORECASE)
+_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
+_SECRET_PAIR = re.compile(
+    r"\b((?:access_|refresh_|id_)?token|password|passwd|secret|signature|sig)=[^\s,;&\"']+", re.IGNORECASE
+)
+_ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
+
+
+def _redact(text: str) -> str:
+    """``text`` with URL query strings, URL userinfo, bearer tokens and ``token=``-style values redacted."""
+    text = _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
+    return _SECRET_PAIR.sub(r"\1=<redacted>", _BEARER.sub(r"\1<redacted>", text))
+
+
 def _short(text: str) -> str:
-    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters."""
-    return text.strip()[-_MAX_ERROR_CHARS:]
+    """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters, with URL credentials redacted."""
+    return _redact(text.strip())[-_MAX_ERROR_CHARS:]
+
+
+def error_cause(text: str | None, limit: int = 300) -> str:
+    """The cause of a failed Trivy run, as one printable line of at most ``limit`` characters.
+
+    Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
+    is on the ``* `` lines of the "N errors occurred:" list below it. Without those, the ``FATAL`` message, or
+    else the whole text, is used. A cut keeps the end, where the cause is. Credentials are redacted as in
+    :func:`_redact`.
+    """
+    lines = [line.strip() for line in _redact(text or "").splitlines() if line.strip()]
+    causes: list[str] = []
+    in_list = False  # only the "* " lines of Trivy's "N errors occurred:" list are causes
+    for line in lines:
+        if in_list and line.startswith("* "):
+            causes.append(line[2:])
+        else:
+            in_list = bool(_ERROR_LIST.search(line))
+    if causes:
+        flat = "; ".join(causes)
+    else:
+        flat = " ".join([line.split("\t")[-1] for line in lines if "\tFATAL\t" in line] or lines)
+    flat = " ".join(flat.split())
+    flat = "".join(ch if ch.isprintable() else "?" for ch in flat)
+    return flat if len(flat) <= limit else "\u2026" + flat[-(limit - 1) :]
 
 
 def _classify(stderr: str) -> ErrorKind:

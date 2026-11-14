@@ -29,7 +29,7 @@ from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
-from kubedelos.trivy.runner import scan_image
+from kubedelos.trivy.runner import error_cause, scan_image
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -92,7 +92,7 @@ def trivy_install() -> None:
     try:
         path = ensure_trivy(settings)
     except (TrivyVerificationError, RuntimeError, OSError, httpx.HTTPError) as exc:
-        typer.echo(f"error: {exc}", err=True)
+        typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(1) from exc
     if settings.trivy_path is not None:
         typer.echo(f"Using Trivy at {path} (from KUBEDELOS_TRIVY_PATH; kubedelos pins {TRIVY_VERSION})")
@@ -125,6 +125,11 @@ def _parse_severities(value: str) -> set[str]:
 
 
 _ERROR_LINE_CHARS = 200
+
+
+def _flat(exc: BaseException) -> str:
+    """``exc`` as one printable line; some messages carry a multi-line Trivy or validation report."""
+    return "".join(ch if ch.isprintable() else "?" for ch in " ".join(str(exc).split()))
 
 
 @contextlib.contextmanager
@@ -257,7 +262,7 @@ def scan(
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None
     except Exception as exc:
-        typer.echo(f"error: {exc}", err=True)
+        typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
 
     for warning in outcome.warnings:
@@ -278,7 +283,7 @@ def scan(
 
     for row in failed:
         typer.echo(
-            f"error: {_one_line(row['ref'], 512)} [{row['platform']}] {row['error_kind']}: {_one_line(row['error'])}",
+            f"error: {_one_line(row['ref'], 512)} [{row['platform']}] {row['error_kind']}: {error_cause(row['error'])}",
             err=True,
         )
     for host in sorted(
@@ -333,13 +338,13 @@ def registry_test(
         typer.echo("cancelled", err=True)
         raise typer.Exit(130) from None
     except Exception as exc:
-        typer.echo(f"error: {exc}", err=True)
+        typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
 
     if result.status == "ok":
         typer.echo(f"ok: {ref.ref} is readable ({len(result.findings)} findings)")
         return
-    detail = _one_line(result.error)
+    detail = error_cause(result.error)
     if result.error_kind == "auth":
         typer.echo(f"error: {ref.ref}: authentication failed on {host}: {detail}", err=True)
         typer.echo("hint: " + _login_hint(host), err=True)
