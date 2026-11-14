@@ -3,7 +3,7 @@ import io
 import json
 
 from kubedelos import __version__
-from kubedelos.output import render_csv, render_json, render_sarif, render_table
+from kubedelos.output import render_csv, render_json, render_sarif, render_table, short_image
 
 
 def _row(**kw):
@@ -108,3 +108,9 @@ def test_render_table_shows_tag_and_short_digest_but_other_formats_keep_full_ref
     assert next(csv.DictReader(io.StringIO(render_csv([row]))))["image"] == f"reg.io/a@{digest}"
     uri = json.loads(render_sarif([row]))["runs"][0]["results"][0]["locations"][0]["physicalLocation"]
     assert uri["artifactLocation"]["uri"] == f"reg.io/a@{digest}"
+
+
+def test_short_image_is_public():
+    row = {"repo": "reg.example.com/app", "tag": "1", "digest": "sha256:" + "a" * 64, "image": "ref"}
+    assert short_image(row) == "reg.example.com/app:1@sha256:aaaaaaaa"
+    assert short_image({"repo": "", "image": "ref"}) == "ref"

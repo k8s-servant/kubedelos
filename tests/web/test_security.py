@@ -216,9 +216,9 @@ def test_csrf_garbled_form_is_403(client):
 def test_access_log_has_no_query_string(anon, token, caplog):
     caplog.set_level(logging.INFO, logger="kubedelos.web")
     anon.get(f"/?token={token}", follow_redirects=False)
-    anon.get("/findings?q=x")
+    anon.get("/nowhere?q=x")
     messages = [record.getMessage() for record in caplog.records if record.name == "kubedelos.web"]
-    assert messages == ["GET / 303", "GET /findings 404"]
+    assert messages == ["GET / 303", "GET /nowhere 404"]
     for record in caplog.records:
         assert token not in record.getMessage()
         assert "q=x" not in record.getMessage()

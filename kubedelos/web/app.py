@@ -62,7 +62,7 @@ def create_app(
     settings: Settings, *, context: str, token: str, port: int, clock: Callable[[], datetime] = _utcnow
 ) -> FastAPI:
     """Build the UI for one kube-context. ``token`` is the startup secret; ``port`` is what the Host check expects."""
-    from kubedelos.web.routes import dashboard  # the routes import this module's helpers, so import them late
+    from kubedelos.web.routes import dashboard, findings  # the routes import this module's helpers, so import them late
 
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     guard = Guard(token, port)
@@ -80,6 +80,7 @@ def create_app(
         return render(request, "error.html", {"title": "Bad request", "message": f"invalid parameter: {name}"}, 400)
 
     app.include_router(dashboard.router)
+    app.include_router(findings.router)
     install(app, guard)
     return app
 

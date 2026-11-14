@@ -382,3 +382,46 @@ th {
 .failed-hint {
   color: var(--muted, inherit);
 }
+
+/* Findings page */
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 0.75rem 1rem;
+  margin: 1rem 0;
+}
+
+.filters label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+
+.filter-severity {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  margin: 0;
+  border: 1px solid var(--border);
+  border-radius: 0.25rem;
+}
+
+.filter-severity label {
+  flex-direction: row;
+  align-items: center;
+}
+
+.findings-count {
+  color: var(--muted, inherit);
+}
+
+.findings .ref {
+  overflow-wrap: anywhere;
+}
+
+.pager {
+  display: flex;
+  gap: 1rem;
+  margin: 1rem 0;
+}

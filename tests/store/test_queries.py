@@ -11,9 +11,11 @@ from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
+    FindingFilter,
     RunNotShown,
     auth_failed_refs,
     failed_images,
+    findings_page,
     fix_by_fix,
     fix_by_image,
     get_run,
@@ -21,6 +23,7 @@ from kubedelos.store.queries import (
     newest_run,
     no_fix_summary,
     previous_comparable,
+    run_namespaces,
 )
 from kubedelos.store.repo import Repo
 
@@ -200,14 +203,19 @@ def _add_findings(repo, run_id, ref, platform, findings):
     repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status="ok", findings=findings))
 
 
-def test_kpis_counting_units(db):
-    conn, repo = db
-    run_id = _run(repo)
+def _seed_units(repo, run_id):
+    """Three finding units: CVE-1 on image a (two targets, two platforms), CVE-2 and CVE-3 on image b."""
     _add_findings(
         repo, run_id, "a", "linux/amd64", [_finding("CVE-1", "CRITICAL"), _finding("CVE-1", "CRITICAL", "jar")]
     )
     _add_findings(repo, run_id, "a", "linux/arm64", [_finding("CVE-1", "CRITICAL")])
     _add_findings(repo, run_id, "b", "linux/amd64", [_finding("CVE-2", "HIGH"), _finding("CVE-3", "LOW")])
+
+
+def test_kpis_counting_units(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _seed_units(repo, run_id)
     _add(repo, run_id, "c", "linux/amd64", status="error")
     got = kpis(conn, run_id)
     assert (got.critical, got.high, got.images, got.images_with_critical, got.findings) == (1, 1, 3, 1, 3)
@@ -418,3 +426,197 @@ def test_auth_failed_refs_ignores_other_failures(db):
     for i in range(30):
         _add(repo, run_id, f"reg.example.com/app{i:02d}:1", "linux/amd64", status="error")
     assert auth_failed_refs(conn, run_id) == []
+
+
+def _fk(vuln, sev, *, pkg="openssl", version="1", fixed=None, pkg_class=None):
+    return Finding(
+        vuln_id=vuln,
+        pkg_name=pkg,
+        installed_version=version,
+        fixed_version=fixed,
+        severity=Severity(sev),
+        target="t",
+        pkg_type="os",
+        pkg_class=pkg_class,
+    )
+
+
+def _page(conn, run_id, **filters):
+    rows, total = findings_page(conn, run_id, FindingFilter(**filters), 1)
+    return [(r["ref"], r["vuln_id"]) for r in rows], total
+
+
+def test_findings_page_units_and_total(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _seed_units(repo, run_id)
+    rows, total = findings_page(conn, run_id, FindingFilter(), 1)
+    assert total == 3
+    assert [(r["ref"], r["vuln_id"], r["severity"]) for r in rows] == [
+        ("a", "CVE-1", "CRITICAL"),
+        ("b", "CVE-2", "HIGH"),
+        ("b", "CVE-3", "LOW"),
+    ]
+    assert rows[0]["targets"].split(",").__len__() == 2
+    assert rows[0]["namespaces"] == '["ns"]'
+
+
+def _filter_dataset(repo, run_id):
+    _add_in(
+        repo, run_id, "web-img",
+        [
+            _fk("CVE-1", "CRITICAL", fixed="2", pkg_class="os"),
+            _fk("CVE-2", "LOW", pkg="requests", pkg_class="library"),
+            _fk("CVE-3", "MEDIUM", pkg="zlib"),
+        ],
+        namespaces=("web",),
+    )  # fmt: skip
+    _add_in(repo, run_id, "db-img", [_fk("CVE-1", "CRITICAL", fixed="2", pkg_class="os")], namespaces=("db", "web"))
+
+
+def test_findings_filters(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _filter_dataset(repo, run_id)
+    assert _page(conn, run_id)[1] == 4
+    assert _page(conn, run_id, severities=("CRITICAL",))[1] == 2
+    assert _page(conn, run_id, severities=("LOW", "MEDIUM"))[1] == 2
+    assert _page(conn, run_id, namespace="db") == ([("db-img", "CVE-1")], 1)
+    assert _page(conn, run_id, namespace="web")[1] == 4
+    assert _page(conn, run_id, namespace="nope")[1] == 0
+    assert _page(conn, run_id, cve="CVE-2") == ([("web-img", "CVE-2")], 1)
+    assert _page(conn, run_id, package="zlib") == ([("web-img", "CVE-3")], 1)
+    assert _page(conn, run_id, has_fix="yes")[1] == 2
+    assert _page(conn, run_id, has_fix="no")[1] == 2
+    assert _page(conn, run_id, has_fix="any")[1] == 4
+    assert _page(conn, run_id, pkg="os")[1] == 2
+    assert _page(conn, run_id, pkg="library") == ([("web-img", "CVE-2")], 1)
+    assert _page(conn, run_id, pkg="all")[1] == 4  # NULL pkg_class (CVE-3) shows only here
+    assert _page(conn, run_id, q="db-")[1] == 1
+    assert _page(conn, run_id, q="cve-3")[1] == 1
+    assert _page(conn, run_id, q="requests")[1] == 1
+    assert _page(conn, run_id, severities=("CRITICAL",), has_fix="yes", namespace="db")[1] == 1
+
+
+def test_findings_namespaces_column_lists_every_namespace(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _filter_dataset(repo, run_id)
+    rows, _ = findings_page(conn, run_id, FindingFilter(q="db-img"), 1)
+    assert rows[0]["namespaces"] == '["db","web"]'
+    assert run_namespaces(conn, run_id) == ["db", "web"]
+
+
+def test_findings_sort_each_key_and_direction(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(
+        repo, run_id, "b-img", [_fk("CVE-2", "LOW", pkg="aaa", fixed="9"), _fk("CVE-9", "HIGH", pkg="ccc")], ("zz",)
+    )
+    _add_in(repo, run_id, "a-img", [_fk("CVE-5", "MEDIUM", pkg="bbb", fixed="3")], ("mm", "aa"))
+
+    def order(sort, desc):
+        rows, _ = findings_page(conn, run_id, FindingFilter(sort=sort, desc=desc), 1)
+        return [r["vuln_id"] for r in rows]
+
+    assert order("severity", True) == ["CVE-9", "CVE-5", "CVE-2"]
+    assert order("severity", False) == ["CVE-2", "CVE-5", "CVE-9"]
+    assert order("cve", False) == ["CVE-2", "CVE-5", "CVE-9"]
+    assert order("cve", True) == ["CVE-9", "CVE-5", "CVE-2"]
+    assert order("package", False) == ["CVE-2", "CVE-5", "CVE-9"]
+    assert order("package", True) == ["CVE-9", "CVE-5", "CVE-2"]
+    assert order("image", False) == ["CVE-5", "CVE-2", "CVE-9"]
+    assert order("image", True) == ["CVE-2", "CVE-9", "CVE-5"]
+    assert order("namespace", False) == ["CVE-5", "CVE-2", "CVE-9"]  # a-img's smallest namespace is aa
+    assert order("namespace", True) == ["CVE-2", "CVE-9", "CVE-5"]
+    assert order("fixed", False) == ["CVE-5", "CVE-2", "CVE-9"]  # a fix is never sorted after its absence
+    assert order("fixed", True) == ["CVE-2", "CVE-5", "CVE-9"]
+
+
+def test_findings_default_order_breaks_ties_by_cve_then_image(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "y", [_fk("CVE-2", "HIGH"), _fk("CVE-1", "HIGH")])
+    _add_in(repo, run_id, "x", [_fk("CVE-2", "HIGH")])
+    assert _page(conn, run_id)[0] == [("y", "CVE-1"), ("x", "CVE-2"), ("y", "CVE-2")]
+
+
+def test_findings_paging_total_matches_rows(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(repo, run_id, "big", [_fk(f"CVE-{i:03}", "HIGH") for i in range(250)])
+    sizes = []
+    for page in (1, 2, 3):
+        rows, total = findings_page(conn, run_id, FindingFilter(), page)
+        sizes.append((len(rows), total))
+    assert sizes == [(100, 250), (100, 250), (50, 250)]
+    rows, total = findings_page(conn, run_id, FindingFilter(), 4)
+    assert (rows, total) == ([], 250)
+    rows, total = findings_page(conn, run_id, FindingFilter(), 1, per_page=10)
+    assert (len(rows), total) == (10, 250)
+
+
+def test_q_matches_wildcards_literally(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_in(
+        repo, run_id, "img",
+        [_fk("CVE-1", "LOW", pkg="lib_a"), _fk("CVE-2", "LOW", pkg="libxa"), _fk("CVE-3", "LOW", pkg="100%")],
+    )  # fmt: skip
+    assert _page(conn, run_id, q="_a") == ([("img", "CVE-1")], 1)
+    assert _page(conn, run_id, q="%") == ([("img", "CVE-3")], 1)
+    assert _page(conn, run_id, q="\\")[1] == 0
+
+
+def test_findings_page_other_runs_do_not_leak(db):
+    conn, repo = db
+    first = _run(repo)
+    _add_in(repo, first, "old", [_fk("CVE-1", "LOW")])
+    second = _run(repo)
+    _add_in(repo, second, "new", [_fk("CVE-2", "LOW")], namespaces=("other",))
+    assert _page(conn, second) == ([("new", "CVE-2")], 1)
+    assert _page(conn, second, namespace="ns")[1] == 0
+    assert run_namespaces(conn, second) == ["other"]
+
+
+def __keys(rows):
+    return [(r["ref"], r["vuln_id"], r["pkg_name"], r["installed_version"]) for r in rows]
+
+
+def _keys(rows):
+    return [(r["ref"], r["vuln_id"], r["pkg_name"], r["installed_version"]) for r in rows]
+
+
+def test_findings_deep_pages_follow_the_same_order_in_every_sort(db):
+    conn, repo = db
+    run_id = _run(repo)
+    sevs = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    for n, ns in enumerate(("zz", "aa", "mm")):
+        findings = [
+            _fk(f"CVE-{i % 40:03}", sevs[i % 4], pkg=f"p{i % 7}", version=str(i), fixed="2" if i % 3 else None)
+            for i in range(90)
+        ]
+        _add_in(repo, run_id, f"img{n}", findings, namespaces=(ns,))
+    for sort in ("severity", "cve", "package", "image", "namespace", "fixed"):
+        for desc in (True, False):
+            f = FindingFilter(sort=sort, desc=desc)
+            whole, total = findings_page(conn, run_id, f, 1, per_page=1000)
+            assert total == 270
+            paged = []
+            for page in (1, 2, 3, 4, 5):
+                rows, page_total = findings_page(conn, run_id, f, page, per_page=60)
+                assert page_total == 270
+                paged += _keys(rows)
+            assert paged == _keys(whole), (sort, desc)
+            assert len(set(paged)) == 270
+
+
+def test_findings_page_rows_match_finding_units(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _seed_units(repo, run_id)
+    units = conn.execute(f"WITH u AS ({FINDING_UNITS_SQL}) SELECT * FROM u", {"run": run_id}).fetchall()  # noqa: S608
+    rows, _ = findings_page(conn, run_id, FindingFilter(), 1)
+    columns = units[0].keys()
+    got = {tuple(r[c] for c in columns) for r in rows}
+    assert got == {tuple(u[c] for c in columns) for u in units}

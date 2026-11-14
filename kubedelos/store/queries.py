@@ -9,6 +9,7 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal
 
 RESULT_STATUSES = ("ok", "partial")
 _STATUS_SQL = "(" + ", ".join(f"'{s}'" for s in RESULT_STATUSES) + ")"
@@ -342,3 +343,161 @@ def auth_failed_refs(conn: sqlite3.Connection, run_id: int) -> list[str]:
         (run_id,),
     )
     return [row["ref"] for row in rows]
+
+
+@dataclass(frozen=True)
+class FindingFilter:
+    """What the findings page narrows to and how it orders the result. Empty values mean "no filter"."""
+
+    severities: tuple[str, ...] = ()
+    namespace: str | None = None
+    cve: str | None = None
+    package: str | None = None
+    has_fix: Literal["any", "yes", "no"] = "any"
+    pkg: Literal["all", "os", "library"] = "all"
+    q: str | None = None
+    sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] = "severity"
+    desc: bool = True
+
+
+# The distinct namespaces of each image in the run, as a sorted JSON array plus the smallest one (for sorting). Inner
+# JOIN: an image with no workload simply has no row here, and the page joins it back with a LEFT JOIN on a CTE of at
+# most one row per image, which stays cheap where a LEFT JOIN on ``workload`` itself did not.
+_REF_NAMESPACES_SQL = """
+SELECT ref, MIN(namespace) AS first_ns, json_group_array(namespace) AS namespaces
+FROM (SELECT DISTINCT r.ref, w.namespace FROM image_result r JOIN workload w ON w.image_result_id = r.id
+      WHERE r.run_id = :run ORDER BY r.ref, w.namespace)
+GROUP BY ref
+"""
+
+# The ORDER BY terms of each sort key: (expression, follows the requested direction). The NULL guards always sort
+# NULLs last, and the tie-breaks (CVE, then image, then the rest of the unit key) always ascend, so paging is stable.
+_SORT_TERMS = {
+    "severity": (("{p}sev_rank", True),),
+    "cve": (("{p}vuln_id", True),),
+    "package": (("{p}pkg_name", True),),
+    "image": (("{p}ref", True),),
+    "namespace": (("{p}first_ns IS NULL", False), ("{p}first_ns", True)),
+    "fixed": (("NULLIF({p}fixed_version, '') IS NULL", False), ("{p}fixed_version", True)),
+}
+_TIE_BREAK_TERMS = tuple((f"{{p}}{c}", False) for c in ("vuln_id", "ref", "pkg_name", "installed_version"))
+
+
+def _order_sql(f: FindingFilter, prefix: str = "", *, reverse: bool = False) -> str:
+    """The ORDER BY list for ``f``; ``reverse`` gives the exact opposite order, to read a deep page from the far end."""
+    terms = []
+    for expr, follows in _SORT_TERMS[f.sort] + _TIE_BREAK_TERMS:
+        descending = (follows and f.desc) != reverse
+        terms.append(f"{expr.format(p=prefix)} {'DESC' if descending else 'ASC'}")
+    return ", ".join(terms)
+
+
+def _like_pattern(text: str) -> str:
+    escaped = text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+# The lean form of the units the filter, sort and count work on: only the columns they read. Grouping the text columns
+# (title, URL, targets) of 100,000 findings costs several times more, so those are fetched for the page's rows alone.
+_LEAN_UNITS_SQL = f"""
+SELECT r.ref, f.vuln_id, f.pkg_name, f.installed_version,
+       MAX(f.fixed_version) AS fixed_version,
+       MAX({_RANK_SQL}) AS sev_rank,
+       MAX(f.pkg_class) AS pkg_class
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+WHERE r.run_id = :run
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
+
+# The text columns of the units on the page, grouped exactly as ``FINDING_UNITS_SQL`` groups them. ``page`` holds the keys.
+_PAGE_DETAIL_SQL = """
+SELECT p.ref AS d_ref, p.vuln_id AS d_vuln, p.pkg_name AS d_pkg, p.installed_version AS d_ver,
+       MAX(r.repo) AS repo, MAX(r.tag) AS tag, MAX(r.digest) AS digest, MAX(f.title) AS title,
+       MAX(f.primary_url) AS primary_url, group_concat(DISTINCT f.target) AS targets
+FROM page p
+JOIN image_result r ON r.run_id = :run AND r.ref = p.ref
+JOIN finding f ON f.image_result_id = r.id AND f.vuln_id = p.vuln_id AND f.pkg_name IS p.pkg_name
+  AND f.installed_version IS p.installed_version
+GROUP BY p.ref, p.vuln_id, p.pkg_name, p.installed_version
+"""
+
+
+def _filtered_cte(f: FindingFilter, run_id: int) -> tuple[str, dict[str, object]]:
+    """``WITH ... filtered AS (...)``: the lean units of the run, with their namespaces, that pass the filter."""
+    where: list[str] = []
+    params: dict[str, object] = {"run": run_id}
+    if f.severities:
+        ranks = {f"rank{i}": 4 - _SEVERITIES.index(name) for i, name in enumerate(f.severities)}
+        where.append("u.sev_rank IN (" + ", ".join(f":{k}" for k in ranks) + ")")
+        params.update(ranks)
+    if f.namespace:
+        where.append("EXISTS (SELECT 1 FROM json_each(ns.namespaces) WHERE value = :namespace)")
+        params["namespace"] = f.namespace
+    if f.cve:
+        where.append("u.vuln_id = :cve")
+        params["cve"] = f.cve
+    if f.package:
+        where.append("u.pkg_name = :package")
+        params["package"] = f.package
+    if f.has_fix != "any":
+        where.append("COALESCE(u.fixed_version, '') " + ("<> ''" if f.has_fix == "yes" else "= ''"))
+    if f.pkg != "all":
+        where.append("u.pkg_class = :pkg_class")
+        params["pkg_class"] = f.pkg
+    if f.q:
+        where.append("(u.ref LIKE :q ESCAPE '\\' OR u.vuln_id LIKE :q ESCAPE '\\' OR u.pkg_name LIKE :q ESCAPE '\\')")
+        params["q"] = _like_pattern(f.q)
+    clause = " WHERE " + " AND ".join(where) if where else ""
+    severity = _SEVERITY_OF_RANK_SQL.format(rank="u.sev_rank")
+    cte = (
+        f"WITH units AS MATERIALIZED ({_LEAN_UNITS_SQL}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
+        f" filtered AS (SELECT u.*, {severity} AS severity, COALESCE(ns.namespaces, '[]') AS namespaces, ns.first_ns"
+        f" FROM units u LEFT JOIN ns ON ns.ref = u.ref{clause})"
+    )
+    return cte, params
+
+
+def _page_sql(cte: str, f: FindingFilter, *, window: bool, reverse: bool = False) -> str:
+    """The page query: pick the page's keys from the lean set, then fetch the text columns for those rows only."""
+    total = ", COUNT(*) OVER () AS total" if window else ""
+    return (
+        f"{cte}, page AS MATERIALIZED (SELECT *{total} FROM filtered"  # noqa: S608 - only module constants are interpolated
+        f" ORDER BY {_order_sql(f, reverse=reverse)} LIMIT :limit OFFSET :offset), detail AS ({_PAGE_DETAIL_SQL})"
+        " SELECT p.*, d.repo, d.tag, d.digest, d.title, d.primary_url, d.targets FROM page p"
+        " JOIN detail d ON d.d_ref = p.ref AND d.d_vuln = p.vuln_id AND d.d_pkg IS p.pkg_name"
+        f" AND d.d_ver IS p.installed_version ORDER BY {_order_sql(f, 'p.', reverse=reverse)}"
+    )
+
+
+def findings_page(
+    conn: sqlite3.Connection, run_id: int, f: FindingFilter, page: int, per_page: int = 100
+) -> tuple[list[sqlite3.Row], int]:
+    """One page of the run's finding units that pass ``f``, and how many pass in all (also for a page past the end)."""
+    cte, params = _filtered_cte(f, run_id)
+    offset = (page - 1) * per_page
+    if page == 1:
+        rows = conn.execute(_page_sql(cte, f, window=True), params | {"limit": per_page, "offset": 0}).fetchall()
+        if rows:
+            return rows, rows[0]["total"]
+        return [], 0
+    total = conn.execute(f"{cte} SELECT COUNT(*) FROM filtered", params).fetchone()[0]  # noqa: S608
+    if offset >= total:
+        return [], total
+    count = min(per_page, total - offset)
+    if offset > total // 2:
+        # Past the middle, a LIMIT/OFFSET sorter would hold almost every row: read from the other end instead.
+        far = {"limit": count, "offset": total - offset - count}
+        rows = conn.execute(_page_sql(cte, f, window=False, reverse=True), params | far).fetchall()
+        return rows[::-1], total
+    return conn.execute(_page_sql(cte, f, window=False), params | {"limit": count, "offset": offset}).fetchall(), total
+
+
+def run_namespaces(conn: sqlite3.Connection, run_id: int) -> list[str]:
+    """Every distinct namespace that has a workload in the run, sorted."""
+    rows = conn.execute(
+        "SELECT DISTINCT w.namespace FROM image_result r JOIN workload w ON w.image_result_id = r.id"
+        " WHERE r.run_id = ? ORDER BY w.namespace",
+        (run_id,),
+    )
+    return [row["namespace"] for row in rows]

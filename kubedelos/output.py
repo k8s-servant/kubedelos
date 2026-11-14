@@ -26,7 +26,7 @@ def _plain(rows: Sequence[Row]) -> list[dict[str, Any]]:
     return [dict(r) for r in rows]
 
 
-def _table_image(r: Row) -> str:
+def short_image(r: Row) -> str:
     """``repo:tag`` plus a short digest: what people recognise, where the full ref is 64 hex characters long."""
     if not r["repo"]:
         return r["image"]
@@ -41,7 +41,7 @@ def render_table(rows: Sequence[Row]) -> str:
     for r in rows:
         cells = (
             f"{r['namespace']}/{r['workload']}",
-            _table_image(r),
+            short_image(r),
             r["vuln_id"],
             r["severity"],
             r["installed_version"],
