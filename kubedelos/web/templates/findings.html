@@ -1,5 +1,6 @@
 {#- The findings page: filter form, sortable table, paging. Every link is built in the route from the current filters. -#}
 {% extends "base.html" %}
+{% from "partials/macros.html" import versions %}
 {% block title %}Findings · kubedelos{% endblock %}
 {% block page_title %}Findings{% endblock %}
 {% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
@@ -82,13 +83,13 @@
           {%- for row in rows %}
           <tr>
             <td><span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span></td>
-            <td class="nowrap">
+            <td class="cve">
               {%- set url = row.primary_url | safe_url -%}
               {%- if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif -%}
             </td>
             <td>{{ row.pkg_name }}</td>
-            <td class="version nowrap">{{ row.installed }}</td>
-            <td class="version nowrap{% if row.fixed %} fixed{% endif %}">{{ row.fixed or "" }}</td>
+            <td class="version">{{ row.installed }}</td>
+            <td class="version{% if row.fixed %} fixed{% endif %}">{% if row.fixed %}{{ versions(row.fixed) }}{% endif %}</td>
             <td>{{ row.pkg_class or "unknown" }}</td>
             <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>

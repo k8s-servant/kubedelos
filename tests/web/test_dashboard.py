@@ -447,7 +447,7 @@ def test_fix_row_installed_shows_first_plus_n(client, seed):
     assert 'title="1.0, 1.1, 1.2"' in row
     installed = _between(row, 'title="1.0, 1.1, 1.2"', "</span></span>")
     assert ">1.0 <" in installed and "+2" in installed
-    assert '<span class="fixed">2.0</span>' in row
+    assert '<span class="fixed"><span class="v">2.0</span></span>' in row
     assert '<span class="sev sev-critical">Critical</span>' in row
 
 
@@ -565,3 +565,28 @@ def test_login_hint_covers_auth_failures_past_the_list_cap(client, seed):
     assert "showing 25 of 28" in html
     assert "<b>x" not in html
     assert unescape(html).count("docker login zz.example.com`") == 1
+
+
+def test_fix_row_keeps_ids_and_versions_whole(client, seed):
+    run_id = _run(seed)
+    _add_fix(seed, run_id, "img", "GHSA-abcd-efgh-ijkl", fixed="1.24.13, 1.26.0-rc.3")
+    row = _between(client.get("/").text, 'data-fix="GHSA-abcd-efgh-ijkl"', "</details>")
+    assert '<span class="cve">GHSA-abcd-efgh-ijkl</span>' in row
+    assert '<span class="fixed"><span class="v">1.24.13</span>, <span class="v">1.26.0-rc.3</span></span>' in row
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    assert re.search(r"\.v \{[^}]*white-space: nowrap;", css)
+    assert re.search(r"\.cve \{[^}]*font-family: var\(--mono\);[^}]*white-space: nowrap;", css)
+    assert "overflow-wrap: anywhere" not in _between(css, ".fix-summary {", "}")
+    assert "overflow-wrap: break-word" in _between(css, ".version {", "}")
+
+
+def test_fix_row_labels_installed_and_fixed_in_on_narrow_screens(client, seed):
+    run_id = _run(seed)
+    _add_fix(seed, run_id, "img", "CVE-9")
+    row = _between(client.get("/").text, 'data-fix="CVE-9"', "</details>")
+    assert '<span class="fix-label">installed </span>1.1' in row
+    assert '<span class="fix-label">fixed in </span><span class="fixed">' in row
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    assert re.search(r"\.fix-unit,\s*\.fix-label \{[^}]*display: none;", css)
+    narrow = css[css.index("@media (max-width: 40rem)") :]
+    assert re.search(r"\.fix-unit,\s*\.fix-label \{[^}]*display: inline;", narrow)

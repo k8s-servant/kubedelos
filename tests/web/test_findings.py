@@ -208,9 +208,9 @@ def test_filters_are_one_card_with_severity_pills(client, seed):
     assert pager.count('aria-current="page"') == 1
     assert re.search(r'aria-current="page">1<', pager)
     assert '<span class="sev sev-high">High</span>' in html
-    assert '<td class="version nowrap fixed">1.1</td>' in html
-    assert re.search(r'<td class="version nowrap">1\.0</td>', html)
-    assert re.search(r'<td class="nowrap">\s*(<a [^>]*>)?CVE-0', html)
+    assert '<td class="version fixed"><span class="v">1.1</span></td>' in html
+    assert re.search(r'<td class="version">1\.0</td>', html)
+    assert re.search(r'<td class="cve">\s*(<a [^>]*>)?CVE-0', html)
 
 
 def test_image_column_keeps_a_readable_width_instead_of_collapsing():
@@ -218,3 +218,18 @@ def test_image_column_keeps_a_readable_width_instead_of_collapsing():
     css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
     block = re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
     assert "min-width" in block
+
+
+def test_versions_wrap_between_versions_and_ids_stay_whole(client, seed):
+    """Only the CVE id stays on one line; a long installed version wraps, a fixed list breaks only at its commas."""
+    run_id = _run(seed)
+    finding = _f("GHSA-abcd-efgh-ijkl").model_copy(update={"fixed_version": "1.24.13, 1.26.0-rc.3"})
+    _put(seed, run_id, "img", [finding])
+    html = client.get(f"/findings?run_id={run_id}").text
+    assert '<td class="version fixed"><span class="v">1.24.13</span>, <span class="v">1.26.0-rc.3</span></td>' in html
+    assert "nowrap" not in html.split("<tbody>")[1]
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    version = re.search(r"\.version \{([^}]*)\}", css).group(1)
+    assert "overflow-wrap: break-word" in version and "max-width: 14rem" in version
+    assert re.search(r"\.cve \{[^}]*font-family: var\(--mono\);[^}]*white-space: nowrap;", css)
+    assert "font-family: var(--mono)" in re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)

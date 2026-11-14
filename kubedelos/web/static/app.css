@@ -415,9 +415,22 @@ main {
   color: var(--ok);
 }
 
+/* Versions wrap only where they must (a long Go pseudo-version); a fixed-in list breaks only at its commas, because
+   each version in it is a no-wrap .v. Vulnerability ids never wrap. */
+
 .version {
+  max-width: 14rem;
   font-family: var(--mono);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+}
+
+.v {
+  white-space: nowrap;
+}
+
+.cve {
+  font-family: var(--mono);
+  white-space: nowrap;
 }
 
 .more {
@@ -458,7 +471,8 @@ tbody tr:hover td {
   background: var(--tint);
 }
 
-/* Dashboard: the KPI tiles, then Fix first beside Worst images (stacked below 960 px). */
+/* Dashboard: the KPI tiles, then Fix first beside Worst images; stacked, Worst images first, below 1600 px, where Fix
+   first would otherwise be too narrow for its package names and fixed-in lists. */
 
 .tiles {
   display: grid;
@@ -565,7 +579,7 @@ tbody tr:hover td {
 
 .row {
   display: grid;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 0.75rem;
   align-items: start;
   margin: 0 0 1rem;
@@ -573,6 +587,20 @@ tbody tr:hover td {
 
 .row > :only-child {
   grid-column: 1 / -1;
+}
+
+.row .worst-images {
+  order: -1;
+}
+
+@media (min-width: 100rem) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) minmax(18rem, 24rem);
+  }
+
+  .row .worst-images {
+    order: 0;
+  }
 }
 
 .card-head {
@@ -602,13 +630,15 @@ tbody tr:hover td {
 
 .fix-head,
 .fix-row {
-  min-width: 38rem;
+  min-width: 44rem;
 }
+
+/* The CVE column fits a 19-character id such as a GHSA one; each row is its own grid, so the tracks are fixed. */
 
 .fix-head,
 .fix-summary {
   display: grid;
-  grid-template-columns: 5.25rem 8.5rem minmax(5rem, 1fr) minmax(4.5rem, 1fr) minmax(4.5rem, 1fr) 3.5rem 5.5rem;
+  grid-template-columns: 5.25rem 9.5rem minmax(6rem, 1.2fr) minmax(5rem, 1fr) minmax(6rem, 1.4fr) 3.5rem 5.5rem;
   gap: 0.5rem;
   align-items: baseline;
   padding: 0.4375rem 0.5rem;
@@ -626,20 +656,18 @@ tbody tr:hover td {
 
 .fix-summary {
   cursor: pointer;
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
 }
 
 .fix-summary:hover {
   background: var(--tint);
 }
 
-.fix-summary > span:nth-child(2) {
-  font-family: var(--mono);
-}
-
-.fix-unit {
+.fix-unit,
+.fix-label {
   display: none;
   color: var(--muted);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 }
 
 .fix-installed,
@@ -686,8 +714,16 @@ tbody tr:hover td {
   list-style: none;
 }
 
-.worst li + li {
-  margin-top: 0.625rem;
+.worst {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(16rem, 1fr));
+  gap: 0.75rem 1.75rem;
+}
+
+@media (min-width: 100rem) {
+  .worst {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .worst a {
@@ -746,12 +782,6 @@ tbody tr:hover td {
 .failed-hint {
   margin: 0.5rem 0 0;
   color: var(--muted);
-}
-
-@media (max-width: 959px) {
-  .row {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 /* Findings: the filters card, severity pills, the table card and the pager. */
@@ -871,12 +901,9 @@ select {
   font-size: 0.78125rem;
 }
 
-.nowrap {
-  white-space: nowrap;
-}
-
 .findings .ref {
   display: inline-block;
+  font-family: var(--mono);
   min-width: 11rem;
   max-width: 20rem;
   overflow-wrap: anywhere;
@@ -927,7 +954,8 @@ select {
     grid-template-columns: 1fr 1fr;
   }
 
-  .fix-unit {
+  .fix-unit,
+  .fix-label {
     display: inline;
   }
 }

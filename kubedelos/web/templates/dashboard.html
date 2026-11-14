@@ -1,6 +1,7 @@
 {#- The dashboard: the run line, the KPI tiles (all findings carries the severity bar and its legend), then Fix first
     beside Worst images. Bars are SVG with their geometry in attributes: the CSP allows no inline style. -#}
 {% extends "base.html" %}
+{% from "partials/macros.html" import versions %}
 {% block title %}Dashboard · kubedelos{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 {% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
@@ -102,14 +103,14 @@
         <summary class="fix-summary">
           <span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span>
           {%- set url = row.primary_url | safe_url %}
-          <span>{% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif %}</span>
-          <span>{{ row.pkg_name or "unknown" }}</span>
+          <span class="cve">{% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif %}</span>
+          <span class="fix-package">{{ row.pkg_name or "unknown" }}</span>
           {%- if row.installed | length > 1 %}
-          <span class="version" title="{{ row.installed | join(', ') }}">{{ row.installed[0] }} <span class="more">+{{ row.installed | length - 1 }}</span></span>
+          <span class="version" title="{{ row.installed | join(', ') }}"><span class="fix-label">installed </span>{{ row.installed[0] }} <span class="more">+{{ row.installed | length - 1 }}</span></span>
           {%- else %}
-          <span class="version">{{ row.installed | join(", ") }}</span>
+          <span class="version"><span class="fix-label">installed </span>{{ row.installed | join(", ") }}</span>
           {%- endif %}
-          <span class="version"><span class="fixed">{{ row.fixed_version }}</span></span>
+          <span class="version"><span class="fix-label">fixed in </span><span class="fixed">{{ versions(row.fixed_version) }}</span></span>
           <span>{{ row.images }} <span class="fix-unit">images</span></span>
           <span>{{ row.namespaces }} <span class="fix-unit">namespaces</span></span>
         </summary>
