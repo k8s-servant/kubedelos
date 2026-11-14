@@ -18,6 +18,7 @@ from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import scan_many
 
 CUSTOM_TRIVY = "custom"
+PHASES = ("inventory", "scanning", "trivy-db", "saving")
 
 
 @dataclass
@@ -26,6 +27,8 @@ class Progress:
     done: int
     errors: int
     current: str | None
+    phase: str = "scanning"  # one of PHASES, in the order a run passes through them
+    cached: int = 0  # cache hits among ``done``; the freshly scanned count is done - cached - errors
 
 
 @dataclass
@@ -49,6 +52,7 @@ def run_scan(
     repo = repo if repo is not None else Repo(db.connect(settings.db_path))
     cancel = cancel if cancel is not None else threading.Event()
 
+    on_progress(Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
     items, warnings = collect(api, settings)
     # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
     with runlock.hold(settings.data_dir) as owner:
@@ -86,16 +90,21 @@ def _scan(
 ) -> int:
     """Persist cached and fresh results for ``items`` and return how many images errored."""
     total = len(items)
-    done = errors = 0
+    done = errors = cached_count = 0
     use_cache = settings.trivy_path is None  # results from an unpinned Trivy never enter or come from the cache
-    on_progress(Progress(total=total, done=0, errors=0, current=None))
+
+    def emit(phase: str, current: str | None = None) -> None:
+        on_progress(Progress(total, done, errors, current, phase=phase, cached=cached_count))
+
+    emit("scanning")
 
     def record(item: InventoryItem, result: ImageResult) -> None:
-        nonlocal done, errors
+        nonlocal done, errors, cached_count
         repo.add_result(run_id, item, result)
         done += 1
         errors += result.status == "error"
-        on_progress(Progress(total=total, done=done, errors=errors, current=result.image.ref))
+        cached_count += result.status == "cached"
+        emit("scanning", result.image.ref)
 
     todo: list[InventoryItem] = []
     for item in items:
@@ -129,10 +138,11 @@ def _scan(
         if result.status == "ok" and use_cache:
             repo.put_cache(result.image.key, result.platform, result, scan_level=settings.scan_level)
 
-    if not todo:  # everything cached or rejected: no Trivy needed
-        return errors
-
-    trivy = ensure_trivy(settings)
-    with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
-        scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
+    if todo:  # otherwise everything was cached or rejected: no Trivy needed
+        emit("trivy-db")
+        trivy = ensure_trivy(settings)
+        with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
+            emit("scanning")
+            scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
+    emit("saving")
     return errors

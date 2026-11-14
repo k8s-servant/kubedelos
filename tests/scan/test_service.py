@@ -87,8 +87,8 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     assert run["status"] == "partial"
     assert run["images_total"] == 2 and run["images_error"] == 1
     assert len(repo.run_findings(out.run_id)) == 1
-    assert [(p.done, p.errors) for p in progress] == [(0, 0), (1, 0), (2, 1)]
-    assert progress[-1].total == 2 and progress[-1].current is not None
+    assert [(p.done, p.errors) for p in progress if p.current] == [(1, 0), (2, 1)]
+    assert progress[-1].total == 2 and progress[-1].phase == "saving"
     assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1), scan_level="library,os") is not None
     assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None  # errors not cached
 
@@ -109,7 +109,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
         ).fetchone()[0]
         == 2
     )
-    assert [p.done for p in progress] == [0, 1, 2]
+    assert [p.done for p in progress if p.current] == [1, 2]
 
 
 def test_service_cancel(env, monkeypatch):
@@ -273,3 +273,35 @@ def test_run_scan_records_an_owner_that_is_live_during_the_scan(env, monkeypatch
     assert owner and live
     assert repo.get_run(out.run_id)["owner"] == owner
     assert not runlock.is_owned(settings.data_dir, owner)
+
+
+def _phases(progress):
+    out: list[str] = []
+    for p in progress:
+        if not out or out[-1] != p.phase:
+            out.append(p.phase)
+    return out
+
+
+def test_progress_reports_phases_in_order_and_counts_cached(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)  # caches both images
+    repo._conn.execute("DELETE FROM image_cache WHERE image_key = ?", (D2,))
+    repo._conn.commit()
+    progress = []
+    service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert _phases(progress) == ["inventory", "scanning", "trivy-db", "scanning", "saving"]
+    assert progress[-1].cached == 1
+    assert progress[-1].done == 2
+
+
+def test_progress_skips_trivy_db_phase_when_everything_is_cached(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    progress = []
+    service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert "trivy-db" not in _phases(progress)
+    assert _phases(progress) == ["inventory", "scanning", "saving"]
+    assert progress[-1].cached == 2
