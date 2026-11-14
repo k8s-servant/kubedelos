@@ -10,7 +10,7 @@ from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
 from kubedelos.kube.inventory import InventoryWarning, collect
 from kubedelos.models import ImageResult, InventoryItem, is_valid_ref
-from kubedelos.store import db
+from kubedelos.store import db, runlock
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
@@ -50,25 +50,28 @@ def run_scan(
     cancel = cancel if cancel is not None else threading.Event()
 
     items, warnings = collect(api, settings)
-    # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
-    run_id = repo.start_run(
-        api.current_context(),
-        trigger,
-        CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
-        scan_level=settings.scan_level,
-        scope=settings.scope,
-    )
-    try:
-        repo.add_warnings(run_id, warnings)
-        errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
-    except KeyboardInterrupt:
-        cancel.set()
-        repo.finish_run(run_id, "cancelled")
-        raise
-    except BaseException:
-        repo.finish_run(run_id, "failed")
-        raise
-    repo.finish_run(run_id, "cancelled" if cancel.is_set() else "partial" if errors else "ok")
+    # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
+    with runlock.hold(settings.data_dir) as owner:
+        # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
+        run_id = repo.start_run(
+            api.current_context(),
+            trigger,
+            CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
+            scan_level=settings.scan_level,
+            scope=settings.scope,
+            owner=owner,
+        )
+        try:
+            repo.add_warnings(run_id, warnings)
+            errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
+        except KeyboardInterrupt:
+            cancel.set()
+            repo.finish_run(run_id, "cancelled")
+            raise
+        except BaseException:
+            repo.finish_run(run_id, "failed")
+            raise
+        repo.finish_run(run_id, "cancelled" if cancel.is_set() else "partial" if errors else "ok")
     return ScanOutcome(run_id=run_id, warnings=warnings)
 
 

@@ -9,6 +9,7 @@ from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubedelos.config import Settings
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity
 from kubedelos.scan import service
+from kubedelos.store import runlock
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from tests.kube.fakes import FakeKubeApi, pod
@@ -253,3 +254,22 @@ def test_service_failed_when_storing_warnings_fails(env, monkeypatch):
     with pytest.raises(RuntimeError, match="disk full"):
         service.run_scan(settings, api=_api(), repo=repo)
     assert _status(repo, repo.latest_run_id()) == "failed"
+
+
+def test_run_scan_records_an_owner_that_is_live_during_the_scan(env, monkeypatch):
+    settings, repo, calls = env
+    seen = []
+
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+        owner = repo.get_run(repo.latest_run_id())["owner"]
+        seen.append((owner, runlock.is_owned(settings.data_dir, owner)))
+        _fake_scan(calls)(
+            items, cache_dir=cache_dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel
+        )
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    [(owner, live)] = seen
+    assert owner and live
+    assert repo.get_run(out.run_id)["owner"] == owner
+    assert not runlock.is_owned(settings.data_dir, owner)

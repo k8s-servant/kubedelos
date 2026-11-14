@@ -50,13 +50,20 @@ class Repo:
         return self._clock().isoformat()
 
     def start_run(
-        self, context: str | None, trigger: str | None, trivy_version: str, *, scan_level: str, scope: str | None = None
+        self,
+        context: str | None,
+        trigger: str | None,
+        trivy_version: str,
+        *,
+        scan_level: str,
+        scope: str | None = None,
+        owner: str | None = None,
     ) -> int:
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope)"
-                " VALUES (?, 'running', ?, ?, ?, ?, ?)",
-                (self._now(), context, trigger, trivy_version, scan_level, scope),
+                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope, owner)"
+                " VALUES (?, 'running', ?, ?, ?, ?, ?, ?)",
+                (self._now(), context, trigger, trivy_version, scan_level, scope, owner),
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
@@ -66,6 +73,11 @@ class Repo:
                 "INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, ?)",
                 [(run_id, w.text, int(w.coverage)) for w in warnings],
             )
+
+    def add_note(self, run_id: int, text: str) -> None:
+        """Record a note of kubedelos' own on a run, such as why it was closed. It says nothing about coverage."""
+        with self._conn:
+            self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, text))
 
     def run_warnings(self, run_id: int) -> list[sqlite3.Row]:
         """The inventory warnings recorded for a run, in the order they were raised."""

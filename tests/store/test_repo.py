@@ -320,3 +320,17 @@ def test_connect_readonly_path_with_space_and_hash(tmp_path):
     conn = connect_readonly(path)
     _OPEN.append(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+
+
+def test_run_records_owner(tmp_path):
+    repo = _repo(tmp_path)
+    assert repo.get_run(repo.start_run("ctx", "cli", "0.76.1", scan_level="os"))["owner"] is None
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", owner="ab" * 16)
+    assert repo.get_run(run)["owner"] == "ab" * 16
+
+
+def test_add_note_stores_a_run_warning(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    repo.add_note(run, "closed by kubedelos")
+    assert [(r["text"], r["coverage"]) for r in repo.run_warnings(run)] == [("closed by kubedelos", 0)]
