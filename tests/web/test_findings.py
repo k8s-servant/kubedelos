@@ -239,3 +239,20 @@ def test_past_end_count_is_pluralised(client, seed):
     run_id = _run(seed)
     _put(seed, run_id, "img", [_f("CVE-1")])
     assert "page 2 is past the end (1 finding)" in client.get(f"/findings?run_id={run_id}&page=2").text
+
+
+def test_filters_are_an_even_grid_with_steady_pills(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "img", [_f("CVE-1")])
+    html = client.get(f"/findings?run_id={run_id}").text
+    actions = re.search(r'<div class="filter-actions">(.*?)</div>', html, re.S)
+    assert actions and '<button type="submit" class="btn">Apply filters</button>' in actions.group(1)
+    assert 'class="clear"' in actions.group(1)
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    filters = re.search(r"\.filters \{([^}]*)\}", css).group(1)
+    assert "display: grid" in filters and "repeat(auto-fill, minmax(10rem, 1fr))" in filters
+    assert "grid-column: span 2" in re.search(r"\.filter-severity \{([^}]*)\}", css).group(1)
+    # The check mark's space is always there, so checking a pill does not move the row; focus shows for keyboards only.
+    assert re.search(r"\.pill::before \{[^}]*width: 0\.75rem;", css)
+    assert re.search(r"\.pill:has\(input:checked\)::before \{\s*content: \"\\2713\";\s*background: none;\s*\}", css)
+    assert ".pill:focus-within" not in css and ".pill:has(input:focus-visible)" in css

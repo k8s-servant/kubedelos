@@ -626,3 +626,9 @@ def test_counts_are_pluralised(client, seed):
     html = client.get("/").text
     assert "2 Critical/High findings have no released fix yet, across 2 images" in html
     assert "of 3 images scanned" in _tile(html, "images-critical")
+
+
+def test_narrow_top_bar_puts_the_context_on_its_own_full_row():
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    narrow = css[css.index("@media (max-width: 479px)") :]
+    assert re.search(r"\.context \{[^}]*flex-basis: 100%;[^}]*margin: 0;", narrow)

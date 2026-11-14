@@ -54,8 +54,10 @@
       </select>
     </label>
     <label>Search <input type="search" name="q" value="{{ selected.q }}"></label>
-    <button type="submit" class="btn">Apply filters</button>
-    <a class="clear" href="{{ clear_href }}">clear filters</a>
+    <div class="filter-actions">
+      <button type="submit" class="btn">Apply filters</button>
+      <a class="clear" href="{{ clear_href }}">clear filters</a>
+    </div>
   </form>
 
   {% if total == 0 %}

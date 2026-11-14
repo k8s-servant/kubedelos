@@ -528,10 +528,18 @@ tbody tr:hover td {
   font-size: 0.9375rem;
 }
 
+/* Tiles stretch to the height of the all findings tile; the change line sits at the bottom of each, level with the
+   legend, so the tiles read as one row instead of four half-empty boxes. */
+
 .tile-change {
-  margin-top: 0.125rem;
+  margin-top: auto;
+  padding-top: 0.125rem;
   color: var(--muted);
   font-size: 0.71875rem;
+}
+
+.tile[data-tile="findings"] .tile-change {
+  margin-top: 0.125rem;
 }
 
 /* The stacked severity bar: SVG rects sized in attributes, and a line of card colour only between segments, so the
@@ -556,11 +564,12 @@ tbody tr:hover td {
 .legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem 0.75rem;
+  gap: 0.125rem 0.625rem;
   margin: 0;
   padding: 0;
   list-style: none;
-  font-size: 0.71875rem;
+  font-size: 0.6875rem;
+  line-height: 1.45;
 }
 
 .legend a {
@@ -571,7 +580,13 @@ tbody tr:hover td {
 }
 
 .legend .sev {
+  gap: 0.3125rem;
   font-size: inherit;
+}
+
+.legend .sev::before {
+  width: 6px;
+  height: 6px;
 }
 
 .legend b {
@@ -773,30 +788,38 @@ tbody tr:hover td {
 
 /* Findings: the filters card, severity pills, the table card and the pager. */
 
+/* The filters are an even grid; Severity spans two cells. Every label row sits at the top of its cell, so the
+   legend is floated: a fieldset otherwise draws its legend lower than the other labels. */
+
 .filters {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: flex-end;
-  gap: 0.75rem 1rem;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(10rem, 1fr));
+  gap: 0.875rem 1rem;
+  align-items: start;
   margin: 0 0 0.75rem;
 }
 
-.filters > label {
+.filters > label,
+.filter-severity legend {
   display: flex;
   flex-direction: column;
-  gap: 0.2rem;
+  gap: 0.3125rem;
   color: var(--muted);
   font-size: 0.6875rem;
   letter-spacing: 0.04em;
+  line-height: 1.5;
   text-transform: uppercase;
 }
 
 .filters > label :is(input, select) {
+  width: 100%;
+  min-width: 0;
   letter-spacing: normal;
   text-transform: none;
 }
 
 .filter-severity {
+  grid-column: span 2;
   min-width: 0;
   margin: 0;
   padding: 0;
@@ -804,12 +827,28 @@ tbody tr:hover td {
 }
 
 .filter-severity legend {
+  float: left;
+  width: 100%;
+  margin-bottom: 0.3125rem;
   padding: 0;
-  margin-bottom: 0.2rem;
-  color: var(--muted);
-  font-size: 0.6875rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+}
+
+.filter-severity .pills {
+  clear: both;
+}
+
+@media (min-width: 64rem) {
+  .filter-severity {
+    grid-column: span 3;
+  }
+}
+
+.filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.75rem;
+  align-items: center;
+  align-self: end;
 }
 
 .pills {
@@ -824,7 +863,7 @@ tbody tr:hover td {
   position: relative;
   display: inline-flex;
   align-items: center;
-  padding: 0.25rem 0.625rem;
+  padding: 0.3125rem 0.6875rem 0.3125rem 0.5rem;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--tint);
@@ -848,12 +887,26 @@ tbody tr:hover td {
   background: color-mix(in srgb, currentColor 16%, transparent);
 }
 
-.pill:has(input:checked)::before {
-  content: "\2713";
-  margin-right: 0.3rem;
+/* An unchecked pill shows its severity dot, a checked one a check mark, in the same 0.75rem box, so toggling a pill
+   never moves the row. */
+
+.pill::before {
+  content: "";
+  flex-shrink: 0;
+  width: 0.75rem;
+  height: 0.75rem;
+  margin-right: 0.3125rem;
+  background: radial-gradient(circle, currentColor 0 3.5px, transparent 4px);
+  line-height: 0.75rem;
+  text-align: center;
 }
 
-.pill:focus-within {
+.pill:has(input:checked)::before {
+  content: "\2713";
+  background: none;
+}
+
+.pill:has(input:focus-visible) {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
@@ -884,7 +937,6 @@ select {
 }
 
 .filters .clear {
-  padding-bottom: 0.4375rem;
   font-size: 0.78125rem;
 }
 
@@ -945,6 +997,10 @@ select {
   .fix-label {
     display: inline;
   }
+
+  .filter-severity {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Below 760 px the sidebar becomes a top bar: wordmark and context on one row, the nav as a row below. */
@@ -1004,6 +1060,16 @@ select {
 
   .main {
     padding: 1rem;
+  }
+}
+
+/* Below 480 px the context card is a full-width row of its own, flush with the wordmark, instead of a ragged
+   right-aligned box. */
+
+@media (max-width: 479px) {
+  .context {
+    flex-basis: 100%;
+    margin: 0;
   }
 }
 
