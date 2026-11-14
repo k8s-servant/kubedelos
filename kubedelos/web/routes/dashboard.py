@@ -156,7 +156,7 @@ def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
                 critical_width=critical_width,
                 high_x=critical_width if w.critical else 0,
                 high_width=round(whole - critical_width, 1),
-                href=findings_href(run_id=run_id, q=w.ref),
+                href=findings_href(run_id=run_id, severity=["CRITICAL", "HIGH"], q=w.ref),
             )
         )
     return bars

@@ -324,8 +324,14 @@ def test_worst_images_panel(client, seed):
     rects = re.findall(r'<rect class="(sev-[a-z]+)" x="([0-9.]+)" y="0" width="([0-9.]+)"', panel)
     assert rects == [("sev-critical", "0", "33.3"), ("sev-high", "33.3", "66.7"), ("sev-high", "0", "33.3")]
     assert "Gradient" not in html and "url(#" not in html
-    assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fa%3A1"' in panel
-    assert f'href="/findings?run_id={run_id}&amp;q=reg.example.com%2Fb%3A1"' in panel
+    assert (
+        f'href="/findings?run_id={run_id}&amp;severity=CRITICAL&amp;severity=HIGH&amp;q=reg.example.com%2Fa%3A1"'
+        in panel
+    )
+    assert (
+        f'href="/findings?run_id={run_id}&amp;severity=CRITICAL&amp;severity=HIGH&amp;q=reg.example.com%2Fb%3A1"'
+        in panel
+    )
     assert 'viewBox="0 0 100 6"' in panel and "style=" not in panel
 
 
