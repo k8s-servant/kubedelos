@@ -30,6 +30,9 @@ dependencies = [
   "httpx>=0.28,<1",             # Trivy download and registry calls
   "platformdirs>=4.14,<5",      # cache and data directories
   "rich>=15,<16",               # terminal output
+  "fastapi>=0.162,<1",          # local web UI
+  "jinja2>=3.1,<4",             # UI templates
+  "uvicorn>=0.54,<1",           # UI server
 ]
 
 [project.optional-dependencies]
@@ -46,11 +49,16 @@ kubedelos = "kubedelos.cli:app"
 [tool.setuptools.packages.find]
 include = ["kubedelos*"]
 
+[tool.setuptools.package-data]
+kubedelos = ["web/templates/**/*", "web/static/**/*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = ["e2e: needs kind + network"]
 addopts = "-m 'not e2e'"
+# Starlette's TestClient prefers httpx2 but still works with the httpx kubedelos already depends on.
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated:UserWarning"]
 
 [tool.coverage.report]
 omit = ["kubedelos/cli.py"] # the plan's 80% floor covers the library; the CLI is exercised through CliRunner tests
