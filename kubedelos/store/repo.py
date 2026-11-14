@@ -81,11 +81,6 @@ class Repo:
                 [(run_id, w.text, int(w.coverage)) for w in warnings],
             )
 
-    def add_note(self, run_id: int, text: str) -> None:
-        """Record a note of kubedelos' own on a run, such as why it was closed. It says nothing about coverage."""
-        with self._conn:
-            self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, text))
-
     def run_warnings(self, run_id: int) -> list[sqlite3.Row]:
         """The inventory warnings recorded for a run, in the order they were raised."""
         return self._conn.execute(

@@ -329,13 +329,6 @@ def test_run_records_owner(tmp_path):
     assert repo.get_run(run)["owner"] == "ab" * 16
 
 
-def test_add_note_stores_a_run_warning(tmp_path):
-    repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
-    repo.add_note(run, "closed by kubedelos")
-    assert [(r["text"], r["coverage"]) for r in repo.run_warnings(run)] == [("closed by kubedelos", 0)]
-
-
 def test_close_stale_closes_a_running_run_and_notes_why(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
