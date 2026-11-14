@@ -5,13 +5,14 @@ import pytest
 
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
+from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
 from kubedelos.store.db import connect
 from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
     RESULT_STATUSES,
     RunNotShown,
     get_run,
+    kpis,
     newest_run,
     previous_comparable,
 )
@@ -177,3 +178,48 @@ def test_null_scope_run_has_no_comparable(db):
     _run(repo, scope=None)
     second = _run(repo, scope=None)
     assert previous_comparable(conn, get_run(conn, "ctx", second)) is None
+
+
+def _finding(vuln, sev, target="os", pkg="openssl", version="1"):
+    return Finding(
+        vuln_id=vuln, pkg_name=pkg, installed_version=version, severity=Severity(sev), target=target, pkg_type="os"
+    )
+
+
+def _add_findings(repo, run_id, ref, platform, findings):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + ref * 64)
+    item = InventoryItem(
+        image=image, platform=platform, workloads=[Workload(namespace="ns", kind="Deployment", name="a", container="c")]
+    )
+    repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status="ok", findings=findings))
+
+
+def test_kpis_counting_units(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_findings(
+        repo, run_id, "a", "linux/amd64", [_finding("CVE-1", "CRITICAL"), _finding("CVE-1", "CRITICAL", "jar")]
+    )
+    _add_findings(repo, run_id, "a", "linux/arm64", [_finding("CVE-1", "CRITICAL")])
+    _add_findings(repo, run_id, "b", "linux/amd64", [_finding("CVE-2", "HIGH"), _finding("CVE-3", "LOW")])
+    _add(repo, run_id, "c", "linux/amd64", status="error")
+    got = kpis(conn, run_id)
+    assert (got.critical, got.high, got.images, got.images_with_critical, got.findings) == (1, 1, 3, 1, 3)
+    assert got.images_failed == 1
+    assert got.by_severity == {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 1, "UNKNOWN": 0}
+
+
+def test_kpis_duplicate_with_disagreeing_severity_takes_the_highest(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_findings(repo, run_id, "a", "linux/amd64", [_finding("CVE-1", "LOW")])
+    _add_findings(repo, run_id, "a", "linux/arm64", [_finding("CVE-1", "HIGH")])
+    got = kpis(conn, run_id)
+    assert (got.high, got.findings, got.by_severity["LOW"]) == (1, 1, 0)
+
+
+def test_kpis_empty_run(db):
+    conn, repo = db
+    got = kpis(conn, _run(repo))
+    assert (got.findings, got.images, got.critical) == (0, 0, 0)
+    assert set(got.by_severity) == {"CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"}

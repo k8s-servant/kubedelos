@@ -91,3 +91,67 @@ def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
         {"id": run.id, "context": run.context},
     ).fetchone()
     return _build(conn, row) if row else None
+
+
+_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+
+# One row per finding unit: a distinct (ref, vuln_id, pkg_name, installed_version) within the run, so a second platform
+# or a second target never counts twice. Disagreeing duplicates take the highest severity. The rank mapping is the one
+# in ``Repo``'s run-findings query. Use as ``WITH units AS (<this>)`` with the parameter ``:run``.
+FINDING_UNITS_SQL = """
+SELECT r.ref, r.repo, r.tag, r.digest,
+       f.vuln_id, f.pkg_name, f.installed_version,
+       MAX(f.fixed_version) AS fixed_version,
+       MAX(CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END)
+           AS sev_rank,
+       CASE MAX(CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END)
+           WHEN 4 THEN 'CRITICAL' WHEN 3 THEN 'HIGH' WHEN 2 THEN 'MEDIUM' WHEN 1 THEN 'LOW' ELSE 'UNKNOWN' END AS severity,
+       MAX(f.pkg_class) AS pkg_class,
+       MAX(f.title) AS title,
+       MAX(f.primary_url) AS primary_url,
+       group_concat(DISTINCT f.target) AS targets
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+WHERE r.run_id = :run
+GROUP BY r.ref, r.repo, r.tag, r.digest, f.vuln_id, f.pkg_name, f.installed_version
+"""
+
+
+@dataclass(frozen=True)
+class Kpis:
+    critical: int
+    high: int
+    images_with_critical: int
+    images: int
+    findings: int
+    images_failed: int
+    by_severity: dict[str, int]
+
+
+def kpis(conn: sqlite3.Connection, run_id: int) -> Kpis:
+    """The dashboard numbers for one run, in the counting units of ``FINDING_UNITS_SQL``."""
+    by_severity = dict.fromkeys(_SEVERITIES, 0)
+    critical_images = 0
+    rows = conn.execute(
+        f"WITH units AS ({FINDING_UNITS_SQL}) SELECT severity, COUNT(*) AS n, COUNT(DISTINCT ref) AS images"  # noqa: S608 - module constant
+        " FROM units GROUP BY severity",
+        {"run": run_id},
+    )
+    for row in rows:
+        by_severity[row["severity"]] = row["n"]
+        if row["severity"] == "CRITICAL":
+            critical_images = row["images"]
+    counts = conn.execute(
+        "SELECT COUNT(DISTINCT ref) AS images, COUNT(DISTINCT CASE WHEN status = 'error' THEN ref END) AS failed"
+        " FROM image_result WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    return Kpis(
+        critical=by_severity["CRITICAL"],
+        high=by_severity["HIGH"],
+        images_with_critical=critical_images,
+        images=counts["images"],
+        findings=sum(by_severity.values()),
+        images_failed=counts["failed"],
+        by_severity=by_severity,
+    )

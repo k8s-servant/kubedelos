@@ -1,0 +1,18 @@
+{#- The sentence under every page heading that names the run. Needs: run, pinned, now. -#}
+<p class="run-line">
+  Run {{ run.id }} · {{ describe_scope(run.scope) }} · {{ describe_pkg_types(run.pkg_types) }} ·
+  finished {{ ago(run.finished_at, now) if run.finished_at else "at an unknown time" }} ·
+  {{ run.images }} images, {{ run.images_failed }} failed
+  {%- if pinned %} · <span class="badge">pinned</span>{% endif %}
+  {%- if is_stale(run.finished_at, now) %} <span class="badge badge-stale">stale</span>{% endif %}
+</p>
+{% if run.gaps %}
+<details class="run-gaps">
+  <summary><span class="caution" aria-hidden="true">⚠</span> incomplete: {{ run.gaps | length }} namespaces or resources could not be listed</summary>
+  <ul>
+    {%- for text in run.gaps %}
+    <li>{{ text }}</li>
+    {%- endfor %}
+  </ul>
+</details>
+{% endif %}

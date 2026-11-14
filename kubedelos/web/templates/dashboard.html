@@ -1,0 +1,55 @@
+{#- The dashboard: the run line, the KPI tiles and the severity bricks. -#}
+{% extends "base.html" %}
+{% block title %}Dashboard · kubedelos{% endblock %}
+{% block run_line %}{% if run %}{% include "partials/run_line.html" %}{% endif %}{% endblock %}
+{% block content %}
+<h1>Dashboard</h1>
+{% if not run %}
+  {% if narrower_href %}
+  <section class="notice">
+    <p>There is no cluster-wide run of <strong>{{ context }}</strong> yet, only narrower ones.
+      <a href="{{ narrower_href }}">See the newest run's findings</a>.</p>
+  </section>
+  {% else %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Run <code>kubedelos scan</code> and reload.</p>
+  </section>
+  {% endif %}
+{% else %}
+  {% if newer %}
+  <p class="notice">Note: a newer run of {{ newer.scope }} exists, from {{ newer.when }}:
+    <a href="{{ newer.href }}">see its findings</a>.</p>
+  {% endif %}
+
+  <ul class="tiles">
+    {%- for tile in tiles %}
+    <li class="tile{% if tile.error %} tile-error{% endif %}" data-tile="{{ tile.key }}">
+      <span class="tile-label">{{ tile.label }}</span>
+      <span class="tile-value">{{ tile.value }}</span>
+      {%- if tile.suffix %} <span class="tile-suffix">{{ tile.suffix }}</span>{% endif %}
+      {%- if tile.caution %} <span class="caution" title="This run is incomplete: some namespaces or resources could not be listed">⚠<span class="visually-hidden"> incomplete run</span></span>{% endif %}
+      <span class="tile-change">{{ tile.change }}
+        {%- if tile.change_caution %} <span class="caution" title="{{ caution }}">⚠<span class="visually-hidden"> {{ caution }}</span></span>{% endif %}
+      </span>
+    </li>
+    {%- endfor %}
+  </ul>
+
+  {% if kpis.findings == 0 %}
+    {% if kpis.images_failed == 0 %}
+    <p class="notice">No vulnerabilities found in {{ kpis.images }} images.</p>
+    {% else %}
+    <p class="notice">No findings in the images that scanned, but {{ kpis.images_failed }} of {{ kpis.images }} images failed to scan, so this is not a clean result.</p>
+    {% endif %}
+  {% endif %}
+
+  <ul class="bricks">
+    {%- for brick in bricks %}
+    <li><a class="brick sev-{{ brick.severity | lower }}" href="{{ brick.href }}">
+      <span class="brick-name">{{ brick.severity | title }}</span>
+      <span class="brick-count">{{ brick.count }}</span>
+    </a></li>
+    {%- endfor %}
+  </ul>
+{% endif %}
+{% endblock %}

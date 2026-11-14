@@ -200,3 +200,116 @@ th {
     overflow: visible;
   }
 }
+
+/* Run line, notices and the caution mark */
+
+.run-line {
+  flex-basis: 100%;
+  margin: 0;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.run-gaps {
+  flex-basis: 100%;
+}
+
+.run-gaps summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0 0.4em;
+  border: 1px solid var(--border);
+  border-radius: 0.25em;
+  font-size: 0.875em;
+  font-weight: 600;
+}
+
+.badge-stale {
+  background: var(--medium-bg);
+  color: var(--medium-fg);
+  border-color: var(--medium-bg);
+}
+
+.caution {
+  font-weight: 600;
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.notice {
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--border);
+  border-left-width: 0.3rem;
+  border-radius: 0.25rem;
+  background: var(--surface);
+}
+
+/* KPI tiles and severity bricks */
+
+.tiles,
+.bricks {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0;
+  padding: 0;
+  list-style: none;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 0.375rem;
+  background: var(--surface);
+}
+
+.tile-error {
+  border-color: var(--critical-bg);
+  border-width: 2px;
+}
+
+.tile-label,
+.tile-suffix,
+.tile-change {
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+
+.tile-value {
+  font-size: 2rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.brick {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.brick-count {
+  font-size: 1.5rem;
+}
+
+.brick:hover,
+.brick:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 2px;
+}

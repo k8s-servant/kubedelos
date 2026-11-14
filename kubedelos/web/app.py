@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
+from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
 from kubedelos.store.db import connect_readonly
 from kubedelos.web.security import SESSION_COOKIE, Guard, install
@@ -53,6 +54,7 @@ def _templates(guard: Guard) -> Jinja2Templates:
 
     env.globals["csrf_token"] = csrf_token
     env.filters["safe_url"] = safe_url
+    env.globals.update(ago=ago, describe_scope=describe_scope, describe_pkg_types=describe_pkg_types, is_stale=is_stale)
     return Jinja2Templates(env=env)
 
 
@@ -60,6 +62,8 @@ def create_app(
     settings: Settings, *, context: str, token: str, port: int, clock: Callable[[], datetime] = _utcnow
 ) -> FastAPI:
     """Build the UI for one kube-context. ``token`` is the startup secret; ``port`` is what the Host check expects."""
+    from kubedelos.web.routes import dashboard  # the routes import this module's helpers, so import them late
+
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     guard = Guard(token, port)
     app.state.settings = settings
@@ -75,6 +79,7 @@ def create_app(
         name = errors[0]["loc"][-1] if errors and errors[0].get("loc") else "request"
         return render(request, "error.html", {"title": "Bad request", "message": f"invalid parameter: {name}"}, 400)
 
+    app.include_router(dashboard.router)
     install(app, guard)
     return app
 
