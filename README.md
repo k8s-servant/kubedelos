@@ -91,11 +91,27 @@ KUBEDELOS_NAMESPACES='["team-a","team-b"]' kubedelos scan
 
 Inside a pod with no kubeconfig, kubedelos uses the in-cluster service account. It never does that when `--context` or `--kubeconfig` is set.
 
+## Compatibility
+
+| Area | Supported | Notes |
+|---|---|---|
+| Python | 3.12, 3.13, 3.14 | Each is tested in CI. |
+| Runs on | Linux and macOS, amd64 and arm64 | Windows is not supported. |
+| Trivy | v0.76.1, pinned and checksum-verified | `--trivy-path` runs your own binary; its results are not cached. |
+| Kubernetes | 1.35, tested on kind | Read-only `list` calls on stable APIs only: `v1` namespaces, pods and nodes, `apps/v1` Deployments and StatefulSets, `batch/v1` CronJobs. Secrets are never read. |
+| Image platforms | Linux images | Tested on `linux/arm64` nodes. Windows nodes' images are scanned for their own platform but are untested. |
+| Registries | Public registries, and private ones through your Docker credentials | Tested with Docker Hub and `registry.k8s.io`. See [Private registries](#private-registries) for ACR, Artifact Registry and ECR logins. |
+
+Managed clusters (AKS, EKS, GKE) are not yet verified; they come with the in-cluster mode.
+
 ## Trivy
 
 kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64); Windows is not supported. `kubedelos trivy install` downloads it
 and checks it against an embedded SHA-256. It never resolves "latest". Use `--trivy-path` to bring your own binary. Results from your own binary are
 not cached and the run records its Trivy version as `custom`.
+
+kubedelos is built on [Trivy](https://github.com/aquasecurity/trivy), an open source scanner by Aqua Security,
+licensed under Apache-2.0. kubedelos is an independent project, not affiliated with or endorsed by Aqua Security.
 
 ## Private registries
 
