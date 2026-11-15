@@ -1,7 +1,6 @@
 """End-to-end scan of a throwaway kind cluster. Needs kind, docker and network access."""
 
 import contextlib
-import json
 import os
 import shutil
 import signal
@@ -24,10 +23,10 @@ def _docker_running() -> bool:
         return False
 
 
-def _run_script(out: Path, env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
+def _run_script(env: dict[str, str], timeout: int) -> subprocess.CompletedProcess[str]:
     """Run the script in its own process group; on timeout or Ctrl-C let its EXIT trap delete the cluster."""
     proc = subprocess.Popen(
-        [str(SCRIPT), str(out)],
+        [str(SCRIPT)],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -53,27 +52,25 @@ def test_kind_scan(tmp_path: Path) -> None:
     if not _docker_running():
         pytest.skip("docker is not running")
 
-    out = tmp_path / "out.json"
     env = os.environ.copy()
     env["KUBEDELOS_CACHE_DIR"] = str(tmp_path / "cache")
     env["KUBEDELOS_DATA_DIR"] = str(tmp_path / "data")
     env["PATH"] = f"{Path(sys.executable).parent}{os.pathsep}{env['PATH']}"
 
-    proc = _run_script(out, env, timeout=1800)
+    proc = _run_script(env, timeout=1800)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
 
-    rows = json.loads(out.read_text())
-    nginx = [r for r in rows if r["image"].startswith("docker.io/library/nginx")]
-    assert any(r["severity"] == "CRITICAL" for r in nginx)
-    web = [r for r in rows if r["namespace"] == "web"]
-    assert web
-    assert all(r["owner"] == "web@example.com" for r in web)
-
-    # busybox:1.36 has zero findings, so it never appears in the JSON rows. Check that it was scanned.
     with contextlib.closing(sqlite3.connect(tmp_path / "data" / "kubedelos.db")) as db:
+        nginx = db.execute(
+            "SELECT f.severity, w.namespace, w.owner FROM finding f JOIN image_result i ON i.id = f.image_result_id"
+            " JOIN workload w ON w.image_result_id = i.id WHERE i.ref LIKE 'docker.io/library/nginx%'"
+        ).fetchall()
+        # busybox:1.36 has no findings, so check that it was scanned at all.
         busybox = db.execute(
             "SELECT i.status FROM image_result i JOIN workload w ON w.image_result_id = i.id "
             "WHERE w.namespace = 'jobs' AND i.ref LIKE '%busybox%'"
         ).fetchall()
+    assert any(severity == "CRITICAL" for severity, _, _ in nginx)
+    assert {(namespace, owner) for _, namespace, owner in nginx} == {("web", "web@example.com")}
     assert busybox
     assert {status for (status,) in busybox} == {"ok"}
