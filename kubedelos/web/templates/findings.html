@@ -7,7 +7,7 @@
 {% block content %}
 {% if not run %}
   <section class="notice">
-    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="/scans">Scans page</a>.</p>
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
   </section>
 {% else %}
   {% if os_only %}
@@ -15,6 +15,7 @@
   {% endif %}
 
   <form method="get" action="/findings" class="card filters">
+    {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
     <input type="hidden" name="run_id" value="{{ run.id }}">
     {%- if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
     {%- if direction %}<input type="hidden" name="dir" value="{{ direction }}">{% endif %}

@@ -63,3 +63,58 @@ def test_short_image_cuts_the_digest():
         "reg.example.com/app"
     )
     assert short_image({"repo": "", "image": "ref"}) == "ref"
+
+
+def _ok_run(seed, context):
+    run_id = seed.repo.start_run(context, "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(run_id, "ok")
+    return run_id
+
+
+@pytest.mark.parametrize("path", ["/", "/findings", "/scans"])
+def test_unknown_context_is_404(client, path):
+    response = client.get(path, params={"context": "<nope>"})
+    assert response.status_code == 404
+    assert "Unknown context" in response.text and "&lt;nope&gt;" in response.text and "<nope>" not in response.text
+
+
+def test_kubeconfig_is_read_on_each_page(client, kube_contexts):
+    assert client.get("/", params={"context": "prod-eu"}).status_code == 404
+    kube_contexts.append("prod-eu")  # added to the kubeconfig while the UI runs
+    response = client.get("/", params={"context": "prod-eu"})
+    assert response.status_code == 200 and "No scans of <strong>prod-eu</strong>" in response.text
+
+
+def test_a_context_known_only_from_history_is_shown(client, seed):
+    _ok_run(seed, "old-cluster")
+    response = client.get("/findings", params={"context": "old-cluster"})
+    assert response.status_code == 200 and "old-cluster" in response.text
+
+
+def test_default_context_links_carry_no_context(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    _ok_run(seed, seed.context)
+    html = client.get("/").text
+    nav = html[html.index('<nav aria-label="Main">') : html.index("</nav>")]
+    assert "context=" not in nav
+
+
+def test_links_carry_the_shown_context(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    _ok_run(seed, "prod-eu")
+    html = client.get("/", params={"context": "prod-eu"}).text
+    nav = html[html.index('<nav aria-label="Main">') : html.index("</nav>")]
+    for path in ("/", "/findings", "/scans"):
+        assert f'href="{path}?context=prod-eu"' in nav
+    assert '<a class="wordmark" href="/?context=prod-eu"' in html
+
+
+def test_awkward_context_names_are_escaped_and_encoded(client, kube_contexts):
+    name = 'arn:aws:eks:eu-west-1:1:cluster/a b&c"><script>x</script>'
+    kube_contexts.append(name)
+    html = client.get("/scans", params={"context": name}).text
+    assert "<script>x</script>" not in html
+    assert "arn:aws:eks:eu-west-1:1:cluster/a b&amp;c&#34;&gt;&lt;script&gt;" in html
+    encoded = "arn%3Aaws%3Aeks%3Aeu-west-1%3A1%3Acluster%2Fa+b%26c%22%3E%3Cscript%3Ex%3C%2Fscript%3E"
+    assert f'href="/findings?context={encoded}"' in html  # the nav link keeps it intact
+    assert client.get("/findings", params={"context": name}).status_code == 200

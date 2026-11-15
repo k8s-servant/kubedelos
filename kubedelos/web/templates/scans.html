@@ -4,7 +4,7 @@
 {% block title %}Scans · kubedelos{% endblock %}
 {% block head %}
   <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
-  <script src="/static/htmx.min.js" nonce="{{ nonce }}" defer></script>
+  <script src="{{ static_url('htmx.min.js') }}" nonce="{{ nonce }}" defer></script>
 {%- endblock %}
 {% block run_line %}<div class="page-head"><h1>Scans</h1></div>{% endblock %}
 {% block content %}
@@ -13,8 +13,12 @@
     {%- if form_error %}
     <div class="callout" role="alert"><p>{{ form_error }}</p></div>
     {%- endif %}
+    {%- if not scannable %}
+    <p class="notice"><strong>{{ context }}</strong> is not in your kubeconfig, so it can't be scanned; its past runs are below.</p>
+    {%- else %}
     <form method="post" action="/scans" class="filters">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="context" value="{{ context }}">
       <label>Namespaces
         <input type="text" name="namespaces" value="{{ form.namespaces }}" placeholder="all namespaces">
         <span class="hint">saved: {{ form.namespaces_saved }}</span>
@@ -49,9 +53,10 @@
         <span class="hint">saved: {{ form.pkg_types_saved }}</span>
       </fieldset>
       <div class="filter-actions">
-        <button type="submit" class="btn">Start scan</button>
+        <button type="submit" class="btn">Scan {{ context }}</button>
       </div>
     </form>
+    {%- endif %}
   </section>
 
   {#- The live region stays put while htmx swaps the readout inside it, so screen readers announce each update. #}

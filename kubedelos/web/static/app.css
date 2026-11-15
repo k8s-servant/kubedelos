@@ -231,6 +231,67 @@ main {
   box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 22%, transparent);
 }
 
+/* Context switcher: with more than one context, the card is a details element that opens a list of links. */
+
+.context-switch summary {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  padding-right: 1rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+.context-switch summary::-webkit-details-marker {
+  display: none;
+}
+
+.context-switch summary::after {
+  content: "";
+  position: absolute;
+  top: 0.25rem;
+  right: 0;
+  width: 6px;
+  height: 6px;
+  border-right: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+}
+
+.context-switch[open] summary::after {
+  top: 0.45rem;
+  transform: rotate(-135deg);
+}
+
+.context-list {
+  margin: 0.5rem 0 0;
+  padding: 0.375rem 0 0;
+  border-top: 1px solid var(--line);
+  list-style: none;
+}
+
+.context-list li {
+  display: flex;
+  flex-direction: column;
+  padding: 0.3rem 0.375rem;
+  border-radius: 6px;
+}
+
+.context-list li[aria-current="true"] {
+  background: var(--accent-soft);
+}
+
+.context-list a {
+  color: var(--fg-strong);
+  font-size: 0.8125rem;
+  overflow-wrap: anywhere;
+}
+
+.context-age {
+  color: var(--muted);
+  font-size: 0.6875rem;
+}
+
 .sidebar nav ul {
   margin: 0;
   padding: 0;

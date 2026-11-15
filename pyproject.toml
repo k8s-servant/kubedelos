@@ -27,6 +27,7 @@ dependencies = [
   "pydantic>=2.14,<3",          # data models
   "pydantic-settings>=2.16,<3", # settings from environment variables
   "kubernetes>=37,<38",         # cluster inventory
+  "pyyaml>=6.0,<7",             # kubeconfig context names, read without loading a context
   "httpx>=0.28,<1",             # Trivy download and registry calls
   "platformdirs>=4.14,<5",      # cache and data directories
   "fastapi>=0.162,<1",          # local web UI

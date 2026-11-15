@@ -271,3 +271,13 @@ def test_image_ref_has_a_break_after_each_slash(client, seed):
     _put(seed, run_id, "reg.example.com/team/app:1", [_f("CVE-1")])
     html = client.get(f"/findings?run_id={run_id}").text
     assert ">reg.example.com/<wbr>app:1@sha256:aaaaaaaa</span>" in html
+
+
+def test_findings_keep_the_shown_context_in_links_and_the_filter_form(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    run_id = seed.repo.start_run("prod-eu", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(run_id, "ok")
+    html = client.get("/findings", params={"context": "prod-eu"}).text
+    form = html[html.index('<form method="get" action="/findings"') : html.index("</form>")]
+    assert '<input type="hidden" name="context" value="prod-eu">' in form
+    assert f'href="/findings?context=prod-eu&amp;run_id={run_id}"' in html  # clear filters

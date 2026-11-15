@@ -46,6 +46,7 @@ class JobView:
     status: str | None  # the run's final status once finished
     error: str | None
     eta: timedelta | None
+    context: str  # the kube-context this scan targets
 
 
 def _utcnow() -> datetime:
@@ -77,6 +78,7 @@ def eta(started: datetime, now: datetime, done: int, total: int) -> timedelta | 
 @dataclass
 class _Job:
     cancel: threading.Event
+    context: str
     thread: threading.Thread | None = None
     state: State = "starting"
     run_id: int | None = None
@@ -89,7 +91,7 @@ class _Job:
 
 
 class ScanRunner:
-    """Runs at most one UI scan at a time. All job state is guarded by one lock."""
+    """Runs at most one UI scan at a time, of any context. All job state is guarded by one lock."""
 
     def __init__(
         self,
@@ -107,19 +109,21 @@ class ScanRunner:
         self._job: _Job | None = None
         self._closed = False  # set by shutdown: the app is going away, so no new daemon scan may start
 
-    def start(self, overrides: dict) -> None:
-        """Start a scan of the UI's context with ``overrides`` applied.
+    def start(self, overrides: dict, context: str | None = None) -> None:
+        """Start a scan of ``context`` (the UI's startup context by default) with ``overrides`` applied. The caller
+        checks that ``context`` is one the kubeconfig has.
 
         Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
         """
+        target = context or self._context
         # The context goes last so an override can never point the scan at another cluster.
-        scan_settings = self._settings.model_copy(update={**overrides, "context": self._context})
+        scan_settings = self._settings.model_copy(update={**overrides, "context": target})
         with self._lock:
             if self._closed:
                 raise ScanBusy("the UI is shutting down")
             if self._job is not None and self._job.state in _ACTIVE:
                 raise ScanBusy("a scan is already running")
-            job = _Job(cancel=threading.Event())
+            job = _Job(cancel=threading.Event(), context=target)
             job.thread = threading.Thread(
                 target=self._run, args=(job, scan_settings), name="kubedelos-ui-scan", daemon=True
             )
@@ -147,7 +151,7 @@ class ScanRunner:
                 p = job.progress
                 left = eta(job.paced_from, self._clock(), p.done - job.paced_base, p.total - job.paced_base)
             progress = dataclasses.replace(job.progress) if job.progress is not None else None
-            return JobView(job.state, job.run_id, progress, job.status, job.error, left)
+            return JobView(job.state, job.run_id, progress, job.status, job.error, left, job.context)
 
     def shutdown(self, timeout: float = 10.0) -> None:
         """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end.

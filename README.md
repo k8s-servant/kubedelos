@@ -44,8 +44,8 @@ are read from the `kubedelos.io/owner-email` namespace annotation.
 
 ## Local web UI
 
-`kubedelos ui` serves a web UI on top of the scan data in your local SQLite database, and can start scans of its
-context. It listens on loopback only (`127.0.0.1`, `::1` or `localhost`; other hosts are refused), prints a URL with a
+`kubedelos ui` serves a web UI on top of the scan data in your local SQLite database, and can start scans of any
+context in your kubeconfig. It listens on loopback only (`127.0.0.1`, `::1` or `localhost`; other hosts are refused), prints a URL with a
 token, and opens it in your browser:
 
 ```bash
@@ -54,8 +54,18 @@ kubedelos ui --port 9400 --no-browser
 ```
 
 The token is swapped for a session cookie and stays valid until the server stops; a restart prints a new one. If the port
-is in use, it exits 2 with `error: port N is in use; pass --port`. `--context` and `--kubeconfig` choose the cluster whose
-runs are shown. `KUBEDELOS_LOG_LEVEL=info` prints one access line (path only) per request on stderr.
+is in use, it exits 2 with `error: port N is in use; pass --port`. `--kubeconfig` chooses the kubeconfig, and `--context`
+the context shown first (the current one by default). `KUBEDELOS_LOG_LEVEL=info` prints one access line (path only) per
+request on stderr.
+
+With more than one context, the sidebar's context card opens a list of them: every context in the kubeconfig, which is
+read again on each page, plus any that only appear in the scan history, each with when it was last scanned. Picking one
+shows that cluster on the same page. The context travels in the URL (`?context=prod-eu`), so two tabs can show two
+clusters and a link keeps its cluster. A context known only from the history can be viewed but not scanned.
+
+A scan runs the context's kubeconfig login, as kubectl does. If that login needs a browser or a device code (`kubelogin`,
+`aws sso`, `gcloud`), it happens in the terminal running `kubedelos ui`, and the scan fails with an error if nobody
+completes it; log in with kubectl first.
 
 To use it on a remote machine, forward the port over SSH and open the printed URL locally:
 
@@ -78,11 +88,11 @@ follows the system light or dark theme.
   a newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
   100 per page.
-- **Scans (`/scans`)**: start a scan of the UI's context. The form takes namespaces, namespace exclusions, a namespace
+- **Scans (`/scans`)**: start a scan of the shown context; the button names it. The form takes namespaces, namespace exclusions, a namespace
   selector, a label selector, image exclusions, the number of images scanned in parallel (1–32) and package types, each
   prefilled from your settings and labelled with the saved value. What you change applies to that scan only.
-  The UI runs one scan at a time; a second start while one runs is refused, but a scan from another `kubedelos ui`
-  doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
+  The UI runs one scan at a time, across all contexts; a second start while one runs is refused, and the other
+  contexts' Scans pages name the cluster being scanned. A scan from another `kubedelos ui` doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
   saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images
   have been scanned. When the scan ends, the page reloads once to show the finished run. Cancel stops the scan once the
   images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,

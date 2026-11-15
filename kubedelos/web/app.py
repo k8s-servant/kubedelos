@@ -6,6 +6,7 @@ can import the routes at the top level without an import cycle. The app owns one
 ``server.serve`` shuts it down when the server stops.
 """
 
+import hashlib
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -21,8 +22,9 @@ from fastapi.templating import Jinja2Templates
 
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
+from kubedelos.kube import client as kube_client
 from kubedelos.web.jobs import ScanRunner
-from kubedelos.web.pages import plural, render
+from kubedelos.web.pages import UnknownContext, plural, render
 from kubedelos.web.routes import dashboard, findings, scans
 from kubedelos.web.security import Guard, install
 
@@ -50,6 +52,17 @@ def finished_text(run: Any, now: datetime) -> str:
     return ago(run.finished_at, now) if run.finished_at else "at an unknown time"
 
 
+def static_url(name: str) -> str:
+    """``/static/<name>`` with the file's content hash as ``?v=``: a new release changes the URL, so a browser never
+    pairs new markup with a stylesheet or script it cached from an older one. The files ship with the package."""
+    if name not in _STATIC_VERSIONS:
+        _STATIC_VERSIONS[name] = hashlib.sha256((_HERE / "static" / name).read_bytes()).hexdigest()[:12]
+    return f"/static/{name}?v={_STATIC_VERSIONS[name]}"
+
+
+_STATIC_VERSIONS: dict[str, str] = {}
+
+
 def _templates(guard: Guard) -> Jinja2Templates:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_HERE / "templates"), autoescape=True)
 
@@ -66,18 +79,27 @@ def _templates(guard: Guard) -> Jinja2Templates:
         describe_pkg_types=describe_pkg_types,
         finished_text=finished_text,
         is_stale=is_stale,
+        static_url=static_url,
     )
     return Jinja2Templates(env=env)
 
 
 def create_app(
-    settings: Settings, *, context: str, token: str, port: int, clock: Callable[[], datetime] = _utcnow
+    settings: Settings,
+    *,
+    context: str,
+    token: str,
+    port: int,
+    clock: Callable[[], datetime] = _utcnow,
+    list_contexts: Callable[[], list[str]] | None = None,
 ) -> FastAPI:
-    """Build the UI for one kube-context. ``token`` is the startup secret; ``port`` is what the Host check expects."""
+    """Build the UI. ``context`` is the one shown by default, ``token`` the startup secret, ``port`` what the Host
+    check expects, and ``list_contexts`` lists the kubeconfig's contexts (read on each page)."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     guard = Guard(token, port)
     app.state.settings = settings
     app.state.context = context
+    app.state.list_contexts = list_contexts or (lambda: kube_client.list_contexts(settings))
     app.state.clock = clock
     app.state.guard = guard
     app.state.templates = _templates(guard)
@@ -89,6 +111,11 @@ def create_app(
         errors = exc.errors()
         name = errors[0]["loc"][-1] if errors and errors[0].get("loc") else "request"
         return render(request, "error.html", {"title": "Bad request", "message": f"invalid parameter: {name}"}, 400)
+
+    @app.exception_handler(UnknownContext)
+    async def unknown_context(request: Request, exc: UnknownContext) -> HTMLResponse:
+        message = f"no context named {exc.name} in your kubeconfig or the scan history"
+        return render(request, "error.html", {"title": "Unknown context", "message": message}, 404)
 
     app.include_router(dashboard.router)
     app.include_router(findings.router)

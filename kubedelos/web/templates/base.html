@@ -7,16 +7,16 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}kubedelos{% endblock %}</title>
-  <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
-  <link rel="stylesheet" href="/static/app.css">
+  <link rel="icon" type="image/svg+xml" href="{{ static_url('logo.svg') }}">
+  <link rel="stylesheet" href="{{ static_url('app.css') }}">
   {%- block head %}{% endblock %}
 </head>
 <body>
   <div class="shell">
     <aside class="sidebar">
-      <a class="wordmark" href="/"><img class="logo" src="/static/logo.svg" alt="" width="32" height="32">kubedelos</a>
+      <a class="wordmark" href="{{ link('/') }}"><img class="logo" src="{{ static_url('logo.svg') }}" alt="" width="32" height="32">kubedelos</a>
       {%- if context %}
-      <div class="context">
+      {%- macro context_card() %}
         <span class="context-label">Context</span>
         <strong class="context-name">{{ context }}</strong>
         {%- if run is defined %}
@@ -26,7 +26,24 @@
         <span class="none">{{ "no cluster-wide scan yet" if narrower_href else "no scans yet" }}</span>
         {%- endif %}
         {%- endif %}
+      {%- endmacro %}
+      {%- if contexts | length > 1 and now is defined %}
+      {#- No JavaScript: a details element opens the list, and each entry is a plain link to the same page. #}
+      <details class="context context-switch">
+        <summary>{{ context_card() }}</summary>
+        <ul class="context-list" aria-label="Switch context">
+          {%- for c in contexts %}
+          <li{% if c.shown %} aria-current="true"{% endif %}>
+            <a href="{{ c.href }}">{{ c.name }}</a>
+            <span class="context-age">{{ "scanned " ~ ago(c.finished_at, now) if c.finished_at else "never scanned" }}{% if not c.scannable %} · view only{% endif %}</span>
+          </li>
+          {%- endfor %}
+        </ul>
+      </details>
+      {%- else %}
+      <div class="context">{{ context_card() }}
       </div>
+      {%- endif %}
       {%- endif %}
       {%- if nav %}
       <nav aria-label="Main">

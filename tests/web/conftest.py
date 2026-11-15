@@ -55,9 +55,22 @@ def seed(settings):
 
 
 @pytest.fixture
-def app(seed):
+def kube_contexts():
+    """The context names the test kubeconfig holds; a test may change the list, and the app reads it on each page."""
+    return [CONTEXT]
+
+
+@pytest.fixture
+def app(seed, kube_contexts):
     connect(seed.settings.db_path).close()  # create and migrate first, as `kubedelos ui` does at startup
-    return create_app(seed.settings, context=seed.context, token=TOKEN, port=PORT, clock=seed.clock)
+    return create_app(
+        seed.settings,
+        context=seed.context,
+        token=TOKEN,
+        port=PORT,
+        clock=seed.clock,
+        list_contexts=lambda: list(kube_contexts),
+    )
 
 
 @pytest.fixture

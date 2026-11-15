@@ -14,7 +14,7 @@
   </section>
   {% else %}
   <section class="notice">
-    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="/scans">Scans page</a>.</p>
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
   </section>
   {% endif %}
 {% else %}

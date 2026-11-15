@@ -1,3 +1,4 @@
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -97,3 +98,41 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
         fn("ns", label_selector="app=web")
     assert [kw["label_selector"] for _, kw in seen] == ["team=x"] + ["app=web"] * 4
     assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
+
+
+def _kubeconfig(path, names, current=None):
+    lines = ["apiVersion: v1", "kind: Config", "clusters: []", "users: []", "contexts:"]
+    lines += [f"- name: {name!r}\n  context: {{cluster: c, user: u}}" for name in names]
+    if current is not None:
+        lines.append(f"current-context: {current!r}")
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_list_contexts_reads_names_without_logging_in(monkeypatch, tmp_path):
+    monkeypatch.setattr(kube_client.config, "load_kube_config", lambda **kw: pytest.fail("must not load a context"))
+    kubeconfig = _kubeconfig(tmp_path / "config", ["kind-lab", "Dev", "arn:aws:eks:eu-west-1:1:cluster/x"], "Dev")
+    names = kube_client.list_contexts(Settings(kubeconfig=kubeconfig))
+    assert names == ["arn:aws:eks:eu-west-1:1:cluster/x", "Dev", "kind-lab"]  # case-insensitive
+
+
+def test_list_contexts_needs_no_current_context(tmp_path):
+    # Normal after `kubectl config unset current-context`; `kubedelos ui --context` still works then.
+    kubeconfig = _kubeconfig(tmp_path / "config", ["a", "b"])
+    assert kube_client.list_contexts(Settings(kubeconfig=kubeconfig)) == ["a", "b"]
+
+
+def test_list_contexts_merges_the_kubeconfig_paths(monkeypatch, tmp_path):
+    one = _kubeconfig(tmp_path / "one", ["a"], "a")
+    two = _kubeconfig(tmp_path / "two", ["b"])
+    monkeypatch.setattr(kube_client.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", f"{one}{os.pathsep}{two}")
+    assert kube_client.list_contexts(Settings()) == ["a", "b"]
+
+
+@pytest.mark.parametrize("content", [None, "contexts: [unclosed\n", "", "just a string\n", "contexts: 7\n"])
+def test_list_contexts_is_empty_without_a_readable_kubeconfig(tmp_path, content):
+    # A kubeconfig another tool is halfway through rewriting must not break every page.
+    kubeconfig = tmp_path / "config"
+    if content is not None:
+        kubeconfig.write_text(content)
+    assert kube_client.list_contexts(Settings(kubeconfig=kubeconfig)) == []

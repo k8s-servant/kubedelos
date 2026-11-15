@@ -21,7 +21,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.pages import MAX_ID, open_db, render, short_image
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_image, shown_context
 
 router = APIRouter()
 
@@ -71,9 +71,9 @@ def findings(
     direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
     page: int = Query(1, ge=1, le=10**9),
 ) -> HTMLResponse:
-    context = request.app.state.context
     ctx: dict = {"now": request.app.state.clock(), "run": None, "pinned": run_id is not None}
     with open_db(request) as conn:
+        context = shown_context(request, conn)
         if run_id is not None:
             try:
                 run = get_run(conn, context, run_id)
@@ -102,6 +102,7 @@ def findings(
     def href(**over: object) -> str:
         """This view's URL with ``over`` replacing its parameters; a None value drops the parameter."""
         state: dict[str, object] = {
+            "context": context_param(request),
             "run_id": run.id,
             "severity": [s.value for s in severity],
             "namespace": flt.namespace,
@@ -140,7 +141,7 @@ def findings(
         past_end=not rows and total > 0,
         filtered=filtered,
         headers=headers,
-        clear_href=f"/findings?{urlencode({'run_id': run.id})}",
+        clear_href=link(request, "/findings", run_id=run.id),
         prev_href=href(page=page - 1 if page > 2 else None) if page > 1 and rows else None,
         next_href=href(page=page + 1) if page < last_page and rows else None,
         last_page_href=href(page=last_page if last_page > 1 else None),
