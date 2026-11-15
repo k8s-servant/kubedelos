@@ -25,7 +25,7 @@
 
 ### Documentation
 
-- The README has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
+- The README explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
 
 ### Bug Fixes
 

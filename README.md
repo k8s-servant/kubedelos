@@ -8,6 +8,29 @@ Scan the container images running in a Kubernetes cluster with Trivy.
 
 Status: pre-alpha. Interfaces and output may change.
 
+## Why kubedelos
+
+[Trivy](https://github.com/aquasecurity/trivy) does the scanning, and kubedelos doesn't replace it: `trivy image` and
+`trivy k8s` tell you what is vulnerable right now. kubedelos is for what comes after that report, across a whole cluster
+and over time:
+
+- **What actually runs.** It lists the images running in the cluster, including init and ephemeral containers,
+  CronJobs and workloads scaled to zero. Access is read-only and Secrets are never read. Each unique image is scanned
+  once per platform.
+- **What to fix first.** The dashboard puts the Critical and High findings that have a fix on top, grouped by fix or by
+  image, with the images worst hit and the images that failed to scan, plus a hint on which registry to log in to.
+- **What changed.** Every run is kept in a local SQLite database, so the dashboard shows the change since the last
+  comparable run, and the findings of any earlier run can be opened again.
+- **One command, nothing to install in the cluster.** `kubedelos ui` opens a local web UI against your current
+  kube-context. There is no operator, CRD or host app such as Lens or Headlamp to set up first.
+- **Cheap repeat scans.** Results are cached by image, so a rescan only scans what changed.
+- **Careful by default.** Trivy is pinned and checksum-verified, never "latest", and registry tokens are never written
+  to disk or logs.
+- **CI-friendly.** `--fail-on` exit codes and JSON, CSV and SARIF output.
+
+Next on the roadmap: an in-cluster mode installed with Helm, with scheduled scans and reports sent to each namespace's
+owners by email, Slack or Teams.
+
 ## Quickstart
 
 ```bash
