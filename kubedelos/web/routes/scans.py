@@ -6,7 +6,7 @@ Only ``ok`` and ``partial`` runs link to their findings, since a failed or cance
 form posts to ``/scans`` with the CSRF token; each field starts at the UI's saved settings and says what they are.
 
 ``POST /scans`` reads the urlencoded body itself (the CSRF guard has already cached it, and python-multipart is not a
-dependency), validates the five fields against ``Settings`` and passes only the validated values to the app's
+dependency), validates the seven fields against ``Settings`` and passes only the validated values to the app's
 ``ScanRunner``. Before it starts the scan it closes the stale ``running`` rows no live process owns, through
 ``open_db_rw``, the only writable connection these routes open. ``GET /scans/progress`` serves the progress readout
 alone, for polling; once the scan has ended it tells htmx to reload the page, so the history shows the finished run.
@@ -47,12 +47,14 @@ CHIP = {
 # The form's fields, as Settings names them, with the labels the form shows them under.
 FIELDS = {
     "namespaces": "Namespaces",
+    "exclude_namespaces": "Exclude namespaces",
     "namespace_selector": "Namespace selector",
     "selector": "Label selector",
     "exclude_images": "Exclude images",
+    "parallelism": "Parallel images",
     "pkg_types": "Package types",
 }
-LIST_FIELDS = ("namespaces", "exclude_images")
+LIST_FIELDS = ("namespaces", "exclude_namespaces", "exclude_images")
 PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scanning", "saving": "saving"}
 _MAX_FORM_FIELDS = 100
 _MAX_BODY = 64 * 1024
@@ -94,12 +96,16 @@ def _form(request: Request, sent: dict | None = None) -> dict:
     form = {
         "namespaces": ", ".join(s.namespaces),
         "namespaces_saved": ", ".join(s.namespaces) or "all namespaces",
+        "exclude_namespaces": ", ".join(s.exclude_namespaces),
+        "exclude_namespaces_saved": ", ".join(s.exclude_namespaces) or "none",
         "namespace_selector": s.namespace_selector or "",
         "namespace_selector_saved": s.namespace_selector or "none",
         "selector": s.selector or "",
         "selector_saved": s.selector or "none",
         "exclude_images": ", ".join(s.exclude_images),
         "exclude_images_saved": ", ".join(s.exclude_images) or "none",
+        "parallelism": str(s.parallelism),
+        "parallelism_saved": str(s.parallelism),
         "pkg_types": s.pkg_types,
         "pkg_types_saved": describe_pkg_types(s.scan_level),
     }
@@ -217,6 +223,7 @@ def _start(request: Request, body: bytes) -> Response:
         **{name: _split(text[name]) for name in LIST_FIELDS},
         "namespace_selector": text["namespace_selector"].strip() or None,
         "selector": text["selector"].strip() or None,
+        "parallelism": text["parallelism"].strip(),  # Settings parses it and keeps it to 1-32
         "pkg_types": sent["pkg_types"],
     }
     settings = request.app.state.settings

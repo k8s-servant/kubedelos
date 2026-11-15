@@ -115,6 +115,17 @@ def test_scan_form_shows_saved_values(client, app):
     assert token and token.group(1)
 
 
+def test_scan_form_shows_saved_exclude_namespaces_and_parallelism(client, app):
+    app.state.settings = app.state.settings.model_copy(update={"exclude_namespaces": ["kube-system"], "parallelism": 6})
+    html = client.get("/scans").text
+    form = html.split('<form method="post" action="/scans"', 1)[1].split("</form>", 1)[0]
+    assert re.search(r'name="exclude_namespaces"[^>]*value="kube-system"', form)
+    assert re.search(r'type="number" name="parallelism" value="6" min="1" max="32"', form)
+    assert "saved: kube-system" in form and "saved: 6" in form
+    app.state.settings = app.state.settings.model_copy(update={"exclude_namespaces": []})
+    assert "saved: none" in client.get("/scans").text
+
+
 def test_nav_has_scans(client):
     html = client.get("/findings").text
     assert html.index('href="/findings"') < html.index('href="/scans"')
@@ -168,6 +179,8 @@ FORM = {
     "namespace_selector": "",
     "selector": "",
     "exclude_images": "",
+    "exclude_namespaces": "",
+    "parallelism": "4",
     "pkg_types": ["os", "library"],
 }
 
@@ -240,6 +253,8 @@ def test_start_runs_with_the_form_overrides(client, app, fake):
         namespace_selector=" ",
         selector="app=x,tier=web",
         exclude_images="*/pause:*,  reg.example.com/skip:*",
+        exclude_namespaces="kube-system, local-path-storage",
+        parallelism=" 8 ",
         pkg_types=["os"],
     )
     assert response.status_code == 303 and response.headers["location"] == "/scans"
@@ -250,6 +265,8 @@ def test_start_runs_with_the_form_overrides(client, app, fake):
     assert settings.selector == "app=x,tier=web"
     assert settings.exclude_images == ["*/pause:*", "reg.example.com/skip:*"]
     assert settings.pkg_types == ("os",)
+    assert settings.exclude_namespaces == ["kube-system", "local-path-storage"]
+    assert settings.parallelism == 8
     assert settings.context == app.state.context
     assert fake.calls[0]["trigger"] == "ui"
 
@@ -273,6 +290,16 @@ def test_invalid_pkg_types_rerenders_with_400(client, fake):
     assert 'action="/scans"' in response.text
     none_ticked = _start(client, pkg_types=[])
     assert none_ticked.status_code == 400 and "Package types" in none_ticked.text
+    assert not fake.calls and client.app.state.scans.view() is None
+
+
+@pytest.mark.parametrize("value", ["0", "33", "four", ""])
+def test_invalid_parallelism_rerenders_with_400(client, fake, value):
+    response = _start(client, namespaces="web", parallelism=value)
+    assert response.status_code == 400
+    assert "Parallel images:" in response.text
+    assert re.search(r'name="namespaces"[^>]*value="web"', response.text)  # what was typed survives
+    assert re.search(rf'name="parallelism" value="{value}"', response.text)
     assert not fake.calls and client.app.state.scans.view() is None
 
 

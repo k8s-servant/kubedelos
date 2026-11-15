@@ -150,8 +150,9 @@ follows the system light or dark theme.
   a newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
   100 per page.
-- **Scans (`/scans`)**: start a scan of the UI's context. The form takes namespaces, a namespace selector, a label
-  selector, image exclusions and package types, each prefilled from your settings and labelled with the saved value.
+- **Scans (`/scans`)**: start a scan of the UI's context. The form takes namespaces, namespace exclusions, a namespace
+  selector, a label selector, image exclusions, the number of images scanned in parallel (1–32) and package types, each
+  prefilled from your settings and labelled with the saved value. What you change applies to that scan only.
   The UI runs one scan at a time; a second start while one runs is refused, but a `kubedelos scan` in another terminal
   doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
   saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images

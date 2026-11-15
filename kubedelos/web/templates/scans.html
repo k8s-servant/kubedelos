@@ -19,6 +19,10 @@
         <input type="text" name="namespaces" value="{{ form.namespaces }}" placeholder="all namespaces">
         <span class="hint">saved: {{ form.namespaces_saved }}</span>
       </label>
+      <label>Exclude namespaces
+        <input type="text" name="exclude_namespaces" value="{{ form.exclude_namespaces }}" placeholder="none">
+        <span class="hint">saved: {{ form.exclude_namespaces_saved }}</span>
+      </label>
       <label>Namespace selector
         <input type="text" name="namespace_selector" value="{{ form.namespace_selector }}">
         <span class="hint">saved: {{ form.namespace_selector_saved }}</span>
@@ -30,6 +34,10 @@
       <label>Exclude images
         <input type="text" name="exclude_images" value="{{ form.exclude_images }}">
         <span class="hint">saved: {{ form.exclude_images_saved }}</span>
+      </label>
+      <label>Parallel images
+        <input type="number" name="parallelism" value="{{ form.parallelism }}" min="1" max="32" required>
+        <span class="hint">saved: {{ form.parallelism_saved }}</span>
       </label>
       <fieldset class="filter-pkg">
         <legend>Package types</legend>
