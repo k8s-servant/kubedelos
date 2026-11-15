@@ -1241,3 +1241,32 @@ select {
     overflow: visible;
   }
 }
+
+/* Namespaces: the name is the row header, read like body text; counts line up on the right, zeros fade. */
+
+.namespaces th[scope="row"] {
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-strong);
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.namespaces tbody tr:hover th {
+  background: var(--tint);
+}
+
+.namespaces .num {
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.namespaces .zero {
+  color: var(--muted);
+}
+
+.table-foot {
+  margin: 0.5rem 0.5rem 0;
+  color: var(--muted);
+  font-size: 0.75rem;
+}

@@ -25,7 +25,7 @@ from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import UnknownContext, plural, render
-from kubedelos.web.routes import dashboard, findings, scans
+from kubedelos.web.routes import dashboard, findings, namespaces, scans
 from kubedelos.web.security import Guard, install
 
 _HERE = Path(__file__).parent
@@ -119,6 +119,7 @@ def create_app(
 
     app.include_router(dashboard.router)
     app.include_router(findings.router)
+    app.include_router(namespaces.router)
     app.include_router(scans.router)
     install(app, guard)
     return app
