@@ -13,7 +13,6 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from kubedelos.models import Severity
-from kubedelos.output import short_image
 from kubedelos.store.queries import (
     FindingFilter,
     RunNotShown,
@@ -22,7 +21,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.pages import MAX_ID, open_db, render
+from kubedelos.web.pages import MAX_ID, open_db, render, short_image
 
 router = APIRouter()
 

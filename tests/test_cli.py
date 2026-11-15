@@ -10,6 +10,7 @@ import tomllib
 import pytest
 from typer.testing import CliRunner
 
+from kubedelos import cli
 from kubedelos.cli import app
 
 
@@ -22,6 +23,15 @@ def test_version_prints_package_version():
 def test_kubedelos_is_the_only_console_script():
     scripts = tomllib.loads(pathlib.Path("pyproject.toml").read_text())["project"]["scripts"]
     assert scripts == {"kubedelos": "kubedelos.cli:app"}
+
+
+def test_scanning_lives_in_the_ui_not_the_cli():
+    # Scans start from the UI (and, later, the in-cluster schedule); CI gating is left to plain Trivy.
+    commands = {c.name or c.callback.__name__ for c in app.registered_commands}
+    groups = {g.name for g in app.registered_groups}
+    assert commands | groups == {"version", "ui", "trivy", "registry"}
+    r = CliRunner().invoke(app, ["scan"])
+    assert r.exit_code == 2 and "No such command" in r.output
 
 
 FAKE_TRIVY = pathlib.Path(__file__).parent / "trivy" / "fake_trivy.py"
@@ -303,3 +313,54 @@ def test_ui_prints_no_note_without_stale_runs(ui_env):
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output
     assert "interrupted run" not in r.output
+
+
+# registry test (and anything else that scans from the CLI) turns SIGTERM and SIGHUP into Ctrl-C.
+def test_sigterm_and_sighup_become_keyboard_interrupt_and_handlers_are_restored():
+    before = {sig: signal.getsignal(sig) for sig in (signal.SIGTERM, signal.SIGHUP)}
+    for sig in before:
+        with pytest.raises(KeyboardInterrupt), cli._signals_as_interrupt():
+            os.kill(os.getpid(), sig)
+            time.sleep(5)  # the handler interrupts this
+    assert {sig: signal.getsignal(sig) for sig in before} == before
+
+
+_SIGTERM_SCRIPT = """
+import os, signal, sys, threading, time
+from pathlib import Path
+from kubedelos import cli
+from kubedelos.config import Settings
+from kubedelos.models import ImageRef, InventoryItem
+from kubedelos.trivy.runner import scan_many
+trivy, tmp = Path(sys.argv[1]), Path(sys.argv[2])
+pid_file = tmp / "scan.pid"
+def kill_once_scanning():
+    while not pid_file.exists():
+        time.sleep(0.05)
+    os.kill(os.getpid(), signal.SIGTERM)
+threading.Thread(target=kill_once_scanning, daemon=True).start()
+items = [InventoryItem(image=ImageRef(ref=f"registry.example/app:{i}", repo="registry.example/app", tag=str(i)),
+                       platform="linux/amd64") for i in range(2)]
+try:
+    with cli._signals_as_interrupt():
+        scan_many(items, cache_dir=tmp, trivy=trivy, settings=Settings(cache_dir=tmp, parallelism=1),
+                  on_result=lambda r: None, cancel=threading.Event())
+except KeyboardInterrupt:
+    sys.exit(130)
+"""
+
+
+def test_sigterm_stops_running_scans(tmp_path):
+    pid_file, child_file = tmp_path / "scan.pid", tmp_path / "child.pid"
+    env = {
+        **os.environ,
+        "FAKE_TRIVY_PID_FILE": str(pid_file),
+        "FAKE_TRIVY_CHILD_PID_FILE": str(child_file),
+        "FAKE_TRIVY_SLEEP": "30",
+    }
+    proc = subprocess.run(
+        [sys.executable, "-c", _SIGTERM_SCRIPT, str(FAKE_TRIVY), str(tmp_path)], env=env, timeout=60, check=False
+    )
+    assert proc.returncode == 130
+    assert _gone(int(pid_file.read_text()))
+    assert _gone(int(child_file.read_text()))

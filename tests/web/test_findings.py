@@ -52,7 +52,8 @@ def test_default_run_is_newest_any_scope(client, seed):
 
 
 def test_no_runs_and_unknown_run(client, seed):
-    assert "No scans of" in client.get("/findings").text
+    html = client.get("/findings").text
+    assert "No scans of" in html and '<a href="/scans">Scans page</a>' in html and "kubedelos scan" not in html
     failed = _run(seed, status="failed")
     assert client.get(f"/findings?run_id={failed}").status_code == 404
     assert client.get("/findings?run_id=99").status_code == 404

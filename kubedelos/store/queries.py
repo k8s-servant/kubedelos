@@ -99,7 +99,7 @@ def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
 
 _SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
 
-# The severity rank of a finding row (the mapping in ``Repo``'s run-findings query); shared so the counts and the units agree.
+# The severity rank of a finding row; shared so the counts and the units agree.
 _RANK_SQL = (
     "CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END"
 )

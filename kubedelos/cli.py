@@ -1,4 +1,8 @@
-"""The `kubedelos` command line, a Typer app."""
+"""The `kubedelos` command line, a Typer app.
+
+Scanning lives in the web UI (`kubedelos ui`), and later in the in-cluster schedule, not here: CI gating is left to
+plain Trivy. The CLI serves the UI and keeps two helpers, `trivy install` and `registry test`.
+"""
 
 import contextlib
 import logging
@@ -9,29 +13,21 @@ import sys
 import threading
 import webbrowser
 from collections.abc import Iterator
-from datetime import timedelta
-from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Any
 
 import httpx
 import typer
 from pydantic import ValidationError
-from rich.console import Console
-from rich.progress import BarColumn, MofNCompleteColumn, TextColumn
-from rich.progress import Progress as RichProgress
 
 from kubedelos import __version__
 from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import Severity, is_valid_ref, registry_host
-from kubedelos.output import RENDERERS
-from kubedelos.scan.service import Progress, run_scan
+from kubedelos.models import is_valid_ref, registry_host
 from kubedelos.store import runlock
 from kubedelos.store.db import connect
-from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
@@ -40,20 +36,15 @@ from kubedelos.web import server
 from kubedelos.web.app import create_app
 from kubedelos.web.pages import plural
 
-app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
+app = typer.Typer(
+    help="Scan the container images running in a Kubernetes cluster with Trivy, from a local web UI.",
+    no_args_is_help=True,
+)
 
 
 @app.callback()
 def main() -> None:
-    """Keep `app` a command group so more subcommands can be added next to `version`."""
-
-
-def _update_bar(bar: RichProgress, task: Any, p: Progress) -> None:
-    """Reflect one progress event; the bar stays indeterminate until the image total is known."""
-    if p.total:
-        bar.update(task, total=p.total, completed=p.done, description=f"{p.phase} ({p.errors} errors)")
-    else:
-        bar.update(task, description=f"{p.phase}…")
+    """Keep `app` a command group, so `version` stays a subcommand."""
 
 
 @app.command()
@@ -102,30 +93,6 @@ def trivy_install() -> None:
         typer.echo(f"Trivy {TRIVY_VERSION} installed at {path}")
 
 
-class OutputFormat(StrEnum):
-    table = "table"
-    json = "json"
-    csv = "csv"
-    sarif = "sarif"
-
-
-class FailOn(StrEnum):
-    none = "none"
-    low = "low"
-    medium = "medium"
-    high = "high"
-    critical = "critical"
-
-
-def _parse_severities(value: str) -> set[str]:
-    names = {part.strip().upper() for part in value.split(",") if part.strip()}
-    valid = {s.value for s in Severity}
-    unknown = sorted(names - valid)
-    if unknown or not names:
-        raise typer.BadParameter(f"unknown severity {', '.join(unknown) or value!r}; use {', '.join(sorted(valid))}")
-    return names
-
-
 _ERROR_LINE_CHARS = 200
 
 
@@ -138,7 +105,7 @@ def _flat(exc: BaseException) -> str:
 def _signals_as_interrupt() -> Iterator[None]:
     """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` so they stop Trivy like Ctrl-C does.
 
-    Trivy runs in its own process groups, so without this a ``timeout``, a CI cancel or a closed terminal would end
+    Trivy runs in its own process groups, so without this a ``timeout``, a ``kill`` or a closed terminal would end
     Python without unwinding and leave Trivy scans running. Signal handlers can only be set on the
     main thread; elsewhere this does nothing.
     """
@@ -161,157 +128,6 @@ def _one_line(text: str | None, limit: int = _ERROR_LINE_CHARS) -> str:
     """First line of ``text``, cut to ``limit`` characters, with control characters replaced."""
     first = (text or "").strip().splitlines()[:1]
     return "".join(ch if ch.isprintable() else "?" for ch in (first[0] if first else ""))[:limit]
-
-
-@app.command()
-def scan(
-    context: Annotated[str | None, typer.Option(help="Kubeconfig context to scan.")] = None,
-    kubeconfig: Annotated[Path | None, typer.Option(help="Path to the kubeconfig file.")] = None,
-    namespace: Annotated[
-        list[str] | None, typer.Option("--namespace", "-n", help="Namespace to scan (repeatable).")
-    ] = None,
-    exclude_namespace: Annotated[list[str] | None, typer.Option(help="Namespace to skip (repeatable).")] = None,
-    namespace_selector: Annotated[
-        str | None,
-        typer.Option(help="Only scan namespaces matching this label selector, e.g. team=payments,env!=dev."),
-    ] = None,
-    selector: Annotated[
-        str | None,
-        typer.Option(
-            "--selector", "-l", help="Only scan pods and workloads matching this label selector, e.g. app=web."
-        ),
-    ] = None,
-    exclude_image: Annotated[
-        list[str] | None,
-        typer.Option(help="Skip images matching this glob, e.g. registry.k8s.io/* or nginx:* (repeatable)."),
-    ] = None,
-    output: Annotated[OutputFormat, typer.Option("--output", "-o", help="Output format.")] = OutputFormat.table,
-    severity: Annotated[
-        str, typer.Option(help="Comma-separated severities to output. Does not limit what --fail-on checks.")
-    ] = "CRITICAL,HIGH",
-    fail_on: Annotated[
-        FailOn,
-        typer.Option(
-            help="Exit 1 when any finding is at or above this severity, including findings hidden by --severity."
-        ),
-    ] = FailOn.none,
-    parallelism: Annotated[int | None, typer.Option(min=1, max=32, help="Images scanned at once.")] = None,
-    pkg_types: Annotated[
-        str | None,
-        typer.Option(help="Package types to scan: os, library or both, comma-separated. Default: os,library."),
-    ] = None,
-    trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
-    no_cache: Annotated[bool, typer.Option("--no-cache", help="Ignore cached scan results.")] = False,
-    allow_partial: Annotated[
-        bool,
-        typer.Option(
-            "--allow-partial",
-            help="With --fail-on, do not exit 2 when skipped namespaces or resources mean coverage was incomplete. "
-            "Warnings that lose only detail (owner info, node platform) never cause exit 2.",
-        ),
-    ] = False,
-    output_file: Annotated[Path | None, typer.Option(help="Write results here instead of stdout.")] = None,
-) -> None:
-    """Scan the images running in the current kube-context.
-
-    Exit codes: 0 ok, 1 findings at or above --fail-on, 2 error (fatal, or with --fail-on: image failures or
-    skipped namespaces/resources unless --allow-partial), 130 cancelled (Ctrl-C, SIGTERM or SIGHUP).
-    """
-    wanted = _parse_severities(severity)
-    passed: dict[str, Any] = {
-        "context": context,
-        "kubeconfig": kubeconfig,
-        "namespaces": namespace,
-        "exclude_namespaces": exclude_namespace,
-        "namespace_selector": namespace_selector,
-        "selector": selector,
-        "exclude_images": exclude_image,
-        "parallelism": parallelism,
-        "pkg_types": pkg_types,
-        "trivy_path": trivy_path,
-    }
-    settings = _load_settings(**passed)
-    err = Console(stderr=True)
-    cancel = threading.Event()
-    try:
-        with _signals_as_interrupt():
-            api = kube_client.load(settings)
-            typer.echo(f"scanning context {_one_line(api.current_context())}", err=True)
-            with contextlib.closing(connect(settings.db_path)) as conn:
-                repo = Repo(conn)
-                with RichProgress(
-                    TextColumn("{task.description}"),
-                    BarColumn(),
-                    MofNCompleteColumn(),
-                    console=err,
-                    disable=not sys.stderr.isatty(),
-                ) as bar:
-                    task = bar.add_task("scanning", total=None)
-
-                    def on_progress(p: Progress) -> None:
-                        _update_bar(bar, task, p)
-
-                    kwargs: dict[str, Any] = {"api": api, "on_progress": on_progress, "cancel": cancel}
-                    if no_cache:
-                        kwargs["cache_max_age"] = timedelta(0)
-                    outcome = run_scan(settings, repo=repo, **kwargs)
-                run = repo.get_run(outcome.run_id)
-                if run is None or run["status"] == "failed":
-                    raise RuntimeError("scan run failed")
-                findings = repo.run_findings(outcome.run_id)
-                failed = repo.run_errors(outcome.run_id)
-    except KeyboardInterrupt:
-        typer.echo("cancelled", err=True)
-        raise typer.Exit(130) from None
-    except Exception as exc:
-        typer.echo(f"error: {_flat(exc)}", err=True)
-        raise typer.Exit(2) from exc
-
-    for warning in outcome.warnings:
-        typer.echo(f"warning: {_one_line(warning.text, 512)}", err=True)
-    if run["status"] == "cancelled":
-        typer.echo("cancelled", err=True)
-        raise typer.Exit(130)
-
-    rendered = RENDERERS[output.value]([r for r in findings if r["severity"] in wanted])
-    if output_file is not None:
-        try:
-            output_file.write_text(rendered)
-        except OSError as exc:
-            typer.echo(f"error: cannot write {output_file}: {exc.strerror or exc}", err=True)
-            raise typer.Exit(2) from exc
-    else:
-        typer.echo(rendered, nl=not rendered.endswith("\n"))
-
-    for row in failed:
-        typer.echo(
-            f"error: {_one_line(row['ref'], 512)} [{row['platform']}] {row['error_kind']}: {error_cause(row['error'])}",
-            err=True,
-        )
-    for host in sorted(
-        {registry_host(parse_image_id(row["ref"], "")) for row in failed if row["error_kind"] == "auth"}
-    ):
-        typer.echo("hint: " + login_hint(host), err=True)
-    errors = run["images_error"] or 0
-    if errors:
-        typer.echo(f"{errors} image(s) failed to scan", err=True)
-    if fail_on is FailOn.none:
-        return
-    gaps = [w for w in outcome.warnings if w.coverage]
-    if gaps and not allow_partial:
-        typer.echo(
-            f"error: inventory incomplete ({len(gaps)} namespaces/resources skipped); pass --allow-partial to accept",
-            err=True,
-        )
-    if errors or (gaps and not allow_partial):
-        raise typer.Exit(2)  # fail closed: image errors or incomplete inventory must not pass as clean
-    threshold = Severity(fail_on.value.upper()).rank
-    hits = [r for r in findings if Severity(r["severity"]).rank >= threshold]
-    if hits:
-        hidden = sum(r["severity"] not in wanted for r in hits)
-        if hidden:
-            typer.echo(f"{hidden} finding(s) at or above --fail-on are hidden by --severity", err=True)
-        raise typer.Exit(1)
 
 
 @registry_app.command("test")

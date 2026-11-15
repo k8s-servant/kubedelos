@@ -29,7 +29,6 @@ dependencies = [
   "kubernetes>=37,<38",         # cluster inventory
   "httpx>=0.28,<1",             # Trivy download and registry calls
   "platformdirs>=4.14,<5",      # cache and data directories
-  "rich>=15,<16",               # terminal output
   "fastapi>=0.162,<1",          # local web UI
   "jinja2>=3.1,<4",             # UI templates
   "uvicorn>=0.54,<1",           # UI server

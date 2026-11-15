@@ -20,7 +20,7 @@ body:
     attributes:
       label: Steps to reproduce
       placeholder: |
-        1. Run `kubedelos scan ...`
+        1. Run `kubedelos ui` and start a scan ...
         2. ...
     validations:
       required: true

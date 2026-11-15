@@ -26,11 +26,10 @@ from starlette.concurrency import run_in_threadpool
 
 from kubedelos.analytics import describe_pkg_types
 from kubedelos.config import Settings
-from kubedelos.output import short_image
 from kubedelos.store import runlock
 from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_history
 from kubedelos.web.jobs import ScanBusy
-from kubedelos.web.pages import open_db, open_db_rw, render
+from kubedelos.web.pages import open_db, open_db_rw, render, short_image
 
 router = APIRouter()
 

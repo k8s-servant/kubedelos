@@ -6,7 +6,7 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.pages import open_db, open_db_rw, render
+from kubedelos.web.pages import open_db, open_db_rw, render, short_image
 
 
 @pytest.fixture(autouse=True)
@@ -54,3 +54,12 @@ def test_open_db_rw_writes(app, client):
     assert response.text == "written"
     with contextlib.closing(connect_readonly(app.state.settings.db_path)) as conn:
         assert conn.execute("SELECT name FROM sqlite_master WHERE name = 't'").fetchone()
+
+
+def test_short_image_cuts_the_digest():
+    row = {"repo": "reg.example.com/app", "tag": "1", "digest": "sha256:" + "a" * 64, "image": "ref"}
+    assert short_image(row) == "reg.example.com/app:1@sha256:aaaaaaaa"
+    assert short_image({"repo": "reg.example.com/app", "tag": None, "digest": None, "image": "ref"}) == (
+        "reg.example.com/app"
+    )
+    assert short_image({"repo": "", "image": "ref"}) == "ref"

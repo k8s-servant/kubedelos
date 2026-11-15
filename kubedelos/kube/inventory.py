@@ -21,8 +21,8 @@ class InventoryWarning:
     """Something the inventory could not see.
 
     ``coverage`` is True when images may be missing from the scan (a skipped namespace or resource). It is False when
-    every image is still found and only extra detail is lost (owner info, the node platform), so that a namespace-scoped
-    identity without cluster-wide list rights can still pass ``--fail-on``.
+    every image is still found and only extra detail is lost (owner info, the node platform), so that a run by a
+    namespace-scoped identity without cluster-wide list rights is not marked incomplete.
     """
 
     text: str
@@ -115,7 +115,7 @@ def _is_forbidden(exc: ApiException) -> bool:
 
 
 def image_names(image: ImageRef) -> set[str]:
-    """Every name an ``--exclude-image`` pattern may match for ``image``, whatever spelling the pod spec used.
+    """Every name an image exclusion pattern may match for ``image``, whatever spelling the pod spec used.
 
     ``repo``, ``repo:tag`` and ``repo@digest`` on the normalised repo, plus the short Docker Hub forms people type
     (``nginx:1.19`` and ``library/nginx:1.19`` for ``docker.io/library/nginx:1.19``).
@@ -168,7 +168,7 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[Inventor
         if _is_forbidden(exc) and selector is not None:
             # The labels cannot be read, so the selector cannot be applied: never guess which namespaces it means.
             raise RuntimeError(
-                "cannot list namespaces: forbidden; --namespace-selector needs list rights on namespaces"
+                "cannot list namespaces: forbidden; the namespace selector needs list rights on namespaces"
             ) from None
         if not (_is_forbidden(exc) and wanted):
             raise
@@ -184,7 +184,7 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[Inventor
         unmatched = (wanted & {ns.metadata.name for ns in api.list_namespaces()}) - {ns.metadata.name for ns in found}
         for name in sorted(unmatched):
             warnings.append(
-                InventoryWarning(f"namespace {name} does not match --namespace-selector; not scanned", coverage=False)
+                InventoryWarning(f"namespace {name} does not match the namespace selector; not scanned", coverage=False)
             )
     for missing in sorted(wanted - unmatched - {ns.metadata.name for ns in found}):
         warnings.append(InventoryWarning(f"namespace {missing} not found", coverage=True))
@@ -255,7 +255,7 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
 
     kept = [item for item in items.values() if not is_excluded(item.image, settings.exclude_images)]
     if excluded := len(items) - len(kept):
-        warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching --exclude-image", coverage=False))
+        warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching the image exclusions", coverage=False))
     return kept, warnings
 
 

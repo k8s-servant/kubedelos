@@ -19,19 +19,6 @@ CACHE_VERSION = f"{TRIVY_VERSION}+c1"
 _DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}\Z")  # \Z: unlike $, no match before a trailing newline
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
-_RUN_FINDINGS_SQL = """
-SELECT w.namespace, w.kind, w.name AS workload, w.container, w.owner, w.team,
-       r.ref AS image, r.repo, r.tag, r.digest, r.platform,
-       f.vuln_id, f.severity, f.pkg_name, f.installed_version, f.fixed_version,
-       f.title, f.primary_url, f.target, f.pkg_type, f.pkg_class
-FROM image_result r
-JOIN finding f ON f.image_result_id = r.id
-JOIN workload w ON w.image_result_id = r.id
-WHERE r.run_id = ?
-ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'HIGH' THEN 3 WHEN 'MEDIUM' THEN 2 WHEN 'LOW' THEN 1 ELSE 0 END DESC,
-         w.namespace, w.name, f.vuln_id
-"""
-
 _FINISH_RUN_SQL = (
     "UPDATE scan_run SET status = :status, finished_at = :now,"
     " images_total = (SELECT COUNT(*) FROM image_result WHERE run_id = :id),"
@@ -175,13 +162,3 @@ class Repo:
                 " report_json = excluded.report_json",
                 (image_key, platform, scan_level, CACHE_VERSION, self._now(), result.model_dump_json()),
             )
-
-    def run_errors(self, run_id: int) -> list[sqlite3.Row]:
-        """The images of a run that failed to scan, with Trivy's (token-masked) error."""
-        return self._conn.execute(
-            "SELECT ref, platform, error_kind, error FROM image_result WHERE run_id = ? AND status = 'error' ORDER BY ref",
-            (run_id,),
-        ).fetchall()
-
-    def run_findings(self, run_id: int) -> list[sqlite3.Row]:
-        return self._conn.execute(_RUN_FINDINGS_SQL, (run_id,)).fetchall()
