@@ -24,6 +24,15 @@ def test_kubedelos_is_the_only_console_script():
     assert scripts == {"kubedelos": "kubedelos.cli:app"}
 
 
+def test_scanning_lives_in_the_ui_not_the_cli():
+    # Scans start from the UI (and, later, the in-cluster schedule); CI gating is left to plain Trivy.
+    commands = {c.name or c.callback.__name__ for c in app.registered_commands}
+    groups = {g.name for g in app.registered_groups}
+    assert commands | groups == {"version", "ui", "trivy", "registry"}
+    r = CliRunner().invoke(app, ["scan"])
+    assert r.exit_code == 2 and "No such command" in r.output
+
+
 FAKE_TRIVY = pathlib.Path(__file__).parent / "trivy" / "fake_trivy.py"
 
 

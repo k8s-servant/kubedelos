@@ -3,7 +3,7 @@
 They live apart from ``kubedelos.web.app`` so the routes and the security middleware can import them at the top level:
 this module imports nothing from ``app``, ``routes`` or ``security``, which keeps the import graph acyclic. Pages call
 ``open_db`` for a read-only connection of their own (sqlite3 objects never cross threads); only the POST routes call
-``open_db_rw`` for a writable one. ``render`` fills a template with what every page needs: the request, the
+``open_db_rw`` for a writable one. ``short_image`` is how every page names an image. ``render`` fills a template with what every page needs: the request, the
 kube-context, the CSP nonce and the nav. A page may override the context and nav (the signed-out page shows neither).
 """
 
@@ -47,3 +47,11 @@ def render(request: Request, name: str, ctx: dict[str, Any], status: int = 200) 
 def plural(count: int, singular: str, plural: str | None = None) -> str:
     """The word for ``count`` things: ``singular`` for exactly one, else ``plural`` (``singular`` + "s" by default)."""
     return singular if count == 1 else plural or singular + "s"
+
+
+def short_image(r: Any) -> str:
+    """``repo:tag`` plus a short digest: what people recognise, where the full ref is 64 hex characters long."""
+    if not r["repo"]:
+        return r["image"]
+    name = f"{r['repo']}:{r['tag']}" if r["tag"] else r["repo"]
+    return f"{name}@{r['digest'][:15]}" if r["digest"] else name  # "sha256:" + 8 hex

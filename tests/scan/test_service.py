@@ -74,6 +74,12 @@ def _fake_scan(calls, fail_ref=None):
     return scan_many
 
 
+def _finding_count(repo, run_id):
+    return repo._conn.execute(
+        "SELECT COUNT(*) FROM finding f JOIN image_result r ON r.id = f.image_result_id WHERE r.run_id = ?", (run_id,)
+    ).fetchone()[0]
+
+
 def _status(repo, run_id):
     return repo.get_run(run_id)["status"]
 
@@ -86,7 +92,7 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     run = repo.get_run(out.run_id)
     assert run["status"] == "partial" and out.status == "partial"
     assert run["images_total"] == 2 and run["images_error"] == 1
-    assert len(repo.run_findings(out.run_id)) == 1
+    assert _finding_count(repo, out.run_id) == 1
     assert [(p.done, p.errors) for p in progress if p.current] == [(1, 0), (2, 1)]
     assert progress[-1].total == 2 and progress[-1].phase == "saving"
     assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1), scan_level="library,os") is not None
@@ -102,7 +108,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     assert len(calls) == 1 and FakeCache.started == 1  # nothing left to scan: no scan_many, no Trivy
     assert _status(repo, out.run_id) == "ok" and out.status == "ok"
-    assert len(repo.run_findings(out.run_id)) == 2  # stored findings kept
+    assert _finding_count(repo, out.run_id) == 2  # stored findings kept
     assert (
         repo._conn.execute(
             "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'cached'", (out.run_id,)

@@ -77,11 +77,23 @@ def test_run_roundtrip_counts(tmp_path):
     assert repo.get_run(999) is None
 
 
+def _run_findings(repo, run_id):
+    """The run's findings with their workload and image, as the UI's queries join them."""
+    return repo._conn.execute(
+        "SELECT w.namespace, w.name AS workload, w.owner, w.team, r.ref AS image, r.repo, r.tag, r.digest,"
+        " r.platform, f.vuln_id, f.severity, f.target, f.pkg_type, f.pkg_class"
+        " FROM image_result r JOIN finding f ON f.image_result_id = r.id JOIN workload w ON w.image_result_id = r.id"
+        " WHERE r.run_id = ?"
+        " ORDER BY CASE f.severity WHEN 'CRITICAL' THEN 4 WHEN 'LOW' THEN 1 ELSE 0 END DESC, w.namespace, f.vuln_id",
+        (run_id,),
+    ).fetchall()
+
+
 def test_latest_run_id_empty(tmp_path):
     assert _repo(tmp_path).latest_run_id() is None
 
 
-def test_run_findings_joins_workloads_and_orders(tmp_path):
+def test_add_result_stores_each_finding_per_workload(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     wls = [
@@ -92,7 +104,7 @@ def test_run_findings_joins_workloads_and_orders(tmp_path):
     repo.add_result(
         run, item, _result(item, findings=[_finding("CVE-L", Severity.LOW), _finding("CVE-C", Severity.CRITICAL)])
     )
-    rows = repo.run_findings(run)
+    rows = _run_findings(repo, run)
     assert len(rows) == 4
     assert [(r["vuln_id"], r["namespace"]) for r in rows] == [
         ("CVE-C", "aa"), ("CVE-C", "zz"), ("CVE-L", "aa"), ("CVE-L", "zz"),
@@ -110,7 +122,7 @@ def test_cached_status_stored_as_is(tmp_path):
     item = _item()
     repo.add_result(run, item, _result(item, "cached", findings=[_finding()]))
     assert repo._conn.execute("SELECT status FROM image_result").fetchone()[0] == "cached"
-    assert len(repo.run_findings(run)) == 1
+    assert len(_run_findings(repo, run)) == 1
 
 
 def test_add_result_is_atomic(tmp_path):
@@ -218,7 +230,7 @@ def test_existing_kubedelos_dir_is_tightened(tmp_path):
     assert stat.S_IMODE((tmp_path / "kubedelos").stat().st_mode) == 0o700
 
 
-def test_run_errors_lists_failed_images_only(tmp_path):
+def test_error_results_keep_their_kind_and_message(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     ok, bad = _item(), _item(ref="reg.io/bad:1", digest=None)
@@ -226,7 +238,12 @@ def test_run_errors_lists_failed_images_only(tmp_path):
     repo.add_result(run, bad, _result(bad, status="error", error_kind="not_found", error="manifest unknown"))
     other = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     repo.add_result(other, bad, _result(bad, status="error", error_kind="auth", error="denied"))
-    rows = [dict(r) for r in repo.run_errors(run)]
+    rows = [
+        dict(r)
+        for r in repo._conn.execute(
+            "SELECT ref, platform, error_kind, error FROM image_result WHERE run_id = ? AND status = 'error'", (run,)
+        )
+    ]
     assert rows == [
         {"ref": "reg.io/bad:1", "platform": "linux/amd64", "error_kind": "not_found", "error": "manifest unknown"}
     ]
@@ -250,12 +267,12 @@ def test_run_records_scan_level(tmp_path):
     assert repo.get_run(run)["pkg_types"] == "os"
 
 
-def test_run_findings_include_pkg_class(tmp_path):
+def test_add_result_stores_pkg_class(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
     finding = _finding().model_copy(update={"pkg_class": "library"})
     repo.add_result(run, _item(), _result(_item(), findings=[finding]))
-    assert [r["pkg_class"] for r in repo.run_findings(run)] == ["library"]
+    assert [r["pkg_class"] for r in _run_findings(repo, run)] == ["library"]
 
 
 def test_migration_from_v1_keeps_runs_drops_cache(tmp_path):
