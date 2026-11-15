@@ -9,6 +9,7 @@ from kubernetes.client import V1Namespace, V1ObjectMeta
 from kubedelos.config import Settings
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity
 from kubedelos.scan import service
+from kubedelos.store import runlock
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from tests.kube.fakes import FakeKubeApi, pod
@@ -83,11 +84,11 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     run = repo.get_run(out.run_id)
-    assert run["status"] == "partial"
+    assert run["status"] == "partial" and out.status == "partial"
     assert run["images_total"] == 2 and run["images_error"] == 1
     assert len(repo.run_findings(out.run_id)) == 1
-    assert [(p.done, p.errors) for p in progress] == [(0, 0), (1, 0), (2, 1)]
-    assert progress[-1].total == 2 and progress[-1].current is not None
+    assert [(p.done, p.errors) for p in progress if p.current] == [(1, 0), (2, 1)]
+    assert progress[-1].total == 2 and progress[-1].phase == "saving"
     assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1), scan_level="library,os") is not None
     assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None  # errors not cached
 
@@ -100,7 +101,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     assert len(calls) == 1 and FakeCache.started == 1  # nothing left to scan: no scan_many, no Trivy
-    assert _status(repo, out.run_id) == "ok"
+    assert _status(repo, out.run_id) == "ok" and out.status == "ok"
     assert len(repo.run_findings(out.run_id)) == 2  # stored findings kept
     assert (
         repo._conn.execute(
@@ -108,7 +109,7 @@ def test_service_uses_cache_second_run(env, monkeypatch):
         ).fetchone()[0]
         == 2
     )
-    assert [p.done for p in progress] == [0, 1, 2]
+    assert [p.done for p in progress if p.current] == [1, 2]
 
 
 def test_service_cancel(env, monkeypatch):
@@ -120,7 +121,7 @@ def test_service_cancel(env, monkeypatch):
 
     monkeypatch.setattr(service, "scan_many", scan_many)
     out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel)
-    assert _status(repo, out.run_id) == "cancelled"
+    assert _status(repo, out.run_id) == "cancelled" and out.status == "cancelled"
 
 
 def test_service_keyboard_interrupt_marks_cancelled_and_reraises(env, monkeypatch):
@@ -253,3 +254,92 @@ def test_service_failed_when_storing_warnings_fails(env, monkeypatch):
     with pytest.raises(RuntimeError, match="disk full"):
         service.run_scan(settings, api=_api(), repo=repo)
     assert _status(repo, repo.latest_run_id()) == "failed"
+
+
+def test_run_scan_records_an_owner_that_is_live_during_the_scan(env, monkeypatch):
+    settings, repo, calls = env
+    seen = []
+
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+        owner = repo.get_run(repo.latest_run_id())["owner"]
+        seen.append((owner, runlock.is_owned(settings.data_dir, owner)))
+        _fake_scan(calls)(
+            items, cache_dir=cache_dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel
+        )
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    [(owner, live)] = seen
+    assert owner and live
+    assert repo.get_run(out.run_id)["owner"] == owner
+    assert not runlock.is_owned(settings.data_dir, owner)
+
+
+def _phases(progress):
+    out: list[str] = []
+    for p in progress:
+        if not out or out[-1] != p.phase:
+            out.append(p.phase)
+    return out
+
+
+def test_progress_reports_phases_in_order_and_counts_cached(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)  # caches both images
+    repo._conn.execute("DELETE FROM image_cache WHERE image_key = ?", (D2,))
+    repo._conn.commit()
+    progress = []
+    service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert _phases(progress) == ["inventory", "scanning", "trivy-db", "scanning", "saving"]
+    assert progress[-1].cached == 1
+    assert progress[-1].done == 2
+    assert all(p.current is None for p in progress if p.phase in ("inventory", "trivy-db", "saving"))
+
+
+def test_progress_skips_trivy_db_phase_when_everything_is_cached(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    progress = []
+    service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert "trivy-db" not in _phases(progress)
+    assert _phases(progress) == ["inventory", "scanning", "saving"]
+    assert progress[-1].cached == 2
+
+
+def test_cancel_during_inventory_never_reaches_trivy(env, monkeypatch):
+    settings, repo, calls = env
+    cancel = threading.Event()
+    real_collect = service.collect
+
+    def collect(api, settings):
+        cancel.set()  # Ctrl-C on the UI while the cluster is being listed
+        return real_collect(api, settings)
+
+    def refuse(settings):
+        raise AssertionError("a cancelled scan fetched Trivy")
+
+    phases: list[str] = []
+    monkeypatch.setattr(service, "collect", collect)
+    monkeypatch.setattr(service, "ensure_trivy", refuse)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel, on_progress=lambda p: phases.append(p.phase))
+    assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
+    assert FakeCache.started == 0 and calls == []
+    assert "trivy-db" not in phases
+
+
+def test_cancel_during_the_trivy_download_never_starts_the_db(env, monkeypatch):
+    settings, repo, calls = env
+    cancel = threading.Event()
+
+    def ensure_trivy(settings):
+        cancel.set()  # Ctrl-C on the UI while the Trivy binary downloads
+        return Path("/fake/trivy")
+
+    monkeypatch.setattr(service, "ensure_trivy", ensure_trivy)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel)
+    assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
+    assert FakeCache.started == 0 and calls == []

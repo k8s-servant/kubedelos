@@ -29,6 +29,7 @@ from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import Severity, is_valid_ref, registry_host
 from kubedelos.output import RENDERERS
 from kubedelos.scan.service import Progress, run_scan
+from kubedelos.store import runlock
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
@@ -37,6 +38,7 @@ from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
 from kubedelos.web import server
 from kubedelos.web.app import create_app
+from kubedelos.web.pages import plural
 
 app = typer.Typer(help="Scan the container images running in a Kubernetes cluster with Trivy.", no_args_is_help=True)
 
@@ -44,6 +46,14 @@ app = typer.Typer(help="Scan the container images running in a Kubernetes cluste
 @app.callback()
 def main() -> None:
     """Keep `app` a command group so more subcommands can be added next to `version`."""
+
+
+def _update_bar(bar: RichProgress, task: Any, p: Progress) -> None:
+    """Reflect one progress event; the bar stays indeterminate until the image total is known."""
+    if p.total:
+        bar.update(task, total=p.total, completed=p.done, description=f"{p.phase} ({p.errors} errors)")
+    else:
+        bar.update(task, description=f"{p.phase}…")
 
 
 @app.command()
@@ -239,7 +249,7 @@ def scan(
                     task = bar.add_task("scanning", total=None)
 
                     def on_progress(p: Progress) -> None:
-                        bar.update(task, total=p.total, completed=p.done, description=f"scanning ({p.errors} errors)")
+                        _update_bar(bar, task, p)
 
                     kwargs: dict[str, Any] = {"api": api, "on_progress": on_progress, "cancel": cancel}
                     if no_cache:
@@ -369,10 +379,17 @@ def ui(
     settings = _load_settings(context=context, kubeconfig=kubeconfig)
     try:
         name = _one_line(kube_client.load(settings).current_context())
-        connect(settings.db_path).close()  # creates the database and runs the migrations
+        conn = connect(settings.db_path)  # creates the database and runs the migrations
+        try:
+            # A run left "running" by a killed scan stays that way for ever; close the ones no live process owns.
+            stale = runlock.close_stale_runs(conn, settings.data_dir)
+        finally:
+            conn.close()
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
+    if stale:
+        typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     token = secrets.token_urlsafe(32)
     try:
         sock = server.bind(host, port)

@@ -1,6 +1,7 @@
 """Read-only queries that pick which scan run a UI page shows, and describe it.
 
-Only runs that finished with results (``ok`` or ``partial``) are ever shown. Kept apart from ``Repo`` because these are
+Only runs that finished with results (``ok`` or ``partial``) are ever shown as results; the run history lists every run
+but links only those. Kept apart from ``Repo`` because these are
 the reads the UI makes on a read-only connection, and the counting rules (an image is a distinct ref, not a platform
 row) live in one place.
 """
@@ -21,7 +22,7 @@ CLUSTER_SCOPE_SQL = (
 )
 
 _RUN_SQL = """
-SELECT id, context, status, finished_at, pkg_types, scope,
+SELECT id, context, status, finished_at, pkg_types, scope, trivy_version,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS images_failed
 FROM scan_run
@@ -46,6 +47,7 @@ class Run:
     scope: dict | None
     images: int
     images_failed: int
+    trivy_version: str | None = None
     gaps: list[str] = field(default_factory=list)
 
 
@@ -60,6 +62,7 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
         scope=json.loads(row["scope"]) if row["scope"] else None,
         images=row["images"],
         images_failed=row["images_failed"],
+        trivy_version=row["trivy_version"],
         gaps=[r["text"] for r in gaps.fetchall()],
     )
 
@@ -551,3 +554,45 @@ def run_namespaces(conn: sqlite3.Connection, run_id: int) -> list[str]:
         (run_id,),
     )
     return [row["namespace"] for row in rows]
+
+
+@dataclass(frozen=True)
+class HistoryRow:
+    """One run in the scans page's history, whatever its status. ``images`` and ``failed`` count distinct refs."""
+
+    id: int
+    status: str
+    scope: dict | None
+    pkg_types: str | None
+    images: int
+    failed: int
+    started_at: datetime
+    finished_at: datetime | None
+    owner: str | None
+
+
+def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
+    """One page of the context's runs of every status, newest first, and how many runs the context has in all."""
+    total = conn.execute("SELECT COUNT(*) FROM scan_run WHERE context = ?", (context,)).fetchone()[0]
+    rows = conn.execute(
+        "SELECT id, status, scope, pkg_types, started_at, finished_at, owner,"
+        " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
+        " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed"
+        " FROM scan_run WHERE context = ? ORDER BY id DESC LIMIT ? OFFSET ?",
+        (context, per_page, (page - 1) * per_page),
+    ).fetchall()
+    history = [
+        HistoryRow(
+            id=r["id"],
+            status=r["status"],
+            scope=json.loads(r["scope"]) if r["scope"] else None,
+            pkg_types=r["pkg_types"],
+            images=r["images"],
+            failed=r["failed"],
+            started_at=datetime.fromisoformat(r["started_at"]),
+            finished_at=datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
+            owner=r["owner"],
+        )
+        for r in rows
+    ]
+    return history, total

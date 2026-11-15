@@ -1,5 +1,7 @@
 import json
 import os
+import signal
+import sys
 import threading
 import time
 from pathlib import Path
@@ -286,6 +288,58 @@ def test_error_cause_replaces_control_characters():
     assert error_cause("bad\x1b[31m\tthing") == "bad?[31m thing"
 
 
+def test_error_cause_redacts_an_authorization_header():
+    cause = error_cause("GET https://example.com/x?sig=SECRET Authorization: Bearer tok123")
+    assert "SECRET" not in cause and "tok123" not in cause
+    assert cause == "GET https://example.com/x?<redacted> Authorization: Bearer <redacted>"
+
+
+JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJlLXZhbHVl"
+
+
+@pytest.mark.parametrize(
+    ("text", "redacted"),
+    [
+        ("Authorization: Basic dXNlcjpwYXNz", "Authorization: Basic <redacted>"),
+        ("authorization:dXNlcjpwYXNz failed", "authorization:<redacted> failed"),
+        ("Authorization: tok123", "Authorization: <redacted>"),
+    ],
+)
+def test_error_cause_redacts_any_authorization_header_value(text, redacted):
+    assert error_cause(text) == redacted
+
+
+def test_error_cause_redacts_a_jwt():
+    assert error_cause(f"service account {JWT} rejected") == "service account <redacted> rejected"
+
+
+@pytest.mark.parametrize(
+    ("text", "redacted"),
+    [
+        ("token: tok123", "token: <redacted>"),
+        ("Password:hunter2, retry", "Password:<redacted>, retry"),
+        ("SECRET: s3cr3t", "SECRET: <redacted>"),
+        ("api-key: k1 api_key: k2 apikey: k3", "api-key: <redacted> api_key: <redacted> apikey: <redacted>"),
+        ('{"access_token": "tok123"}', '{"access_token": "<redacted>"}'),
+        ("api_key=k1", "api_key=<redacted>"),
+    ],
+)
+def test_error_cause_redacts_colon_style_secrets(text, redacted):
+    assert error_cause(text) == redacted
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "Get https://example.com/v2/: connection refused (Basic auth not configured)",
+        "remote error: GET https://example.com/token: DENIED: requested access to the resource is denied",
+        "open /var/run/secret: no such file",
+    ],
+)
+def test_error_cause_leaves_ordinary_text_alone(text):
+    assert error_cause(text) == text
+
+
 def test_runner_keeps_full_stderr_for_error_cause(monkeypatch):
     monkeypatch.setenv("FAKE_TRIVY_STDERR", _NO_HOST)
     monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
@@ -340,3 +394,145 @@ def test_error_cause_redaction_keeps_the_separator_after_the_url():
 )
 def test_error_cause_redacts_other_credential_shapes(raw, shown):
     assert error_cause(raw) == shown
+
+
+def _wait_until(predicate, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while not predicate():
+        if time.monotonic() > deadline:
+            raise AssertionError("timed out")
+        time.sleep(0.01)
+
+
+def test_kill_all_running_stops_every_live_trivy_group():
+    out = {}
+    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
+    thread = threading.Thread(target=lambda: out.update(result=runner._run_group(sleeper, dict(os.environ), 120)))
+    started = time.monotonic()
+    thread.start()
+    _wait_until(runner.running_groups)
+    pgid = runner.running_groups()[0]
+    runner.kill_all_running()
+    thread.join(5)
+    assert not thread.is_alive() and time.monotonic() - started < 5
+    assert out["result"][0] == -signal.SIGKILL
+    assert pgid not in runner.running_groups()
+    with pytest.raises(ProcessLookupError):
+        os.killpg(pgid, 0)
+    # The registry stays open: a later Trivy still runs.
+    assert runner._run_group([sys.executable, "-c", "pass"], dict(os.environ), 30)[0] == 0
+
+
+@pytest.mark.parametrize("unit", ["http://a", "eyJ-", "eyJa", "http://a@", "token: ", "Authorization: Bearer "])
+def test_redaction_of_a_huge_input_is_fast(unit):
+    text = unit * (256 * 1024 // len(unit))
+    for redact in (error_cause, runner._short):
+        started = time.perf_counter()
+        redact(text)
+        assert time.perf_counter() - started < 1, (unit, redact.__name__)
+
+
+def test_redaction_patterns_are_linear():
+    """Even uncapped, a 64 KB input of the worst shapes redacts fast: no pattern rescans the text from every start."""
+    for unit in (
+        "http://a",
+        "eyJ-",
+        "eyJa",
+        "a-b.c",
+        "a.eyJ-",
+        "token:\n",
+        "Bearer\n",
+        "Authorization: Basic\n",
+        "://",
+    ):
+        started = time.perf_counter()
+        runner._redact(unit * (64 * 1024 // len(unit)))
+        assert time.perf_counter() - started < 0.5, unit
+
+
+def test_colon_and_header_redaction_stays_on_one_line():
+    text = "1 error occurred:\n\t* token:\n* GET https://example.com/v2/: denied"
+    assert error_cause(text) == "token:; GET https://example.com/v2/: denied"
+    assert (
+        runner._redact("Authorization:\nGET https://example.com/v2/") == "Authorization:\nGET https://example.com/v2/"
+    )
+    assert runner._redact("Bearer\n* denied") == "Bearer\n* denied"
+    assert (
+        runner._redact("token: tok123 Authorization: Basic abc") == "token: <redacted> Authorization: Basic <redacted>"
+    )
+
+
+def test_a_cut_never_leaves_part_of_a_secret():
+    """The cap keeps the end of the text; the line it cuts into is dropped, so a secret can't lose its marker."""
+    secret = "GET https://example.com/v2/?sig=" + "S" * 100
+    text = "start\n" + secret + "\n" + "b" * (16 * 1024 - 50)
+    for redact in (error_cause, runner._short):
+        assert "SSSS" not in redact(text)
+    assert error_cause(text).endswith("b" * 20)
+
+
+TOKEN = "dG9rZW4tdmFsdWUtMTIzNDU2Nzg5MA"  # token-shaped: 16+ base64ish characters, fake  # gitleaks:allow
+
+
+@pytest.mark.parametrize(
+    "text, shown",
+    [
+        (f"token:\n{TOKEN}", "token:\n<redacted>"),
+        (f"Authorization:\n  {TOKEN} retry", "Authorization:\n  <redacted> retry"),
+        (f'"access_token":\n"{TOKEN}"', '"access_token":\n"<redacted>"'),
+        ("token:\nshort", "token:\nshort"),  # not token-shaped: a word, kept
+    ],
+)
+def test_a_marker_at_a_line_end_redacts_the_next_lines_token(text, shown):
+    assert runner._redact(text) == shown
+
+
+def test_the_next_line_pass_keeps_trivy_causes():
+    text = "1 error occurred:\n\t* token:\n* GET https://example.com/v2/: denied"
+    assert runner._redact(text) == text
+    assert error_cause(text) == "token:; GET https://example.com/v2/: denied"
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://h/redirect?u=https://b/x?sig=SECRET",
+        "https://h/redirect?u=https://b/x?x=SECRET",
+        "https://h/a://b?sig=SECRET",
+        "https://h/a://b?x=SECRET",
+        "https://h/a://?x=SECRET",
+        "https://h/_://?x=SECRET",
+        "https://user:pw@h/p?x=SECRET",
+    ],
+)
+def test_url_query_redaction_has_no_gaps(url):
+    shown = runner._redact(f"GET {url}: denied")
+    assert "SECRET" not in shown and "pw" not in shown and shown.endswith(": denied")
+
+
+@pytest.mark.parametrize("prefix", ["x-", "id_", "a.", " ", "token="])
+def test_a_jwt_after_a_dash_or_underscore_is_redacted(prefix):
+    assert JWT not in runner._redact(f"{prefix}{JWT} rejected")
+    assert runner._redact(f"{prefix}{JWT} rejected").endswith("<redacted> rejected")
+
+
+@pytest.mark.parametrize("marker", [" token:", " Bearer", " Authorization: Basic"])
+def test_a_cut_line_ending_in_a_marker_takes_the_next_line_with_it(marker):
+    """The cut can drop a line ending in ``token:`` but keep the token on the next line: that line goes too."""
+    text = "y\n" + "x" * 16350 + marker + "\n" + TOKEN + "\nthe end"  # the cut falls in the x line
+    for redact in (error_cause, runner._short):
+        shown = redact(text)
+        assert TOKEN not in shown and shown.endswith("the end")
+
+
+@pytest.mark.parametrize(
+    "text, shown",
+    [
+        (f"Authorization: Basic\n{TOKEN}", "Authorization: Basic\n<redacted>"),
+        (f"Authorization: Bearer\n  {TOKEN}", "Authorization: Bearer\n  <redacted>"),
+        (f"Bearer\n{TOKEN}", "Bearer\n<redacted>"),
+        ("Bearer\n* denied", "Bearer\n* denied"),  # a Trivy bullet is not token-shaped
+    ],
+)
+def test_a_scheme_word_at_a_line_end_redacts_the_next_lines_token(text, shown):
+    assert runner._redact(text) == shown

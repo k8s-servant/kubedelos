@@ -1,0 +1,2 @@
+# Fake token-shaped value for the redaction tests (base64 of "token-value-1234567890").
+0086177f423f45506efbac9fd2d3ab252fec486d:tests/trivy/test_runner.py:generic-api-key:464

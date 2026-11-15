@@ -1,3 +1,4 @@
+import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
@@ -12,6 +13,7 @@ from kubedelos.store.queries import (
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
     FindingFilter,
+    HistoryRow,
     RunNotShown,
     WorstImage,
     auth_failed_refs,
@@ -23,6 +25,7 @@ from kubedelos.store.queries import (
     kpis,
     newest_run,
     previous_comparable,
+    run_history,
     run_namespaces,
     worst_images,
 )
@@ -149,6 +152,16 @@ def test_run_counts_distinct_refs(db):
     repo.finish_run(run_id, "partial")
     run = get_run(conn, "ctx", run_id)
     assert (run.images, run.images_failed) == (2, 1)
+
+
+def test_run_carries_its_trivy_version(db):
+    conn, repo = db
+    pinned = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
+    repo.finish_run(pinned, "ok")
+    custom = repo.start_run("ctx", "ui", "custom", scan_level="os", scope=CLUSTER)
+    repo.finish_run(custom, "ok")
+    assert get_run(conn, "ctx", pinned).trivy_version == "0.76.1"
+    assert newest_run(conn, "ctx", cluster_scope=True).trivy_version == "custom"
 
 
 def test_run_gaps(db):
@@ -684,3 +697,26 @@ def test_worst_images_empty_without_critical_or_high(db):
     run_id = _run(repo)
     _add_in(repo, run_id, "a", [_fx("M1", "MEDIUM")])
     assert worst_images(conn, run_id) == []
+
+
+def test_run_history_pages_newest_first_with_total(db):
+    conn, repo = db
+    statuses = ("ok", "partial", "failed", "cancelled", "running")
+    ids = [_run(repo, statuses[i % len(statuses)]) for i in range(30)]
+    _run(repo, context="other")
+    _add(repo, ids[-1], "a", "linux/amd64")
+    _add(repo, ids[-1], "a", "linux/arm64")
+    _add(repo, ids[-1], "b", "linux/amd64", status="error")
+    first, total = run_history(conn, "ctx", 1)
+    second, total2 = run_history(conn, "ctx", 2)
+    assert total == total2 == 30
+    assert len(first) == 25 and len(second) == 5
+    assert [r.id for r in first + second] == ids[::-1]
+    newest = first[0]
+    assert isinstance(newest, HistoryRow)
+    assert (newest.status, newest.images, newest.failed, newest.pkg_types) == ("running", 2, 1, "library,os")
+    assert newest.scope == json.loads(CLUSTER) and newest.finished_at is None and newest.owner is None
+    done = first[1]
+    assert done.finished_at - done.started_at == timedelta(minutes=1)
+    assert run_history(conn, "ctx", 3) == ([], 30)
+    assert run_history(conn, "none", 1) == ([], 0)

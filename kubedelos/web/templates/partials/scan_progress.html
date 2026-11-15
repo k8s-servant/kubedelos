@@ -1,0 +1,59 @@
+{#- The live readout of the UI's scan, served alone by GET /scans/progress and included in the scans page. The outer
+    div is always there, so a poller has a target before the first scan. Its live region is the .scan-live wrapper
+    around it on the scans page, which htmx never swaps. A run links to its results only when its
+    final status is ok or partial, never by its phase: "saving" also fires on a cancelled run. While a scan is active the
+    div polls itself through htmx every 2 seconds; the swapped-in copy of a finished scan lacks the attributes, so polling
+    stops on its own, and the poll that sees the scan end also gets HX-Refresh, which reloads the page with the
+    finished run in the history. Without JavaScript a refresh link stands in. -#}
+{%- set active = job and job.state in ("starting", "running", "stopping") %}
+<div id="scan-progress" class="scan-progress"{% if active %} hx-get="/scans/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+{%- if job %}
+  <section class="card" aria-labelledby="progress-title">
+    <div class="card-head">
+      <h2 class="card-title" id="progress-title">{{ job.title }}</h2>
+      {%- if job.phase %}
+      <span class="chip chip-pinned">{{ job.phase }}</span>
+      {%- endif %}
+      {%- if job.status %}
+      <span class="chip{% if job.chip %} {{ job.chip }}{% endif %}">{{ job.status }}</span>
+      {%- endif %}
+    </div>
+  {%- if job.error %}
+    <div class="callout" role="alert"><p>{{ job.error }}</p></div>
+  {%- endif %}
+  {%- if job.counted %}
+    <p>{{ job.done }} of {{ job.total }} {{ job.total | plural("image") }}</p>
+    <ul class="chips">
+      <li class="chip"><strong>{{ job.scanned }}</strong> scanned</li>
+      <li class="chip"><strong>{{ job.cached }}</strong> cached</li>
+      <li class="chip"><strong>{{ job.failed }}</strong> failed</li>
+    </ul>
+  {%- elif job.state == "starting" %}
+    <p>starting…</p>
+  {%- endif %}
+  {%- if job.image %}
+    <p class="hint">last finished: <code>{{ job.image }}</code></p>
+  {%- endif %}
+  {%- if job.eta %}
+    <p class="hint">{{ job.eta }}</p>
+  {%- endif %}
+  {%- if job.state == "stopping" %}
+    <p>stopping once the images in flight finish</p>
+  {%- endif %}
+  {%- if active %}
+    <noscript>
+      <p><a href="/scans">refresh</a> to see the latest progress</p>
+    </noscript>
+  {%- endif %}
+  {%- if job.href %}
+    <p><a href="{{ job.href }}">see results</a> of run {{ job.run_id }}</p>
+  {%- endif %}
+  {%- if job.cancellable %}
+    <form method="post" action="/scans/cancel">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <button type="submit" class="btn">Cancel scan</button>
+    </form>
+  {%- endif %}
+  </section>
+{%- endif %}
+</div>

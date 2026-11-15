@@ -3,7 +3,9 @@
 Parallel Trivy processes fight over the BoltDB lock of the on-disk layer cache, so every scan keeps that cache in
 memory (``--cache-backend memory``) and only reads the shared vulnerability and Java DBs, which
 :class:`kubedelos.trivy.cache.TrivyCache` keeps up to date under a file lock. Every Trivy process runs in its own
-process group so that a stop or a timeout also reaches its children.
+process group so that a stop or a timeout also reaches its children. Being in its own session, a Trivy process never
+gets the terminal's Ctrl-C, so every group this process starts is also kept in a process-wide registry, and
+:func:`kill_all_running` stops them all when the UI shuts down mid-scan.
 """
 
 import contextlib
@@ -61,12 +63,31 @@ class _ClientGroups:
         with self._lock:
             self._pgids.discard(pgid)
 
-    def kill_all(self) -> None:
+    def pgids(self) -> list[int]:
         with self._lock:
-            self._closed = True
+            return list(self._pgids)
+
+    def kill_all(self, *, close: bool = True) -> None:
+        """SIGKILL every group; with ``close``, also any group added later."""
+        with self._lock:
+            self._closed = close
             pgids = list(self._pgids)
         for pgid in pgids:
             _kill_group(pgid, signal.SIGKILL)
+
+
+# Every Trivy process group this process started that is still running, whoever started it.
+_RUNNING = _ClientGroups()
+
+
+def running_groups() -> list[int]:
+    """The process groups of the Trivy processes still running."""
+    return _RUNNING.pgids()
+
+
+def kill_all_running() -> None:
+    """SIGKILL every Trivy process group still running in this process: scans and DB downloads alike."""
+    _RUNNING.kill_all(close=False)
 
 
 def _run_group(
@@ -87,6 +108,7 @@ def _run_group(
         errors="replace",
         start_new_session=True,
     )
+    _RUNNING.add(proc.pid)
     if groups is not None:
         groups.add(proc.pid)
     try:
@@ -96,32 +118,101 @@ def _run_group(
         proc.communicate()
         raise
     finally:
+        _RUNNING.discard(proc.pid)
         if groups is not None:
             groups.discard(proc.pid)
     return proc.returncode, stdout, stderr
 
 
 # Signed storage URLs (Azure Blob ``sig=``, S3 ``X-Amz-Signature``) carry credentials in the query string, and
-# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Bearer tokens and
-# ``token=``-style pairs are redacted wherever they appear. Best effort: other shapes are not recognised.
-_URL_QUERY = re.compile(r"([a-z][a-z0-9+.-]*://[^\s\"'?#]+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
-_URL_USERINFO = re.compile(r"([a-z][a-z0-9+.-]*://)[^\s\"'/@]+@", re.IGNORECASE)
-_BEARER = re.compile(r"\b(Bearer\s+)[^\s,;\"']+", re.IGNORECASE)
-_SECRET_PAIR = re.compile(
-    r"\b((?:access_|refresh_|id_)?token|password|passwd|secret|signature|sig)=[^\s,;&\"']+", re.IGNORECASE
+# ``user:password@`` carries them in the authority; Trivy prints request URLs in its errors. Authorization header
+# values, bearer tokens, JWTs and ``token=`` / ``token: ``-style pairs are redacted wherever they appear, including
+# JSON-quoted keys. Best effort: other shapes are not recognised.
+#
+# Every pattern runs in linear time: a scheme starts only where a run of scheme characters starts (or right at a bare
+# ``://``) and is taken whole (possessive), a URL's host and path stop at the next ``://``, where the next attempt
+# picks up, and JWTs are found per run of base64url characters, so no attempt rescans text an earlier one already
+# read. Every pattern stays on one line, except that a credential marker ending a line (``token:``, ``Authorization:``,
+# ``Bearer``) also redacts the next line's first word when that is token-shaped, so a Trivy bullet such as ``* GET``
+# stays.
+_SCHEME = r"(?<![a-z0-9+.-])[a-z0-9+.-]*+://"
+_URL_QUERY = re.compile(rf"({_SCHEME}(?:(?!://)[^\s\"'?#])*+)\?(?:[^\s\"']*[^\s\"':])?", re.IGNORECASE)
+_URL_USERINFO = re.compile(rf"({_SCHEME})[^\s\"'/@]++@", re.IGNORECASE)
+_B64_RUN = re.compile(r"[A-Za-z0-9_.-]{5,}+")  # a run that may hold a JWT: base64url segments and their dots
+_JWT_START = re.compile(r"(?<![A-Za-z0-9])eyJ[A-Za-z0-9_-]")
+_AUTH_SCHEMES = r"(?:Basic|Bearer|Digest|Negotiate|Token)"
+# A scheme word alone at a line end is not the value: its token is on the next line, for _NEXT_LINE.
+_AUTH_HEADER = re.compile(
+    rf"\b(Authorization\"?[ \t]*:[ \t]*\"?)({_AUTH_SCHEMES}[ \t]+)?(?!{_AUTH_SCHEMES}[ \t]*+(?:\r?\n|$))[^\s,;\"']+",
+    re.IGNORECASE,
 )
+_BEARER = re.compile(r"\b(Bearer[ \t]+)[^\s,;\"']+", re.IGNORECASE)
+_CREDENTIAL_NAMES = r"(?:access_|refresh_|id_)?token|password|passwd|secret|api[-_]?key"
+_SECRET_PAIR = re.compile(rf"\b({_CREDENTIAL_NAMES}|signature|sig)=[^\s,;&\"']+", re.IGNORECASE)
+# Not after a path or host character, so a URL such as ``https://example.com/token: DENIED`` keeps its message.
+_SECRET_COLON = re.compile(rf"(?<![\w/.-])({_CREDENTIAL_NAMES})(\"?[ \t]*:[ \t]*\"?)[^\s,;\"']+", re.IGNORECASE)
+# A marker ending a line: ``token:``-style names or ``Authorization:``, or an auth scheme word, after an optional
+# ``Authorization:`` (``Bearer``, ``Authorization: Basic``).
+_LINE_END_MARKER = (
+    rf"(?:(?<![\w/.-])(?:Authorization|{_CREDENTIAL_NAMES})\"?[ \t]*+:[ \t]*+\"?"
+    rf"|(?:\bAuthorization\"?[ \t]*+:[ \t]*+\"?[ \t]*+)?\b{_AUTH_SCHEMES})"
+)
+_NEXT_LINE = re.compile(
+    rf"({_LINE_END_MARKER}[ \t]*+\r?\n[ \t]*+\"?)[A-Za-z0-9._~+/=-]{{16,}}+",
+    re.IGNORECASE,
+)
+_ENDS_IN_MARKER = re.compile(rf"(?::|\b{_AUTH_SCHEMES})\Z", re.IGNORECASE)  # read on a line's last few characters
 _ERROR_LIST = re.compile(r"\d+ errors? occurred:$")
+_MAX_REDACT_CHARS = 16 * 1024  # only the end of a longer text is redacted and shown: the cause is there
+
+
+def _tail(text: str) -> str:
+    """The last :data:`_MAX_REDACT_CHARS` characters of ``text``, without the line the cut falls in.
+
+    A cut inside a line could keep a secret but drop the ``sig=`` or ``token:`` before it that marks it for
+    redaction, so that partial line goes. Only :data:`_NEXT_LINE` reaches past a line, from a marker ending in ``:``
+    or an auth scheme word, so when the partial line ends that way the line after it goes too.
+    """
+    if len(text) <= _MAX_REDACT_CHARS:
+        return text
+    partial, newline, rest = text[-_MAX_REDACT_CHARS:].partition("\n")
+    if newline and _ENDS_IN_MARKER.search(partial.rstrip(' \t\r"')[-16:]):
+        _, newline, rest = rest.partition("\n")
+    return "\u2026\n" + rest if newline else "\u2026"
+
+
+def _redact_jwts(run: re.Match[str]) -> str:
+    """A run of base64url characters with each ``eyJ...``-headed JWT in it (three dot-separated segments) redacted.
+
+    The run is split on its dots once, so finding a JWT never rescans it; a JWT may follow ``-`` or ``_``.
+    """
+    parts = run[0].split(".")
+    out: list[str] = []
+    i = 0
+    while i < len(parts):
+        start = _JWT_START.search(parts[i]) if i + 2 < len(parts) and parts[i + 1] else None
+        if start is None:
+            out.append(parts[i])
+            i += 1
+        else:  # this part from "eyJ" on, the next part and the one after it (which may be empty)
+            out.append(parts[i][: start.start()] + "<redacted>")
+            i += 3
+    return ".".join(out)
 
 
 def _redact(text: str) -> str:
-    """``text`` with URL query strings, URL userinfo, bearer tokens and ``token=``-style values redacted."""
+    """``text`` with URL credentials, authorization values, JWTs and ``token=``/``token:``-style values redacted."""
     text = _URL_USERINFO.sub(r"\1<redacted>@", _URL_QUERY.sub(r"\1?<redacted>", text))
-    return _SECRET_PAIR.sub(r"\1=<redacted>", _BEARER.sub(r"\1<redacted>", text))
+    text = _B64_RUN.sub(_redact_jwts, text)
+    text = _NEXT_LINE.sub(r"\1<redacted>", text)  # before the header passes, which would take the scheme word
+    text = _AUTH_HEADER.sub(lambda m: f"{m[1]}{m[2] or ''}<redacted>", text)
+    text = _BEARER.sub(r"\1<redacted>", text)
+    return _SECRET_COLON.sub(r"\1\2<redacted>", _SECRET_PAIR.sub(r"\1=<redacted>", text))
 
 
 def _short(text: str) -> str:
     """Trim ``text`` to its last :data:`_MAX_ERROR_CHARS` characters, with URL credentials redacted."""
-    return _redact(text.strip())[-_MAX_ERROR_CHARS:]
+    return _redact(_tail(text.strip()))[-_MAX_ERROR_CHARS:]
 
 
 def error_cause(text: str | None, limit: int = 300) -> str:
@@ -129,10 +220,10 @@ def error_cause(text: str | None, limit: int = 300) -> str:
 
     Trivy's ``FATAL`` line is a long chain of generic wrappers ("run error: image scan error: ..."), and the cause
     is on the ``* `` lines of the "N errors occurred:" list below it. Without those, the ``FATAL`` message, or
-    else the whole text, is used. A cut keeps the end, where the cause is. Credentials are redacted as in
-    :func:`_redact`.
+    else the whole text, is used. A cut keeps the end, where the cause is; only the last
+    :data:`_MAX_REDACT_CHARS` characters are read. Credentials are redacted as in :func:`_redact`.
     """
-    lines = [line.strip() for line in _redact(text or "").splitlines() if line.strip()]
+    lines = [line.strip() for line in _redact(_tail(text or "")).splitlines() if line.strip()]
     causes: list[str] = []
     in_list = False  # only the "* " lines of Trivy's "N errors occurred:" list are causes
     for line in lines:

@@ -2,8 +2,13 @@
 
 The socket is bound here, before the URL is printed, so a busy port is reported cleanly and the browser never opens
 on a dead address. uvicorn's own access log is off because it prints the full request target, ``?token=`` included.
+When the server stops, ``serve`` shuts the app's scan runner down: a UI scan still running is told to stop after the
+images in flight, and the process waits a few seconds for it to record its run as cancelled, then kills any Trivy still
+running, since Trivy runs in its own session and never sees the terminal's Ctrl-C. An ``atexit`` hook,
+registered once per served app and dropped after, covers an exit that skips that ``finally``.
 """
 
+import atexit
 import errno
 import socket
 import sys
@@ -57,6 +62,17 @@ def url(host: str, port: int, token: str) -> str:
 
 
 def serve(app: FastAPI, sock: socket.socket) -> None:
-    """Run ``app`` on ``sock`` until Ctrl-C (uvicorn handles the signal)."""
+    """Run ``app`` on ``sock`` until Ctrl-C (uvicorn handles the signal).
+
+    Then stop the app's scan runner, if it has one.
+    """
     config = uvicorn.Config(app, workers=1, access_log=False, log_level="warning", lifespan="off")
-    uvicorn.Server(config).run(sockets=[sock])
+    scans = getattr(app.state, "scans", None)
+    if scans is not None:
+        atexit.register(scans.shutdown)
+    try:
+        uvicorn.Server(config).run(sockets=[sock])
+    finally:
+        if scans is not None:
+            scans.shutdown()
+            atexit.unregister(scans.shutdown)

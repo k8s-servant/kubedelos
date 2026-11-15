@@ -69,14 +69,15 @@ def make_run(tmp_path, monkeypatch):
                     failed,
                     ImageResult(image=failed.image, platform="linux/amd64", status="error", error_kind=kind, error="x"),
                 )
-            repo.finish_run(run_id, status or ("partial" if error or failures else "ok"))
+            final = status or ("partial" if error or failures else "ok")
+            repo.finish_run(run_id, final)
 
         def fake_run_scan(settings, **kw):
             seen["settings"] = settings
             seen["kw"] = kw
             if raises:
                 raise raises
-            return ScanOutcome(run_id=run_id, warnings=list(warnings))
+            return ScanOutcome(run_id=run_id, warnings=list(warnings), status=final)
 
         monkeypatch.setattr(cli, "run_scan", fake_run_scan)
         monkeypatch.setattr(cli.kube_client, "load", lambda settings: FakeApi())
@@ -390,3 +391,18 @@ def test_scan_multiline_exception_is_one_line(make_run):
     r = _run()
     assert r.exit_code == 2
     assert "error: trivy failed: second third\n" in r.stderr
+
+
+def test_progress_bar_stays_indeterminate_during_inventory():
+    from rich.progress import Progress as RichProgress
+
+    from kubedelos.scan.service import Progress
+
+    with RichProgress(disable=True) as bar:
+        task = bar.add_task("scanning", total=None)
+        cli._update_bar(bar, task, Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
+        t = bar.tasks[0]
+        assert t.total is None and not t.finished
+        assert t.description.startswith("inventory")
+        cli._update_bar(bar, task, Progress(total=3, done=1, errors=0, current="x", phase="scanning"))
+        assert bar.tasks[0].total == 3 and bar.tasks[0].completed == 1

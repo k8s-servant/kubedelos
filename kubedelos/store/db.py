@@ -111,6 +111,11 @@ MIGRATIONS: list[str] = [
     DROP INDEX idx_finding_image_result;
     DROP INDEX idx_finding_severity;
     """,
+    # 6: the token of the process that owns a running run (kubedelos.store.runlock), so a stale "running" row can be
+    # told from a scan still going on in another terminal. Rows from before this migration have no owner.
+    """
+    ALTER TABLE scan_run ADD COLUMN owner TEXT;
+    """,
 ]
 
 

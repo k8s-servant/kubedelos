@@ -4,6 +4,8 @@ import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
+import kubedelos.web.app as app_module
+from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import render
 
 
@@ -90,3 +92,10 @@ def test_validation_error_renders_400_page(client):
     assert response.headers["content-type"].startswith("text/html")
     assert "invalid parameter: n" in response.text
     assert response.headers["cache-control"] == "no-store"
+
+
+def test_app_has_an_idle_scan_runner(seed):
+    app = app_module.create_app(seed.settings, context="my-cluster", token="t", port=9370)
+    assert isinstance(app.state.scans, ScanRunner)
+    assert app.state.scans.view() is None
+    assert not hasattr(app_module, "atexit")  # the exit hook is server.serve's, once per process

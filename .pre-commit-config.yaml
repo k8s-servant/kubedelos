@@ -4,7 +4,9 @@ repos:
     rev: v6.0.0
     hooks:
       - id: end-of-file-fixer
+        exclude: ^kubedelos/web/static/htmx\.min\.js$
       - id: trailing-whitespace
+        exclude: ^kubedelos/web/static/htmx\.min\.js$
         args: [--markdown-linebreak-ext=md]
       - id: check-yaml
         exclude: ^charts/.*/templates/

@@ -153,6 +153,34 @@ def test_sidebar_without_a_run_says_no_scans_yet(client):
     assert "no scans yet" in _sidebar(client.get("/").text)
 
 
+def test_sidebar_footer_names_the_shown_runs_trivy(client, seed):
+    _run(seed)
+    sidebar = _sidebar(client.get("/").text)
+    assert '<p class="sidebar-foot">Scanned with Trivy v0.76.1</p>' in sidebar
+
+
+def test_sidebar_footer_names_the_pinned_runs_trivy_not_the_newest(client, seed):
+    old = seed.repo.start_run(seed.context, "cli", "0.70.0", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(old, "ok")
+    _run(seed)  # newer, scanned with v0.76.1
+    assert "Trivy v0.76.1" in _sidebar(client.get("/").text)
+    pinned = _sidebar(client.get(f"/?run_id={old}").text)
+    assert '<p class="sidebar-foot">Scanned with Trivy v0.70.0</p>' in pinned
+    assert "v0.76.1" not in pinned
+
+
+def test_sidebar_footer_names_a_custom_trivy(client, seed):
+    run_id = seed.repo.start_run(seed.context, "cli", "custom", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(run_id, "ok")
+    sidebar = _sidebar(client.get("/").text)
+    assert '<p class="sidebar-foot">Scanned with a custom Trivy</p>' in sidebar
+    assert "Trivy v" not in sidebar
+
+
+def test_sidebar_footer_is_omitted_without_a_run(client):
+    assert "sidebar-foot" not in client.get("/").text
+
+
 def test_run_chips(client, seed):
     clean = _run(seed)
     for i in range(8):

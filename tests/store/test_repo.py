@@ -320,3 +320,29 @@ def test_connect_readonly_path_with_space_and_hash(tmp_path):
     conn = connect_readonly(path)
     _OPEN.append(conn)
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+
+
+def test_run_records_owner(tmp_path):
+    repo = _repo(tmp_path)
+    assert repo.get_run(repo.start_run("ctx", "cli", "0.76.1", scan_level="os"))["owner"] is None
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", owner="ab" * 16)
+    assert repo.get_run(run)["owner"] == "ab" * 16
+
+
+def test_close_stale_closes_a_running_run_and_notes_why(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    assert repo.close_stale(run, "closed by kubedelos") is True
+    row = repo.get_run(run)
+    assert row["status"] == "failed" and row["finished_at"] is not None
+    assert (row["images_total"], row["images_error"]) == (0, 0)
+    assert [r["text"] for r in repo.run_warnings(run)] == ["closed by kubedelos"]
+
+
+def test_close_stale_leaves_a_finished_run_alone(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    repo.finish_run(run, "ok")
+    assert repo.close_stale(run, "closed by kubedelos") is False
+    assert repo.get_run(run)["status"] == "ok"
+    assert repo.run_warnings(run) == []

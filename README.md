@@ -116,8 +116,9 @@ to. Registry auth for the in-cluster mode (workload identity, pull secrets) come
 
 ## Local web UI
 
-`kubedelos ui` serves a read-only web UI on top of the scan data in your local SQLite database. It listens on loopback only
-(`127.0.0.1`, `::1` or `localhost`; other hosts are refused), prints a URL with a token, and opens it in your browser:
+`kubedelos ui` serves a web UI on top of the scan data in your local SQLite database, and can start scans of its
+context. It listens on loopback only (`127.0.0.1`, `::1` or `localhost`; other hosts are refused), prints a URL with a
+token, and opens it in your browser:
 
 ```bash
 kubedelos ui                          # http://127.0.0.1:9370/?token=...
@@ -137,9 +138,10 @@ ssh -L 9370:127.0.0.1:9370 my-host
 Keep the same port on both ends: the UI checks the `Host` header against the port it listens on, so `-L 9400:...` fails.
 
 Every page has a sidebar with the kube-context and a freshness dot that turns from green to amber once the shown run is
-over 24 hours old; below 760 px the sidebar becomes a top bar. The page head names the run in chips: its number, scope,
-package types, age, image count and failures, and whether it is pinned or stale. The UI follows the system light or dark
-theme.
+over 24 hours old, and a footer naming the Trivy that scanned it ("Scanned with Trivy v0.76.1", or "a custom Trivy" for
+`--trivy-path` runs); below 760 px the sidebar becomes a top bar, which leaves the footer out. The page head names the
+run in chips: its number, scope, package types, age, image count and failures, and whether it is pinned or stale. The UI
+follows the system light or dark theme.
 
 - **Dashboard (`/`)**: the latest whole-cluster run, with an incomplete marker when some namespaces could not be listed.
   KPI tiles show the change against the previous comparable run; the all findings tile carries a severity bar and a
@@ -148,8 +150,23 @@ theme.
   a newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
   100 per page.
+- **Scans (`/scans`)**: start a scan of the UI's context. The form takes namespaces, namespace exclusions, a namespace
+  selector, a label selector, image exclusions, the number of images scanned in parallel (1–32) and package types, each
+  prefilled from your settings and labelled with the saved value. What you change applies to that scan only.
+  The UI runs one scan at a time; a second start while one runs is refused, but a `kubedelos scan` in another terminal
+  doesn't block it. Progress updates every 2 seconds without a reload: the phase (Trivy DB, inventory, scanning,
+  saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images
+  have been scanned. When the scan ends, the page reloads once to show the finished run. Cancel stops the scan once the
+  images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,
+  images, failures and duration; only `ok` and `partial` runs link to their results. Ctrl-C on `kubedelos ui` cancels
+  a running scan, waits up to 10 seconds for the images in flight, then kills any Trivy process still running.
 
 Add `?run_id=N` to pin a page to one run.
+
+Each scan run, from the CLI or the UI, holds a lock file under the data directory for as long as it runs. A run left
+`running` by a process that died (killed, crashed, or a laptop that went to sleep for good) has no live lock, so
+`kubedelos ui` marks it `failed` at startup, printing a note such as `note: closed 2 interrupted runs`, and again before
+each UI scan starts. A scan still running in another terminal holds its lock and is never touched.
 
 ## License
 

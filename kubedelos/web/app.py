@@ -2,7 +2,8 @@
 
 ``create_app`` wires the security middleware, the templates, the static files and the page routers. The helpers the
 pages and the security middleware share (``open_db``, ``render``) live in ``kubedelos.web.pages``, so that this module
-can import the routes at the top level without an import cycle.
+can import the routes at the top level without an import cycle. The app owns one ``ScanRunner`` for the scans page;
+``server.serve`` shuts it down when the server stops.
 """
 
 from collections.abc import Callable
@@ -20,8 +21,9 @@ from fastapi.templating import Jinja2Templates
 
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
+from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import plural, render
-from kubedelos.web.routes import dashboard, findings
+from kubedelos.web.routes import dashboard, findings, scans
 from kubedelos.web.security import Guard, install
 
 _HERE = Path(__file__).parent
@@ -79,6 +81,7 @@ def create_app(
     app.state.clock = clock
     app.state.guard = guard
     app.state.templates = _templates(guard)
+    app.state.scans = ScanRunner(settings, context, clock=clock)
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
     @app.exception_handler(RequestValidationError)
@@ -89,5 +92,6 @@ def create_app(
 
     app.include_router(dashboard.router)
     app.include_router(findings.router)
+    app.include_router(scans.router)
     install(app, guard)
     return app

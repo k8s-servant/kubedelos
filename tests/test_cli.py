@@ -261,3 +261,45 @@ def test_ui_creates_and_migrates_db(ui_env):
         assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     finally:
         conn.close()
+
+
+def test_ui_closes_stale_runs_at_startup(ui_env):
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    conn = connect(Settings().db_path)
+    try:
+        run_id = Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+    finally:
+        conn.close()
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "note: closed 1 interrupted run\n" in r.output
+    conn = connect(Settings().db_path)
+    try:
+        assert Repo(conn).get_run(run_id)["status"] == "failed"
+    finally:
+        conn.close()
+
+
+def test_ui_counts_stale_runs_in_the_plural(ui_env):
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    conn = connect(Settings().db_path)
+    try:
+        for _ in range(2):
+            Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+    finally:
+        conn.close()
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "note: closed 2 interrupted runs\n" in r.output
+
+
+def test_ui_prints_no_note_without_stale_runs(ui_env):
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "interrupted run" not in r.output
