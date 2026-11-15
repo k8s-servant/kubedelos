@@ -194,13 +194,14 @@ class FakeScan:
         self.status = status
         self.run_id = run_id
         self.calls: list[dict] = []
+        self.honour_cancel = True  # False keeps the scan "stopping" until released, as a slow Trivy would
 
     def __call__(self, settings, **kw):
         self.calls.append({"settings": settings, **kw})
         self.on_progress = kw["on_progress"]
         self.entered.set()
         while not self.release.wait(0.01):
-            if kw["cancel"].is_set():
+            if self.honour_cancel and kw["cancel"].is_set():
                 return ScanOutcome(run_id=self.run_id, warnings=[], status="cancelled")
         return ScanOutcome(run_id=self.run_id, warnings=[], status=self.status)
 
@@ -304,6 +305,7 @@ def test_invalid_parallelism_rerenders_with_400(client, fake, value):
 
 
 def test_cancel_switches_readout_at_once(client, app, fake):
+    fake.honour_cancel = False  # else the scan may end before the readout is read, and the test races
     _start(client)
     assert fake.entered.wait(5)
     fake.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))

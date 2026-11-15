@@ -410,7 +410,7 @@ def test_kill_all_running_stops_every_live_trivy_group():
     thread = threading.Thread(target=lambda: out.update(result=runner._run_group(sleeper, dict(os.environ), 120)))
     started = time.monotonic()
     thread.start()
-    _wait_until(lambda: runner.running_groups())
+    _wait_until(runner.running_groups)
     pgid = runner.running_groups()[0]
     runner.kill_all_running()
     thread.join(5)
@@ -471,7 +471,7 @@ def test_a_cut_never_leaves_part_of_a_secret():
     assert error_cause(text).endswith("b" * 20)
 
 
-TOKEN = "dG9rZW4tdmFsdWUtMTIzNDU2Nzg5MA"  # token-shaped: 16+ base64ish characters
+TOKEN = "dG9rZW4tdmFsdWUtMTIzNDU2Nzg5MA"  # token-shaped: 16+ base64ish characters, fake  # gitleaks:allow
 
 
 @pytest.mark.parametrize(
