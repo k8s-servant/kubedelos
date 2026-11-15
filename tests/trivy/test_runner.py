@@ -536,3 +536,18 @@ def test_a_cut_line_ending_in_a_marker_takes_the_next_line_with_it(marker):
 )
 def test_a_scheme_word_at_a_line_end_redacts_the_next_lines_token(text, shown):
     assert runner._redact(text) == shown
+
+
+@pytest.mark.parametrize(
+    ("image_id", "expected"),
+    [("sha256:" + "e" * 64, "sha256:" + "e" * 64), ("sha256:abc", None), (None, None), (42, None)],
+)
+def test_scan_image_records_the_scanned_image_id(tmp_path, monkeypatch, image_id, expected):
+    report = json.loads((FIXTURES / "alpine.json").read_text())
+    if image_id is not None:
+        report["Metadata"]["ImageID"] = image_id
+    path = tmp_path / "report.json"
+    path.write_text(json.dumps(report))
+    monkeypatch.setenv("FAKE_TRIVY_REPORT", str(path))
+    result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
+    assert result.status == "ok" and result.scanned_image_id == expected

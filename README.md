@@ -42,6 +42,10 @@ skips the 1.5 GB Trivy Java DB; `--pkg-types library` scans application dependen
 class (`pkg_class`: `os` or `library`), and cached results are kept per level, so a narrower scan never answers
 for a wider one.
 
+Results are cached for 24 hours by image digest, so a repeat scan only scans what changed. An image the node reports
+without a registry digest, such as kind's preloaded images, is cached by its local image ID instead, and only when
+Trivy scanned that exact image. An image known only by its tag is scanned every time, since a tag can be pushed again.
+
 ## Exit codes
 
 | Code | Meaning |

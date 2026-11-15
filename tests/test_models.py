@@ -71,3 +71,13 @@ def test_registry_host_of_short_names(image):
 
 def test_registry_host_keeps_port():
     assert registry_host(parse_image_id("registry.example:5000/team/app:1", "")) == "registry.example:5000"
+
+
+def test_imageref_cache_key_digest_then_image_id_then_none():
+    image_id = "sha256:" + "e" * 64
+    with_digest = ImageRef(ref="nginx@" + D, repo="nginx", digest=D, image_id=image_id)
+    assert with_digest.cache_key == D
+    local = ImageRef(ref="nginx:1.25", repo="nginx", tag="1.25", image_id=image_id)
+    assert local.cache_key == "image-id@" + image_id
+    assert local.key == "nginx:1.25"  # dedupe and storage keep the ref
+    assert ImageRef(ref="nginx:1.25", repo="nginx", tag="1.25").cache_key is None

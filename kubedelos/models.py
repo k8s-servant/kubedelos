@@ -57,11 +57,21 @@ class ImageRef(BaseModel):
     repo: str
     tag: str | None = None
     digest: str | None = None
+    # The node's local image ID (a hash of the image config) when the runtime reports no registry digest, as kind does
+    # for its preloaded images. It names the content the pod runs, so a scan of exactly that content can be cached.
+    image_id: str | None = None
 
     @property
     def key(self) -> str:
-        """Cache and dedupe key."""
+        """Dedupe and storage key."""
         return self.digest or self.ref
+
+    @property
+    def cache_key(self) -> str | None:
+        """The result cache key, or None when only a tag names the image: a tag can be pushed again."""
+        if self.digest:
+            return self.digest
+        return f"image-id@{self.image_id}" if self.image_id else None
 
 
 def registry_host(image: ImageRef) -> str:
@@ -111,3 +121,4 @@ class ImageResult(BaseModel):
     error: str | None = None
     findings: list[Finding] = []
     os_family: str | None = None
+    scanned_image_id: str | None = None  # Trivy's Metadata.ImageID: the config hash of the image it actually scanned

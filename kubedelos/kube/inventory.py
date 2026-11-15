@@ -73,7 +73,8 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
     if spec_digest and is_digest(spec_digest):
         return ImageRef(ref=f"{spec_repo}@{spec_digest}", repo=spec_repo, tag=spec_tag, digest=spec_digest)
     tag = spec_tag or "latest"
-    return ImageRef(ref=f"{spec_repo}:{tag}", repo=spec_repo, tag=tag)
+    local_id = image_id if is_digest(image_id) else None  # a bare "sha256:..." is the node's local image ID
+    return ImageRef(ref=f"{spec_repo}:{tag}", repo=spec_repo, tag=tag, image_id=local_id)
 
 
 def _status_ids(pod) -> dict[str, str]:
