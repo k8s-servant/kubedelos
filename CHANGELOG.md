@@ -6,6 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
+- The UI shows every kube-context: the sidebar's context card opens a list of the kubeconfig's contexts (read on each page) and those in the scan history, with when each was last scanned. The shown context travels in the URL (`?context=`), and the Scans page scans it; one scan runs at a time across contexts.
 - `kubedelos trivy install` downloads the pinned Trivy v0.76.1 release and checks it against an embedded, Sigstore-verified SHA-256. A scan runs one standalone Trivy per image and stops them when `kubedelos ui` exits on Ctrl-C or SIGTERM; `registry test` also stops on SIGHUP.
 - A scan inventories a kube-context (running pods with their init and ephemeral containers, plus the templates of CronJobs and of workloads scaled to zero) and scans every unique image with Trivy.
 - Digest cache so unchanged images are not rescanned.
@@ -28,6 +29,7 @@
 
 ### Bug Fixes
 
+- Static files are served under a content-hashed URL, so a browser never pairs a new page with a stylesheet it cached from an older release.
 - Images with no registry digest, such as kind's preloaded images, are now cached by their local image ID when Trivy scanned that exact image, so a repeat scan of a kind cluster takes seconds instead of rescanning every image.
 - The local UI keeps at most 64 sessions, so repeated token visits no longer grow its memory.
 - Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.

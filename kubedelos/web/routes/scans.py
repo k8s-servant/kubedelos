@@ -29,7 +29,17 @@ from kubedelos.config import Settings
 from kubedelos.store import runlock
 from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_history
 from kubedelos.web.jobs import ScanBusy
-from kubedelos.web.pages import open_db, open_db_rw, render, short_image
+from kubedelos.web.pages import (
+    UnknownContext,
+    context_param,
+    link,
+    open_db,
+    open_db_rw,
+    render,
+    scannable_contexts,
+    short_image,
+    shown_context,
+)
 
 router = APIRouter()
 
@@ -68,8 +78,10 @@ def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
     return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
 
 
-def scans_href(page: int) -> str:
-    return "/scans?" + urlencode({"page": page}) if page > 1 else "/scans"
+def scans_href(page: int, context: str | None = None) -> str:
+    """A history page link; ``context`` is the shown context to keep, None for the UI's startup context."""
+    query = urlencode({k: v for k, v in {"context": context, "page": page if page > 1 else None}.items() if v})
+    return "/scans?" + query if query else "/scans"
 
 
 def _row(request: Request, run: HistoryRow) -> dict:
@@ -80,7 +92,7 @@ def _row(request: Request, run: HistoryRow) -> dict:
         "id": run.id,
         "status": status,
         "chip": CHIP.get(status, ""),
-        "href": "/findings?" + urlencode({"run_id": run.id}) if run.status in RESULT_STATUSES else None,
+        "href": link(request, "/findings", run_id=run.id) if run.status in RESULT_STATUSES else None,
         "scope": run.scope,
         "pkg_types": run.pkg_types,
         "images": run.images,
@@ -133,10 +145,17 @@ def _job(request: Request) -> dict | None:
     active = view.state in ACTIVE
     finished = view.state == "finished"
     linked = finished and view.status in RESULT_STATUSES and view.run_id is not None
-    titles = {"finished": "Last scan", "error": "Scan failed"}
+    other = view.context != getattr(request.state, "context", request.app.state.context)
+    # A scan of another context says so, and links to that context's scans page and results.
+    target = view.context if view.context != request.app.state.context else None
+    where = f" of {view.context}" if other else ""
+    titles = {"finished": f"Last scan{where}", "error": f"Scan{where} failed"}
     return {
         "state": view.state,
-        "title": titles.get(view.state, "Scan in progress"),
+        "context": view.context,
+        "title": titles.get(view.state, f"Scanning {view.context}"),
+        "elsewhere_href": scans_href(1, target) if other else None,
+        "scans_href": scans_href(1, target),
         "phase": PHASES.get(p.phase, p.phase) if p is not None and active else None,
         "counted": p is not None and p.phase != "inventory" and (active or finished),
         "total": p.total if p else 0,
@@ -149,17 +168,28 @@ def _job(request: Request) -> dict | None:
         "status": view.status if finished else None,
         "chip": CHIP.get(view.status or "", ""),
         "run_id": view.run_id,
-        "href": "/findings?" + urlencode({"run_id": view.run_id}) if linked else None,
+        "href": findings_link(view.run_id, target) if linked else None,
         "error": (view.error or "the scan failed") if view.state == "error" else None,
         "cancellable": view.state in ("starting", "running"),
     }
 
 
+def findings_link(run_id: int, context: str | None) -> str:
+    return "/findings?" + urlencode({k: v for k, v in {"context": context, "run_id": run_id}.items() if v})
+
+
 def _page(
-    request: Request, page: int = 1, *, error: str | None = None, sent: dict | None = None, status: int = 200
+    request: Request,
+    page: int = 1,
+    *,
+    error: str | None = None,
+    sent: dict | None = None,
+    status: int = 200,
+    context: str | None = None,
 ) -> HTMLResponse:
-    context = request.app.state.context
+    """The scans page of ``context``, from a POST's form, or else of the context the query string names."""
     with open_db(request) as conn:
+        context = shown_context(request, conn, context)
         history, total = run_history(conn, context, page, PER_PAGE)
         run = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
     last_page = max(1, ceil(total / PER_PAGE))
@@ -178,9 +208,10 @@ def _page(
         "last": first + len(history) - 1,
         "last_page": last_page,
         "past_end": not history and total > 0,
-        "prev_href": scans_href(page - 1) if page > 1 and history else None,
-        "next_href": scans_href(page + 1) if page < last_page and history else None,
-        "last_page_href": scans_href(last_page),
+        "prev_href": scans_href(page - 1, context_param(request)) if page > 1 and history else None,
+        "next_href": scans_href(page + 1, context_param(request)) if page < last_page and history else None,
+        "last_page_href": scans_href(last_page, context_param(request)),
+        "scannable": context in scannable_contexts(request),
     }
     return render(request, "scans.html", ctx, status)
 
@@ -216,8 +247,21 @@ def _start(request: Request, body: bytes) -> Response:
         fields = parse_qs(body.decode(), keep_blank_values=True, max_num_fields=_MAX_FORM_FIELDS, errors="strict")
     except ValueError:  # not UTF-8, or too many fields: possible when the CSRF token came in the header
         return _page(request, error=UNREADABLE, status=400)
+    default = request.app.state.context
+    target = fields.get("context", [""])[0] or default
     text = {name: fields.get(name, [""])[0] for name in FIELDS if name != "pkg_types"}
     sent = {**text, "pkg_types": fields.get("pkg_types", [])}
+
+    def page(error: str, status: int) -> HTMLResponse:
+        """The posted context's page with ``error`` and what was typed; the startup context's if it is unknown."""
+        try:
+            return _page(request, error=error, sent=sent, status=status, context=target)
+        except UnknownContext:
+            return _page(request, error=error, sent=sent, status=status)
+
+    # Checked at the click: only a context the kubeconfig has now may be scanned, never one known only from history.
+    if target not in scannable_contexts(request):
+        return page(f"{target} is not in your kubeconfig", 400)
     overrides = {
         **{name: _split(text[name]) for name in LIST_FIELDS},
         "namespace_selector": text["namespace_selector"].strip() or None,
@@ -229,23 +273,31 @@ def _start(request: Request, body: bytes) -> Response:
     try:
         valid = Settings.model_validate({**settings.model_dump(), **overrides})
     except ValidationError as exc:
-        return _page(request, error=_invalid(exc), sent=sent, status=400)
+        return page(_invalid(exc), 400)
     try:
         with open_db_rw(request) as conn:
             runlock.close_stale_runs(conn, settings.data_dir)
-    except sqlite3.OperationalError:  # locked past the busy timeout, most likely by a CLI scan writing results
-        return _page(request, error="the database is busy; try again", sent=sent, status=503)
+    except sqlite3.OperationalError:  # locked past the busy timeout, most likely by another scan writing results
+        return page("the database is busy; try again", 503)
     try:
-        request.app.state.scans.start({name: getattr(valid, name) for name in FIELDS})
+        request.app.state.scans.start({name: getattr(valid, name) for name in FIELDS}, context=target)
     except ScanBusy as exc:
-        return _page(request, error=str(exc), sent=sent, status=409)
-    return RedirectResponse("/scans", status_code=303)
+        return page(str(exc), 409)
+    return RedirectResponse(scans_href(1, target if target != default else None), status_code=303)
 
 
 @router.post("/scans/cancel")
-def cancel(request: Request) -> RedirectResponse:
+async def cancel(request: Request) -> RedirectResponse:
     request.app.state.scans.cancel()
-    return RedirectResponse("/scans", status_code=303)
+    try:
+        fields = parse_qs((await request.body()).decode(), max_num_fields=_MAX_FORM_FIELDS, errors="strict")
+    except ValueError:
+        fields = {}
+    back = fields.get("context", [""])[0]
+    # Back to the page the button was on; the value only ever lands in this local path's query string.
+    return RedirectResponse(
+        scans_href(1, back if back and back != request.app.state.context else None), status_code=303
+    )
 
 
 @router.get("/scans/progress", response_class=HTMLResponse)

@@ -88,3 +88,14 @@ def load(settings: Settings) -> KubeApi:
         return _RealKubeApi(IN_CLUSTER)
     _, active = config.list_kube_config_contexts(config_file=kubeconfig)
     return _RealKubeApi(settings.context or active["name"])
+
+
+def list_contexts(settings: Settings) -> list[str]:
+    """The context names in the kubeconfig, sorted, or none when it can't be read. Parsing only: no context is loaded,
+    so no login plugin runs."""
+    kubeconfig = str(settings.kubeconfig) if settings.kubeconfig else None
+    try:
+        contexts, _ = config.list_kube_config_contexts(config_file=kubeconfig)
+    except (config.ConfigException, OSError, ValueError):
+        return []
+    return sorted({c["name"] for c in contexts or [] if c.get("name")}, key=str.casefold)

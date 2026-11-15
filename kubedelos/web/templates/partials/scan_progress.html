@@ -18,6 +18,9 @@
       <span class="chip{% if job.chip %} {{ job.chip }}{% endif %}">{{ job.status }}</span>
       {%- endif %}
     </div>
+  {%- if job.elsewhere_href %}
+    <p class="hint">Only one scan runs at a time. <a href="{{ job.elsewhere_href }}">Go to its page</a>.</p>
+  {%- endif %}
   {%- if job.error %}
     <div class="callout" role="alert"><p>{{ job.error }}</p></div>
   {%- endif %}
@@ -42,7 +45,7 @@
   {%- endif %}
   {%- if active %}
     <noscript>
-      <p><a href="/scans">refresh</a> to see the latest progress</p>
+      <p><a href="{{ job.scans_href }}">refresh</a> to see the latest progress</p>
     </noscript>
   {%- endif %}
   {%- if job.href %}
@@ -51,6 +54,7 @@
   {%- if job.cancellable %}
     <form method="post" action="/scans/cancel">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="context" value="{{ job.context }}">
       <button type="submit" class="btn">Cancel scan</button>
     </form>
   {%- endif %}

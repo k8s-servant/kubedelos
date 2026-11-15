@@ -97,3 +97,27 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
         fn("ns", label_selector="app=web")
     assert [kw["label_selector"] for _, kw in seen] == ["team=x"] + ["app=web"] * 4
     assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
+
+
+def test_list_contexts_reads_names_without_logging_in(monkeypatch, tmp_path):
+    seen = []
+
+    def list_kube_config_contexts(config_file=None):
+        seen.append(config_file)
+        return ([{"name": "kind-lab"}, {"name": "Dev"}, {"name": "arn:aws:eks:eu-west-1:1:cluster/x"}], {"name": "Dev"})
+
+    monkeypatch.setattr(kube_client.config, "list_kube_config_contexts", list_kube_config_contexts)
+    monkeypatch.setattr(kube_client.config, "load_kube_config", lambda **kw: pytest.fail("must not load a context"))
+    kubeconfig = tmp_path / "config"
+    names = kube_client.list_contexts(Settings(kubeconfig=kubeconfig))
+    assert names == ["arn:aws:eks:eu-west-1:1:cluster/x", "Dev", "kind-lab"]  # case-insensitive
+    assert seen == [str(kubeconfig)]
+
+
+@pytest.mark.parametrize("error", [config.ConfigException("no config"), FileNotFoundError("gone"), ValueError("bad")])
+def test_list_contexts_is_empty_without_a_readable_kubeconfig(monkeypatch, error):
+    def fail(config_file=None):
+        raise error
+
+    monkeypatch.setattr(kube_client.config, "list_kube_config_contexts", fail)
+    assert kube_client.list_contexts(Settings()) == []

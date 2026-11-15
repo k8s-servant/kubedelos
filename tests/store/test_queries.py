@@ -7,6 +7,7 @@ import pytest
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
+from kubedelos.store import queries
 from kubedelos.store.db import connect
 from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
@@ -720,3 +721,16 @@ def test_run_history_pages_newest_first_with_total(db):
     assert done.finished_at - done.started_at == timedelta(minutes=1)
     assert run_history(conn, "ctx", 3) == ([], 30)
     assert run_history(conn, "none", 1) == ([], 0)
+
+
+def test_context_scans_gives_each_context_its_newest_result(db):
+    conn, repo = db
+    old = _run(repo, context="kind-lab")
+    _run(repo, context="prod-eu", status="failed")
+    newest = _run(repo, context="kind-lab", status="partial")
+    _run(repo, context="kind-lab", status="cancelled")  # newer, but no results
+    finished = {r["id"]: r["finished_at"] for r in conn.execute("SELECT id, finished_at FROM scan_run")}
+    scans = queries.context_scans(conn)
+    assert list(scans) == ["kind-lab", "prod-eu"]
+    assert scans["kind-lab"] == datetime.fromisoformat(finished[newest]) != datetime.fromisoformat(finished[old])
+    assert scans["prod-eu"] is None  # known from its history, never scanned to a result

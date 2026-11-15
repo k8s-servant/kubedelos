@@ -492,7 +492,7 @@ def _nonce(response) -> str:
 def test_scans_page_loads_htmx_with_the_nonce_only_there(client, fake):
     response = client.get("/scans")
     nonce = _nonce(response)
-    assert f'<script src="/static/htmx.min.js" nonce="{nonce}"' in response.text
+    assert re.search(rf'<script src="/static/htmx\.min\.js\?v=[0-9a-f]{{12}}" nonce="{nonce}"', response.text)
     assert response.text.count("<script") == 1
     assert client.get("/static/htmx.min.js").status_code == 200
     for path in ("/", "/findings"):
@@ -502,7 +502,7 @@ def test_scans_page_loads_htmx_with_the_nonce_only_there(client, fake):
 def test_no_inline_style_or_eval_config(client, fake):
     html = client.get("/scans").text
     assert HTMX_CONFIG in html
-    assert html.index(HTMX_CONFIG) < html.index('<script src="/static/htmx.min.js"')  # read when htmx loads
+    assert html.index(HTMX_CONFIG) < html.index('<script src="/static/htmx.min.js?v=')  # read when htmx loads
     assert "<style" not in html and "style=" not in html
 
 
@@ -581,3 +581,72 @@ def test_live_region_is_a_stable_ancestor_of_the_swapped_box(client, fake):
     page = client.get("/scans").text
     assert re.search(r'<div class="scan-live" aria-live="polite">\s*<div id="scan-progress"', page)
     assert "aria-live" not in _progress(client)  # the swapped fragment carries none of its own
+
+
+# Other contexts
+
+
+def test_scans_page_of_another_context_scans_that_context(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    theirs = seed.repo.start_run("prod-eu", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(theirs, "ok")
+    _run(seed)
+    html = client.get("/scans", params={"context": "prod-eu"}).text
+    form = html.split('<form method="post" action="/scans"', 1)[1].split("</form>", 1)[0]
+    assert '<input type="hidden" name="context" value="prod-eu">' in form
+    assert ">Scan prod-eu</button>" in form
+    rows = _rows(html)
+    assert len(rows) == 1 and f"Run {theirs}<" in rows[0]
+    assert f'href="/findings?context=prod-eu&amp;run_id={theirs}"' in rows[0]
+
+
+def test_start_scans_the_posted_context(client, kube_contexts, fake):
+    kube_contexts.append("prod-eu")
+    response = _start(client, context="prod-eu")
+    assert response.status_code == 303 and response.headers["location"] == "/scans?context=prod-eu"
+    assert fake.entered.wait(5)
+    assert fake.calls[0]["settings"].context == "prod-eu"
+
+
+def test_start_refuses_a_context_not_in_the_kubeconfig(client, seed, fake):
+    gone = seed.repo.start_run("old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(gone, "ok")  # known from history, so the page renders
+    response = _start(client, context="old-cluster")
+    assert response.status_code == 400
+    assert "old-cluster is not in your kubeconfig" in response.text
+    assert not fake.calls and client.app.state.scans.view() is None
+    assert _start(client, context="never-heard-of").status_code == 400
+
+
+def test_history_only_context_offers_no_scan(client, seed):
+    gone = seed.repo.start_run("old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(gone, "ok")
+    html = client.get("/scans", params={"context": "old-cluster"}).text
+    assert '<form method="post" action="/scans"' not in html
+    assert "not in your kubeconfig" in html
+
+
+def test_progress_names_a_scan_of_another_context(client, kube_contexts, fake):
+    kube_contexts.append("prod-eu")
+    _start(client, context="prod-eu")
+    assert fake.entered.wait(5)
+    mine = client.get("/scans").text  # the startup context's page, while prod-eu scans
+    assert "Scanning prod-eu" in mine
+    assert 'href="/scans?context=prod-eu"' in mine
+    assert _start(client).status_code == 409  # still one scan at a time, across contexts
+
+
+def test_cancel_returns_to_the_posted_context(client, kube_contexts, fake):
+    kube_contexts.append("prod-eu")
+    _start(client, context="prod-eu")
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))
+    form = _progress(client).split('action="/scans/cancel"', 1)[1].split("</form>", 1)[0]
+    assert '<input type="hidden" name="context" value="prod-eu">' in form
+    response = client.post(
+        "/scans/cancel",
+        data={"csrf_token": _csrf(client), "context": "prod-eu"},
+        headers=ORIGIN,
+        follow_redirects=False,
+    )
+    assert response.status_code == 303 and response.headers["location"] == "/scans?context=prod-eu"

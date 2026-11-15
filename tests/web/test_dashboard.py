@@ -667,3 +667,41 @@ def test_narrow_top_bar_puts_the_context_on_its_own_full_row():
     css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
     narrow = css[css.index("@media (max-width: 479px)") :]
     assert re.search(r"\.context \{[^}]*flex-basis: 100%;[^}]*margin: 0;", narrow)
+
+
+def test_dashboard_shows_the_requested_context(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    mine = _run(seed)
+    _add(seed, mine, "reg.example.com/app:mine", ["CRITICAL"])
+    theirs = _run(seed, context="prod-eu")
+    _add(seed, theirs, "reg.example.com/app:theirs", ["HIGH", "HIGH"])
+    html = client.get("/", params={"context": "prod-eu"}).text
+    assert f"Run {theirs}" in html or f"run {theirs}" in html.lower()
+    assert "app:theirs" in html and "app:mine" not in html
+    assert "/findings?context=prod-eu&amp;run_id=" in html  # every findings link keeps the cluster
+    assert client.get("/", params={"context": "prod-eu", "run_id": mine}).status_code == 404  # another cluster's run
+
+
+def test_single_context_sidebar_has_no_switcher(client, seed):
+    _run(seed)
+    assert "<details" not in _sidebar(client.get("/").text)
+
+
+def test_switcher_lists_every_context_with_its_last_scan(client, seed, kube_contexts):
+    kube_contexts.extend(["prod-eu", "Staging"])
+    _run(seed)
+    _run(seed, context="prod-eu")
+    old = seed.repo.start_run("old-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(old, "ok")
+    html = _sidebar(client.get("/findings", params={"context": "prod-eu", "severity": "HIGH"}).text)
+    switcher = _between(html, '<details class="context context-switch"', "</details>")
+    assert '<strong class="context-name">prod-eu</strong>' in switcher  # the summary names the shown context
+    entries = re.findall(r"(<li[^>]*>.*?</li>)", switcher, re.S)
+    names = [re.search(r">([^<]+)</a>|>([^<]+)</span>", e).group(1) or "" for e in entries]
+    assert [n.strip() for n in names] == ["my-cluster", "old-cluster", "prod-eu", "Staging"]  # case-insensitive
+    assert 'href="/findings"' in entries[0]  # the startup context's link carries no context
+    assert 'href="/findings?context=old-cluster"' in entries[1]  # same page, filters and run dropped
+    assert "view only" in entries[1]  # not in the kubeconfig
+    assert 'aria-current="true"' in entries[2]
+    assert "never scanned" in entries[3]
+    assert "ago" in entries[0]

@@ -32,7 +32,7 @@ from kubedelos.store.queries import (
     worst_images,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.pages import MAX_ID, open_db, plural, render
+from kubedelos.web.pages import MAX_ID, context_param, open_db, plural, render, shown_context
 
 router = APIRouter()
 
@@ -86,13 +86,15 @@ class WorstBar:
     href: str
 
 
-def findings_href(**params: object) -> str:
-    return "/findings?" + urlencode({k: v for k, v in params.items() if v is not None}, doseq=True)
+def findings_href(context: str | None = None, **params: object) -> str:
+    """A findings link; ``context`` is the shown context to keep, None for the UI's startup context."""
+    query = {"context": context, **params}
+    return "/findings?" + urlencode({k: v for k, v in query.items() if v is not None}, doseq=True)
 
 
-def dashboard_href(**params: object) -> str:
-    """A link back to the dashboard that keeps the pinned run, if any."""
-    query = urlencode({k: v for k, v in params.items() if v is not None})
+def dashboard_href(context: str | None = None, **params: object) -> str:
+    """A link back to the dashboard that keeps the shown context and the pinned run, if any."""
+    query = urlencode({k: v for k, v in {"context": context, **params}.items() if v is not None})
     return "/?" + query if query else "/"
 
 
@@ -111,7 +113,7 @@ def _widths(by_severity: dict[str, int]) -> dict[str, float]:
     return widths
 
 
-def _shares(run_id: int, by_severity: dict[str, int]) -> list[SeverityShare]:
+def _shares(run_id: int, by_severity: dict[str, int], context: str | None = None) -> list[SeverityShare]:
     """Critical, High, Medium and Low always, Unknown only when non-zero; each placed after the ones before it."""
     widths = _widths(by_severity)
     shares: list[SeverityShare] = []
@@ -120,7 +122,7 @@ def _shares(run_id: int, by_severity: dict[str, int]) -> list[SeverityShare]:
         if sev == "UNKNOWN" and not count:
             continue
         width = widths.get(sev, 0.0)
-        shares.append(SeverityShare(sev, count, x, width, findings_href(run_id=run_id, severity=sev)))
+        shares.append(SeverityShare(sev, count, x, width, findings_href(context, run_id=run_id, severity=sev)))
         if count:
             x = round(x + width, 1)
     return shares
@@ -138,7 +140,7 @@ def _short_ref(ref: str) -> str:
     return f"{image}@{digest[:15]}" if digest else image
 
 
-def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
+def _worst(run_id: int, rows: list[WorstImage], context: str | None = None) -> list[WorstBar]:
     """The worst images as bars scaled to the first (worst) one; empty when the run has no Critical or High."""
     if not rows:
         return []
@@ -156,7 +158,7 @@ def _worst(run_id: int, rows: list[WorstImage]) -> list[WorstBar]:
                 critical_width=critical_width,
                 high_x=critical_width if w.critical else 0,
                 high_width=round(whole - critical_width, 1),
-                href=findings_href(run_id=run_id, severity=["CRITICAL", "HIGH"], q=w.ref),
+                href=findings_href(context, run_id=run_id, severity=["CRITICAL", "HIGH"], q=w.ref),
             )
         )
     return bars
@@ -209,10 +211,11 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
 def dashboard(
     request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID), by: Literal["fix", "image"] = "fix"
 ) -> HTMLResponse:
-    context = request.app.state.context
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "pinned": run_id is not None, "caution": CAUTION}
     with open_db(request) as conn:
+        context = shown_context(request, conn)
+        c = context_param(request)
         if run_id is not None:
             try:
                 run = get_run(conn, context, run_id)
@@ -222,7 +225,7 @@ def dashboard(
             run = newest_run(conn, context, cluster_scope=True)
         newest_any = newest_run(conn, context, cluster_scope=False)
         if run is None:
-            ctx["narrower_href"] = findings_href(run_id=newest_any.id) if newest_any else None
+            ctx["narrower_href"] = findings_href(c, run_id=newest_any.id) if newest_any else None
             return render(request, "dashboard.html", ctx)
         current = kpis(conn, run.id)
         previous = previous_comparable(conn, run)
@@ -242,7 +245,7 @@ def dashboard(
         ctx["newer"] = {
             "scope": describe_scope(newest_any.scope),
             "when": ago(newest_any.finished_at, now) if newest_any.finished_at else "an unknown time ago",
-            "href": findings_href(run_id=newest_any.id),
+            "href": findings_href(c, run_id=newest_any.id),
         }
     fix_links = {"severity": ["CRITICAL", "HIGH"]}
     ctx.update(
@@ -250,13 +253,13 @@ def dashboard(
         fix_rows=fixes.rows,
         fix_total=fixes.total,
         sample_cap=SAMPLE_CAP,
-        by_fix_href=dashboard_href(run_id=run_id),
-        by_image_href=dashboard_href(run_id=run_id, by="image"),
-        all_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="yes"),
+        by_fix_href=dashboard_href(c, run_id=run_id),
+        by_image_href=dashboard_href(c, run_id=run_id, by="image"),
+        all_fix_href=findings_href(c, run_id=run.id, **fix_links, has_fix="yes"),
         no_fix=fixes.no_fix,
         no_fix_images=fixes.no_fix_images,
-        no_fix_href=findings_href(run_id=run.id, **fix_links, has_fix="no"),
-        more_href=lambda row: findings_href(run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
+        no_fix_href=findings_href(c, run_id=run.id, **fix_links, has_fix="no"),
+        more_href=lambda row: findings_href(c, run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
     )
-    ctx.update(shares=_shares(run.id, current.by_severity), worst=_worst(run.id, worst))
+    ctx.update(shares=_shares(run.id, current.by_severity, c), worst=_worst(run.id, worst, c))
     return render(request, "dashboard.html", ctx)

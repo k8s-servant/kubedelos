@@ -176,12 +176,23 @@ def test_scan_settings_pin_the_ui_context(settings):
     runner.shutdown()
 
 
+def test_start_scans_the_named_context_and_the_view_says_which(settings):
+    scan = FakeScan()
+    runner = _runner(settings, scan)
+    runner.start({"context": "someone-else"}, context="prod-eu")  # the argument wins over an override, too
+    assert scan.entered.wait(5)
+    assert scan.calls[0]["settings"].context == "prod-eu"
+    assert runner.view().context == "prod-eu"
+    runner.shutdown()
+
+
 def test_overrides_cannot_change_the_context(settings):
     scan = FakeScan()
     runner = _runner(settings, scan)
     runner.start({"context": "someone-else"})
     assert scan.entered.wait(5)
     assert scan.calls[0]["settings"].context == "my-cluster"
+    assert runner.view().context == "my-cluster"
     runner.shutdown()
 
 

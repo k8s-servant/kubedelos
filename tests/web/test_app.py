@@ -1,9 +1,12 @@
+import hashlib
 import re
+from pathlib import Path
 
 import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
+import kubedelos.web
 import kubedelos.web.app as app_module
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import render
@@ -37,15 +40,21 @@ def test_docs_routes_disabled(client):
         assert client.get(path).status_code == 404
 
 
+def _versioned(name):
+    """The URL a page uses for a static file: its content hash in the query string, so an upgrade is never stale."""
+    content = (Path(kubedelos.web.__file__).parent / "static" / name).read_bytes()
+    return f"/static/{name}?v={hashlib.sha256(content).hexdigest()[:12]}"
+
+
 def test_base_page_has_nav_context_and_stylesheet(client):
     html = client.get("/_page").text
-    assert '<link rel="stylesheet" href="/static/app.css">' in html
+    assert f'<link rel="stylesheet" href="{_versioned("app.css")}">' in html
     assert 'href="/"' in html and "Dashboard" in html
     assert 'href="/findings"' in html and "Findings" in html
     assert "my-cluster" in html
     assert '<aside class="sidebar"' in html
-    assert '<link rel="icon" type="image/svg+xml" href="/static/logo.svg">' in html
-    assert '<img class="logo" src="/static/logo.svg" alt="" width="32" height="32">' in html
+    assert f'<link rel="icon" type="image/svg+xml" href="{_versioned("logo.svg")}">' in html
+    assert f'<img class="logo" src="{_versioned("logo.svg")}" alt="" width="32" height="32">' in html
     assert "site-header" not in html
     assert "<script" not in html and "<style" not in html and "style=" not in html
     assert not re.search(r"\son[a-z]+\s*=", html)  # no event-handler attributes such as onclick=
