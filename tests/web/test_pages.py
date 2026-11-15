@@ -107,3 +107,14 @@ def test_links_carry_the_shown_context(client, seed, kube_contexts):
     for path in ("/", "/findings", "/scans"):
         assert f'href="{path}?context=prod-eu"' in nav
     assert '<a class="wordmark" href="/?context=prod-eu"' in html
+
+
+def test_awkward_context_names_are_escaped_and_encoded(client, kube_contexts):
+    name = 'arn:aws:eks:eu-west-1:1:cluster/a b&c"><script>x</script>'
+    kube_contexts.append(name)
+    html = client.get("/scans", params={"context": name}).text
+    assert "<script>x</script>" not in html
+    assert "arn:aws:eks:eu-west-1:1:cluster/a b&amp;c&#34;&gt;&lt;script&gt;" in html
+    encoded = "arn%3Aaws%3Aeks%3Aeu-west-1%3A1%3Acluster%2Fa+b%26c%22%3E%3Cscript%3Ex%3C%2Fscript%3E"
+    assert f'href="/findings?context={encoded}"' in html  # the nav link keeps it intact
+    assert client.get("/findings", params={"context": name}).status_code == 200

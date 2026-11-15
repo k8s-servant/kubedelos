@@ -6,7 +6,7 @@
     stops on its own, and the poll that sees the scan end also gets HX-Refresh, which reloads the page with the
     finished run in the history. Without JavaScript a refresh link stands in. -#}
 {%- set active = job and job.state in ("starting", "running", "stopping") %}
-<div id="scan-progress" class="scan-progress"{% if active %} hx-get="/scans/progress" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
+<div id="scan-progress" class="scan-progress"{% if active %} hx-get="{{ link('/scans/progress') }}" hx-trigger="every 2s" hx-swap="outerHTML"{% endif %}>
 {%- if job %}
   <section class="card" aria-labelledby="progress-title">
     <div class="card-head">
@@ -54,7 +54,7 @@
   {%- if job.cancellable %}
     <form method="post" action="/scans/cancel">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
-      <input type="hidden" name="context" value="{{ job.context }}">
+      {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
       <button type="submit" class="btn">Cancel scan</button>
     </form>
   {%- endif %}

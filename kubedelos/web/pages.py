@@ -63,7 +63,7 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
     """
     default = request.app.state.context
     wanted = wanted or request.query_params.get("context") or default
-    kubeconfig = set(request.app.state.list_contexts()) | {default}
+    kubeconfig = scannable_contexts(request)
     scans = context_scans(conn)
     known = sorted(kubeconfig | set(scans), key=str.casefold)
     if wanted not in known:
@@ -79,8 +79,11 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
 
 
 def scannable_contexts(request: Request) -> set[str]:
-    """The contexts a scan may target: the kubeconfig's, as it is now, and the UI's startup context."""
-    return set(request.app.state.list_contexts()) | {request.app.state.context}
+    """The contexts a scan may target: the kubeconfig's, as it is now, and the UI's startup context. The kubeconfig
+    is read once per request, however many times a page asks."""
+    if not hasattr(request.state, "kube_contexts"):
+        request.state.kube_contexts = frozenset(request.app.state.list_contexts()) | {request.app.state.context}
+    return set(request.state.kube_contexts)
 
 
 def context_param(request: Request) -> str | None:

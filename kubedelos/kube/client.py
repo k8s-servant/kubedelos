@@ -3,8 +3,10 @@
 import os
 from typing import Protocol
 
+import yaml
 from kubernetes import client, config
 from kubernetes.client import V1Namespace
+from kubernetes.config import kube_config
 
 from kubedelos.config import Settings
 
@@ -91,11 +93,20 @@ def load(settings: Settings) -> KubeApi:
 
 
 def list_contexts(settings: Settings) -> list[str]:
-    """The context names in the kubeconfig, sorted, or none when it can't be read. Parsing only: no context is loaded,
-    so no login plugin runs."""
-    kubeconfig = str(settings.kubeconfig) if settings.kubeconfig else None
-    try:
-        contexts, _ = config.list_kube_config_contexts(config_file=kubeconfig)
-    except (config.ConfigException, OSError, ValueError):
-        return []
-    return sorted({c["name"] for c in contexts or [] if c.get("name")}, key=str.casefold)
+    """The context names in the kubeconfig (every ``KUBECONFIG`` path, as kubectl reads them), sorted, or none when it
+    can't be read. Parsing only: no context is loaded, so no login plugin runs, and no current context is needed. A
+    file another tool is halfway through rewriting is skipped rather than failing the page."""
+    paths = str(settings.kubeconfig) if settings.kubeconfig else kube_config.KUBE_CONFIG_DEFAULT_LOCATION
+    names: set[str] = set()
+    for path in filter(None, paths.split(kube_config.ENV_KUBECONFIG_PATH_SEPARATOR)):
+        try:
+            with open(os.path.expanduser(path)) as f:
+                data = yaml.safe_load(f)
+        except (OSError, ValueError, yaml.YAMLError):
+            continue
+        contexts = data.get("contexts") if isinstance(data, dict) else None
+        for entry in contexts if isinstance(contexts, list) else []:
+            name = entry.get("name") if isinstance(entry, dict) else None
+            if isinstance(name, str) and name:
+                names.add(name)
+    return sorted(names, key=str.casefold)

@@ -302,6 +302,9 @@ async def cancel(request: Request) -> RedirectResponse:
 
 @router.get("/scans/progress", response_class=HTMLResponse)
 def progress(request: Request) -> HTMLResponse:
+    # Resolve the page's context as the page did, so the polled readout matches the one it replaces.
+    with open_db(request) as conn:
+        shown_context(request, conn)
     job = _job(request)
     response = render(request, "partials/scan_progress.html", {"job": job})
     # The scan htmx was polling has ended: reload the page so the run history shows the run's final row too. The

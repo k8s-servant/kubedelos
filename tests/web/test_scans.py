@@ -235,8 +235,8 @@ def _wait_for(app, state):
     raise AssertionError(f"the scan never reached {state!r}: {app.state.scans.view()}")
 
 
-def _progress(client):
-    response = client.get("/scans/progress")
+def _progress(client, **params):
+    response = client.get("/scans/progress", params=params)
     assert response.status_code == 200
     return response.text
 
@@ -641,8 +641,11 @@ def test_cancel_returns_to_the_posted_context(client, kube_contexts, fake):
     _start(client, context="prod-eu")
     assert fake.entered.wait(5)
     fake.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))
-    form = _progress(client).split('action="/scans/cancel"', 1)[1].split("</form>", 1)[0]
+    # The button returns to the page it was on: prod-eu's here, the startup context's on that page.
+    form = _progress(client, context="prod-eu").split('action="/scans/cancel"', 1)[1].split("</form>", 1)[0]
     assert '<input type="hidden" name="context" value="prod-eu">' in form
+    form = _progress(client).split('action="/scans/cancel"', 1)[1].split("</form>", 1)[0]
+    assert 'name="context"' not in form
     response = client.post(
         "/scans/cancel",
         data={"csrf_token": _csrf(client), "context": "prod-eu"},
@@ -650,3 +653,40 @@ def test_cancel_returns_to_the_posted_context(client, kube_contexts, fake):
         follow_redirects=False,
     )
     assert response.status_code == 303 and response.headers["location"] == "/scans?context=prod-eu"
+
+
+def _readout(html):
+    start = html.index('<div id="scan-progress"')
+    return html[start : html.index("</section>", start)]
+
+
+@pytest.mark.parametrize("scanned", ["prod-eu", "my-cluster"])
+@pytest.mark.parametrize("shown", ["prod-eu", "my-cluster"])
+def test_progress_poll_keeps_the_page_context(client, kube_contexts, fake, scanned, shown):
+    # The poll must render the readout the page did, or the title and the "go to its page" hint flip after 2 s.
+    kube_contexts.append("prod-eu")
+    _start(client, context=scanned)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))
+    page = client.get("/scans", params={"context": shown} if shown != "my-cluster" else {}).text
+    poll = _progress(client, **({"context": shown} if shown != "my-cluster" else {}))
+    assert _readout(page) == _readout(poll)
+    assert ("Go to its page" in poll) is (scanned != shown)
+    expected = "/scans/progress?context=prod-eu" if shown == "prod-eu" else "/scans/progress"
+    assert f'hx-get="{expected}"' in poll
+
+
+def test_kubeconfig_is_read_once_per_request(client, app, kube_contexts, fake):
+    calls = []
+    listing = app.state.list_contexts
+
+    def counted():
+        calls.append(1)
+        return listing()
+
+    app.state.list_contexts = counted
+    client.get("/scans")
+    assert len(calls) == 1
+    calls.clear()
+    _start(client, context="nowhere")  # the refusal re-renders the page
+    assert len(calls) == 1
