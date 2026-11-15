@@ -21,8 +21,8 @@ class InventoryWarning:
     """Something the inventory could not see.
 
     ``coverage`` is True when images may be missing from the scan (a skipped namespace or resource). It is False when
-    every image is still found and only extra detail is lost (owner info, the node platform), so that a namespace-scoped
-    identity without cluster-wide list rights can still pass ``--fail-on``.
+    every image is still found and only extra detail is lost (owner info, the node platform), so that a run by a
+    namespace-scoped identity without cluster-wide list rights is not marked incomplete.
     """
 
     text: str

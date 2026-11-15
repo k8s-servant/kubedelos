@@ -7,7 +7,7 @@
 {% block content %}
 {% if not run %}
   <section class="notice">
-    <p>No scans of <strong>{{ context }}</strong> yet. Run <code>kubedelos scan</code> and reload.</p>
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="/scans">Scans page</a>.</p>
   </section>
 {% else %}
   {% if os_only %}

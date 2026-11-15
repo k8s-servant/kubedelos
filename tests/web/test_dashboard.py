@@ -77,7 +77,8 @@ def _theme_tokens(css, block_start):
 
 def test_no_runs_empty_state(client):
     html = client.get("/").text
-    assert "No scans of" in html and "my-cluster" in html and "kubedelos scan" in html
+    assert "No scans of" in html and "my-cluster" in html
+    assert '<a href="/scans">Scans page</a>' in html and "kubedelos scan" not in html
 
 
 def test_only_narrower_runs(client, seed):

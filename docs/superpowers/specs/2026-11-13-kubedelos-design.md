@@ -7,6 +7,13 @@ An earlier internal tool proved the idea but was tied to one company's environme
 
 **Market gap:** no existing tool lets you run a single command against your current context and get a Trivy-focused UI. trivy-operator-dashboard needs an in-cluster install, and the Headlamp, Lens and Argo CD plugins need a host app.
 
+## Product focus (decided 2026-11-15)
+kubedelos is UI-first. It does not target CI pipelines, because plain Trivy already gates them well. That leaves two goals:
+1. **The laptop UI**, switching between kube-contexts and scanning any of them.
+2. **Scheduled in-cluster scans with reports**, each cluster serving the same UI.
+
+`kubedelos scan`, its table, JSON, CSV and SARIF output, and the `--fail-on` and `--allow-partial` exit codes are removed. Exports come back as UI downloads in the reports work. `kubedelos registry test` moves into the UI. The CLI keeps `ui`, `trivy install`, `registry test` (until it moves) and `version`. Phase 3 adds `serve`. Where the sections below still mention the CLI scan or CI output, this section wins.
+
 ## Decisions (made by you)
 | Topic | Decision |
 |---|---|
