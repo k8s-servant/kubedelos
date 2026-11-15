@@ -24,7 +24,7 @@ kubedelos is UI-first. It does not target CI pipelines, because plain Trivy alre
 | Language | Python 3.12+ |
 | Scan source | Trivy CLI only. kubedelos lists pod images and runs `trivy image`. No Trivy Operator. |
 | UI | FastAPI + Jinja2 + HTMX, with no Node build. Static assets ship in the wheel. |
-| Trivy on a laptop | Auto-download a pinned Trivy release into `~/.cache/kubedelos`, verified against the release checksums file. `--trivy-path` overrides it. |
+| Trivy on a laptop | Auto-download a pinned Trivy release into `~/.cache/kubedelos`, verified against the release checksums file. `KUBEDELOS_TRIVY_PATH` overrides it. |
 | Storage | SQLite only (`~/.local/share/kubedelos/` locally; PVC with a single replica in-cluster). All SQL goes through a repository layer so Postgres can be added later. |
 | Notifications v0.1 | Generic SMTP, Microsoft 365 (Graph `sendMail` via client secret or Azure workload identity), Slack and Teams webhooks. |
 | Owners | Namespace annotations or labels such as `kubedelos.io/owner-email` and a configurable team label, plus a fallback recipient. |

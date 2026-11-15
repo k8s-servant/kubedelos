@@ -51,7 +51,7 @@ jobs:
             3. **Trivy pinning.** Trivy stays pinned with a per-platform SHA-256, never
                resolves "latest", and scans with `--scanners vuln` only.
             4. **Correctness.** Bugs, unhandled errors, concurrency and signal handling,
-               edge cases in image refs and exit codes.
+               edge cases in image refs and UI input.
             5. **Tests.** New behavior has tests written against the module's test file;
                tests are meaningful.
             6. **CI and docs.** Actions stay SHA-pinned with least privilege; README,

@@ -6,7 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
-- `kubedelos trivy install` downloads the pinned Trivy v0.76.1 release and checks it against an embedded, Sigstore-verified SHA-256. A scan runs one standalone Trivy per image and stops them on exit, Ctrl-C, SIGTERM or SIGHUP.
+- `kubedelos trivy install` downloads the pinned Trivy v0.76.1 release and checks it against an embedded, Sigstore-verified SHA-256. A scan runs one standalone Trivy per image and stops them when `kubedelos ui` exits on Ctrl-C or SIGTERM; `registry test` also stops on SIGHUP.
 - A scan inventories a kube-context (running pods with their init and ephemeral containers, plus the templates of CronJobs and of workloads scaled to zero) and scans every unique image with Trivy.
 - Digest cache so unchanged images are not rescanned.
 - A namespace selector and a pod/workload label selector narrow a scan (kubectl syntax, applied by the API server), and image globs skip images before scanning. Each run records its scope.
@@ -33,7 +33,7 @@
 - Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.
 - Valid image refs with an uppercase or IPv6 registry host, repeated separators or a non-sha256 digest are no longer rejected.
 - Locally loaded images (kind's `import-<date>` imageID) are scanned by their tag instead of a digest that no registry has.
-- SIGTERM and SIGHUP no longer leave Trivy scans running and the run stuck in `running`.
+- SIGTERM no longer leaves Trivy scans running and the run stuck in `running`.
 - `--context` no longer falls back to the in-cluster config when the context does not exist.
 - Kubernetes API calls time out instead of hanging.
 - Pods on Windows nodes are scanned for `windows/<arch>` instead of `linux/<arch>`.

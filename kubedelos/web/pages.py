@@ -3,8 +3,9 @@
 They live apart from ``kubedelos.web.app`` so the routes and the security middleware can import them at the top level:
 this module imports nothing from ``app``, ``routes`` or ``security``, which keeps the import graph acyclic. Pages call
 ``open_db`` for a read-only connection of their own (sqlite3 objects never cross threads); only the POST routes call
-``open_db_rw`` for a writable one. ``short_image`` is how every page names an image. ``render`` fills a template with what every page needs: the request, the
-kube-context, the CSP nonce and the nav. A page may override the context and nav (the signed-out page shows neither).
+``open_db_rw`` for a writable one. ``short_image`` is how every page names an image. ``render`` fills a template with
+what every page needs: the request, the kube-context, the CSP nonce and the nav. A page may override the context and nav
+(the signed-out page shows neither).
 """
 
 import contextlib

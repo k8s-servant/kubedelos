@@ -288,7 +288,7 @@ def test_selector_passed_to_every_namespaced_list():
 
 def test_namespace_selector_with_forbidden_namespace_list_fails_closed():
     api = FakeKubeApi(namespaces_forbidden=True, pods={"a": [pod("p", "a")]})
-    with pytest.raises(RuntimeError, match="--namespace-selector"):
+    with pytest.raises(RuntimeError, match="the namespace selector needs list rights"):
         collect(api, Settings(namespaces=["a"], namespace_selector="team=x"))
 
 
@@ -299,7 +299,9 @@ def test_named_namespace_outside_selector_warns():
     )
     items, warnings = collect(api, Settings(namespaces=["a", "b"], namespace_selector="team=x"))
     assert _refs(items) == ["docker.io/library/a:1"]
-    assert InventoryWarning("namespace b does not match --namespace-selector; not scanned", coverage=False) in warnings
+    assert (
+        InventoryWarning("namespace b does not match the namespace selector; not scanned", coverage=False) in warnings
+    )
 
 
 def test_invalid_selector_is_a_clear_error():
@@ -325,7 +327,7 @@ def test_exclude_image_keeps_others_and_warns():
     )
     items, warnings = collect(api, Settings(exclude_images=["registry.k8s.io/*"]))
     assert _refs(items) == ["docker.io/library/nginx:1.19"]
-    assert InventoryWarning("excluded 1 image(s) matching --exclude-image", coverage=False) in warnings
+    assert InventoryWarning("excluded 1 image(s) matching the image exclusions", coverage=False) in warnings
 
 
 def test_exclude_image_digest_only_ref():

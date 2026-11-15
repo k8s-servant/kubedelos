@@ -105,7 +105,7 @@ def _flat(exc: BaseException) -> str:
 def _signals_as_interrupt() -> Iterator[None]:
     """Turn SIGTERM and SIGHUP into ``KeyboardInterrupt`` so they stop Trivy like Ctrl-C does.
 
-    Trivy runs in its own process groups, so without this a ``timeout``, a CI cancel or a closed terminal would end
+    Trivy runs in its own process groups, so without this a ``timeout``, a ``kill`` or a closed terminal would end
     Python without unwinding and leave Trivy scans running. Signal handlers can only be set on the
     main thread; elsewhere this does nothing.
     """

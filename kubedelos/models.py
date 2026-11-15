@@ -45,10 +45,6 @@ class Severity(StrEnum):
     LOW = "LOW"
     UNKNOWN = "UNKNOWN"
 
-    @property
-    def rank(self) -> int:
-        return {"CRITICAL": 4, "HIGH": 3, "MEDIUM": 2, "LOW": 1, "UNKNOWN": 0}[self.value]
-
 
 class ImageRef(BaseModel):
     model_config = ConfigDict(frozen=True)
