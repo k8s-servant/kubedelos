@@ -351,3 +351,19 @@ def test_untagged_running_image_records_latest_like_its_template():
     assert parse_image_id("nginx", ID).tag == "latest"
     assert parse_image_id("nginx", "").tag == "latest"
     assert parse_image_id(f"nginx@{DIGEST}", ID).tag is None  # pinned by digest only: no tag was involved
+
+
+@pytest.mark.parametrize("prefix", ["", "docker://"])
+def test_parse_image_id_keeps_a_bare_local_image_id(prefix):
+    # kind's preloaded images report only the local image ID, a hash of the image's config
+    image_id = "sha256:" + "e" * 64
+    parsed = parse_image_id("registry.k8s.io/etcd:3.6.6-0", prefix + image_id)
+    assert parsed == ImageRef(
+        ref="registry.k8s.io/etcd:3.6.6-0", repo="registry.k8s.io/etcd", tag="3.6.6-0", image_id=image_id
+    )
+
+
+def test_parse_image_id_drops_a_malformed_or_superseded_image_id():
+    assert parse_image_id("nginx:1", "sha256:abc").image_id is None
+    digest = "sha256:" + "d" * 64
+    assert parse_image_id(f"nginx@{digest}", "sha256:" + "e" * 64).image_id is None  # the spec digest wins

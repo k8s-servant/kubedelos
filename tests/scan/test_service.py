@@ -343,3 +343,52 @@ def test_cancel_during_the_trivy_download_never_starts_the_db(env, monkeypatch):
     out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel)
     assert out.status == "cancelled" and _status(repo, out.run_id) == "cancelled"
     assert FakeCache.started == 0 and calls == []
+
+
+LOCAL_ID = "sha256:" + "e" * 64
+
+
+def _kind_api():
+    pods = [pod("p1", image="registry.k8s.io/etcd:3.6.6-0", image_id=LOCAL_ID, container="c1")]
+    return FakeKubeApi(namespaces=[V1Namespace(metadata=V1ObjectMeta(name="default"))], pods={"default": pods})
+
+
+def _scan_reporting(calls, scanned_image_id):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+        calls.append(list(items))
+        for item in items:
+            r = ImageResult(image=item.image, platform=item.platform, status="ok", scanned_image_id=scanned_image_id)
+            on_result(r)
+
+    return scan_many
+
+
+def test_local_image_id_is_cached_when_trivy_scanned_that_image(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _scan_reporting(calls, LOCAL_ID))
+    service.run_scan(settings, api=_kind_api(), repo=repo)
+    out = service.run_scan(settings, api=_kind_api(), repo=repo)
+    assert len(calls) == 1  # the second run came from the cache
+    statuses = repo._conn.execute("SELECT status FROM image_result WHERE run_id = ?", (out.run_id,)).fetchall()
+    assert [s[0] for s in statuses] == ["cached"]
+
+
+@pytest.mark.parametrize("scanned", ["sha256:" + "f" * 64, None])
+def test_local_image_id_is_not_cached_when_trivy_scanned_another_image(env, monkeypatch, scanned):
+    # the tag was pushed again since the node pulled it (or Trivy did not say): the result is not the pod's image
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _scan_reporting(calls, scanned))
+    service.run_scan(settings, api=_kind_api(), repo=repo)
+    service.run_scan(settings, api=_kind_api(), repo=repo)
+    assert len(calls) == 2
+    assert repo._conn.execute("SELECT COUNT(*) FROM image_cache").fetchone()[0] == 0
+
+
+def test_tag_ref_without_image_id_is_still_not_cached(env, monkeypatch):
+    settings, repo, calls = env
+    pods = [pod("p1", image="reg.io/a:1", image_id="", container="c1")]
+    api = FakeKubeApi(namespaces=[V1Namespace(metadata=V1ObjectMeta(name="default"))], pods={"default": pods})
+    monkeypatch.setattr(service, "scan_many", _scan_reporting(calls, LOCAL_ID))
+    service.run_scan(settings, api=api, repo=repo)
+    service.run_scan(settings, api=api, repo=repo)
+    assert len(calls) == 2

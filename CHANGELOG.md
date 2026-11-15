@@ -25,6 +25,7 @@
 
 ### Bug Fixes
 
+- Images with no registry digest, such as kind's preloaded images, are now cached by their local image ID when Trivy scanned that exact image, so a repeat scan of a kind cluster takes seconds instead of rescanning every image.
 - The local UI keeps at most 64 sessions, so repeated token visits no longer grow its memory.
 - Restarting `kubedelos ui` on macOS no longer fails with 'port in use' while the previous run's connections close.
 - Valid image refs with an uppercase or IPv6 registry host, repeated separators or a non-sha256 digest are no longer rejected.

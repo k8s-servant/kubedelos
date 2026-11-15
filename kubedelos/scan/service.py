@@ -9,7 +9,7 @@ from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
 from kubedelos.kube.inventory import InventoryWarning, collect
-from kubedelos.models import ImageResult, InventoryItem, is_valid_ref
+from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_valid_ref
 from kubedelos.store import db, runlock
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import ensure_trivy
@@ -81,6 +81,15 @@ def run_scan(
     return ScanOutcome(run_id=run_id, warnings=warnings, status=status)
 
 
+def _cacheable(image: ImageRef, result: ImageResult) -> bool:
+    """Whether ``result`` may be cached for ``image``: by its digest, or by its local image ID when Trivy scanned
+    exactly that image. Trivy pulls the tag from the registry, which may have been pushed again since the node pulled
+    it; then the IDs differ and the result, though shown for this run, is not reused."""
+    if image.digest:
+        return True
+    return image.image_id is not None and result.scanned_image_id == image.image_id
+
+
 def _scan(
     settings: Settings,
     repo: Repo,
@@ -123,8 +132,8 @@ def _scan(
             )
             continue
         cached = (
-            repo.get_cached(item.image.key, item.platform, cache_max_age, scan_level=settings.scan_level)
-            if use_cache
+            repo.get_cached(item.image.cache_key, item.platform, cache_max_age, scan_level=settings.scan_level)
+            if use_cache and item.image.cache_key
             else None
         )
         if cached is None:
@@ -137,8 +146,8 @@ def _scan(
     def on_result(result: ImageResult) -> None:  # called on this thread by scan_many
         item = by_key[(result.image.key, result.platform)]
         record(item, result)
-        if result.status == "ok" and use_cache:
-            repo.put_cache(result.image.key, result.platform, result, scan_level=settings.scan_level)
+        if result.status == "ok" and use_cache and _cacheable(item.image, result):
+            repo.put_cache(item.image.cache_key, result.platform, result, scan_level=settings.scan_level)
 
     # Nothing to scan (everything was cached or rejected), or cancelled already: neither fetch Trivy nor wait for the
     # DB, since neither download nor the DB lock wait would notice the cancel.

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Literal
 
 from kubedelos.config import Settings
-from kubedelos.models import ImageRef, ImageResult, InventoryItem
+from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_digest
 from kubedelos.trivy.parse import parse_report
 
 ErrorKind = Literal["auth", "not_found", "timeout", "trivy", "unknown"]
@@ -302,12 +302,21 @@ def scan_image(
     if code != 0:
         return error(_classify(stderr), stderr or f"trivy exited with code {code}")
     try:
-        findings, os_family = parse_report(json.loads(stdout))
+        report = json.loads(stdout)
+        findings, os_family = parse_report(report)
     except json.JSONDecodeError as exc:
         return error("trivy", f"trivy printed invalid JSON: {exc}")
     except (KeyError, TypeError, ValueError, AttributeError) as exc:
         return error("trivy", f"unexpected trivy report shape: {type(exc).__name__}: {exc}")
-    return ImageResult(image=item_ref, platform=platform, status="ok", findings=findings, os_family=os_family)
+    scanned = (report.get("Metadata") or {}).get("ImageID")
+    return ImageResult(
+        image=item_ref,
+        platform=platform,
+        status="ok",
+        findings=findings,
+        os_family=os_family,
+        scanned_image_id=scanned if isinstance(scanned, str) and is_digest(scanned) else None,
+    )
 
 
 def scan_many(
