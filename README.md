@@ -8,6 +8,29 @@ Scan the container images running in a Kubernetes cluster with Trivy.
 
 Status: pre-alpha. Interfaces and output may change.
 
+## Why kubedelos
+
+[Trivy](https://github.com/aquasecurity/trivy) does the scanning, and kubedelos doesn't replace it: `trivy image` and
+`trivy k8s` tell you what is vulnerable right now. kubedelos is for what comes after that report, across a whole cluster
+and over time:
+
+- **What actually runs.** It lists the images running in the cluster, including init and ephemeral containers,
+  CronJobs and workloads scaled to zero. Access is read-only and Secrets are never read. Each unique image is scanned
+  once per platform.
+- **What to fix first.** The dashboard puts the Critical and High findings that have a fix on top, grouped by fix or by
+  image, with the images worst hit and the images that failed to scan, plus a hint on which registry to log in to.
+- **What changed.** Every run is kept in a local SQLite database, so the dashboard shows the change since the last
+  comparable run, and the findings of any earlier run can be opened again.
+- **One command, nothing to install in the cluster.** `kubedelos ui` opens a local web UI against your current
+  kube-context. There is no operator, CRD or host app such as Lens or Headlamp to set up first.
+- **Cheap repeat scans.** Results are cached by image, so a rescan only scans what changed.
+- **Careful by default.** Trivy is pinned and checksum-verified, never "latest", and registry tokens are never written
+  to disk or logs.
+- **CI-friendly.** `--fail-on` exit codes and JSON, CSV and SARIF output.
+
+Next on the roadmap: an in-cluster mode installed with Helm, with scheduled scans and reports sent to each namespace's
+owners by email, Slack or Teams.
+
 ## Quickstart
 
 ```bash
@@ -91,11 +114,27 @@ KUBEDELOS_NAMESPACES='["team-a","team-b"]' kubedelos scan
 
 Inside a pod with no kubeconfig, kubedelos uses the in-cluster service account. It never does that when `--context` or `--kubeconfig` is set.
 
+## Compatibility
+
+| Area | Supported | Notes |
+|---|---|---|
+| Python | 3.12, 3.13, 3.14 | Each is tested in CI. |
+| Runs on | Linux and macOS, amd64 and arm64 | Windows is not supported. |
+| Trivy | v0.76.1, pinned and checksum-verified | `--trivy-path` runs your own binary; its results are not cached. |
+| Kubernetes | 1.35, tested on kind | Read-only `list` calls on stable APIs only: `v1` namespaces, pods and nodes, `apps/v1` Deployments and StatefulSets, `batch/v1` CronJobs. Secrets are never read. |
+| Image platforms | Linux images | Tested on `linux/arm64` nodes. Windows nodes' images are scanned for their own platform but are untested. |
+| Registries | Public registries, and private ones through your Docker credentials | Tested with Docker Hub and `registry.k8s.io`. See [Private registries](#private-registries) for ACR, Artifact Registry and ECR logins. |
+
+Managed clusters (AKS, EKS, GKE) are not yet verified; they come with the in-cluster mode.
+
 ## Trivy
 
 kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64); Windows is not supported. `kubedelos trivy install` downloads it
 and checks it against an embedded SHA-256. It never resolves "latest". Use `--trivy-path` to bring your own binary. Results from your own binary are
 not cached and the run records its Trivy version as `custom`.
+
+kubedelos is built on [Trivy](https://github.com/aquasecurity/trivy), an open source scanner by Aqua Security,
+licensed under Apache-2.0. kubedelos is an independent project, not affiliated with or endorsed by Aqua Security.
 
 ## Private registries
 

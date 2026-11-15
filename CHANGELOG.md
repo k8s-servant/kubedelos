@@ -23,6 +23,10 @@
 - Each scan run stores the namespaces and resources the inventory could not list, so the UI marks such runs incomplete.
 - Each scan run, from the CLI or the UI, holds an owner lock file while it runs. `kubedelos ui` closes runs left `running` with no live owner as `failed` at startup (printing, for example, `note: closed 2 interrupted runs`) and before each UI scan; a scan running in another terminal is never closed.
 
+### Documentation
+
+- The README explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
+
 ### Bug Fixes
 
 - Images with no registry digest, such as kind's preloaded images, are now cached by their local image ID when Trivy scanned that exact image, so a repeat scan of a kind cluster takes seconds instead of rescanning every image.
