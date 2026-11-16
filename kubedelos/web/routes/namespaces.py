@@ -60,10 +60,11 @@ def namespaces(
     request: Request,
     run_id: int | None = Query(None, ge=1, le=MAX_ID),
     q: str | None = None,
-    has: Severity | None = None,
+    has: Severity | Literal[""] | None = None,  # the form's "any severity" sends an empty value
     sort: Sort | None = None,
     direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
 ) -> HTMLResponse:
+    has = has or None
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "pinned": run_id is not None}
     with open_db(request) as conn:

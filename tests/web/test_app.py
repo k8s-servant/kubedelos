@@ -108,3 +108,12 @@ def test_app_has_an_idle_scan_runner(seed):
     assert isinstance(app.state.scans, ScanRunner)
     assert app.state.scans.view() is None
     assert not hasattr(app_module, "atexit")  # the exit hook is server.serve's, once per process
+
+
+def test_the_400_page_keeps_the_shown_context(client, kube_contexts):
+    kube_contexts.append("prod-eu")
+    response = client.get("/namespaces", params={"context": "prod-eu", "has": "SEVERE"})
+    assert response.status_code == 400 and "invalid parameter: has" in response.text
+    assert 'href="/findings?context=prod-eu"' in response.text  # the nav stays on the cluster the page was for
+    unknown = client.get("/namespaces", params={"context": "nowhere", "has": "SEVERE"})
+    assert unknown.status_code == 400 and 'href="/findings"' in unknown.text  # an unknown one falls back
