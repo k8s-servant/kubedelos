@@ -99,7 +99,8 @@ follows the system light or dark theme.
   repository, so a tag bump reads as a changed image and a CVE that survives it stays open instead of showing as fixed
   and new. Tiles count new findings, fixed or gone, and images added, gone and changed; tables list the findings worst
   first, 100 at most with the real total. A difference in scope or package types, failed images or coverage gaps is
-  named above the numbers. The dashboard's change figures and each run in the Scans history link here.
+  named above the numbers. A finding open in both runs is only counted ("still open"), even if its severity or fix
+  changed. The dashboard's change figures and each run in the Scans history link here.
 - **Failed images (`/scans/<run>/failed`)**: every image of a run that failed to scan, with platform, error kind,
   namespaces and cause, plus the redacted error text and registry login hints for auth failures. It is linked from the
   failed count in the Scans history, from the dashboard's Failed images panel and from the progress readout, which also

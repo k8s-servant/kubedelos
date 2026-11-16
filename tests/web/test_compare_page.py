@@ -48,7 +48,7 @@ def _tiles(html):
 
 
 def test_default_pair_is_the_dashboard_run_and_its_previous_comparable(client, seed):
-    _old, _new = _pair(seed)
+    _pair(seed)
     html = client.get("/diff").text
     assert "Run 1 → Run 2" in html
     assert _tiles(html) == {"new": "1", "gone": "2", "added": "1", "removed": "1", "changed": "1"}
