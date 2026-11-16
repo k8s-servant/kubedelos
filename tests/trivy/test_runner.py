@@ -640,3 +640,4 @@ def test_error_text_keeps_lines_and_redacts_again():
     assert shown.splitlines()[0] == "line one" and shown.endswith("last")
     assert "secret" not in shown and "sig=abc" not in shown and "\x1b" not in shown
     assert error_text(None) == ""
+    assert error_text("2026-11-16\tFATAL\tFatal error") == "2026-11-16 FATAL Fatal error"  # Trivy's tabs read as spaces
