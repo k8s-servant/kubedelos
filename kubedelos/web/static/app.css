@@ -848,6 +848,21 @@ tbody tr:hover td {
   font-size: 0.71875rem;
 }
 
+/* Reports: one card per report, each a form over what that report takes. */
+
+.report-card {
+  margin-bottom: 1rem;
+}
+
+.report-card .hint {
+  margin: 0.25rem 0 0.75rem;
+}
+
+/* The run's label (number, finish time and scope) needs two cells to read. */
+.report-run {
+  grid-column: span 2;
+}
+
 /* Failed images: a card with a red left edge. */
 
 .card-error {

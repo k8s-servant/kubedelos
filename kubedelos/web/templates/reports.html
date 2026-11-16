@@ -1,0 +1,79 @@
+{#- The Reports page: pick a run (and, for the CSV, the findings filters) and open the print report or download the
+    CSV. Both are GET forms that send exactly what /report and /findings.csv take. -#}
+{% extends "base.html" %}
+{% block title %}Reports · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Reports</h1></div>{% endblock %}
+{% macro picker() -%}
+  <label class="report-run">Run
+    <select name="run_id">
+      {%- for c in choices %}
+      <option value="{{ c.id }}"{% if loop.first %} selected{% endif %}>Run {{ c.number }}{% if c.finished_at %} · {{ c.finished_at.strftime("%Y-%m-%d %H:%M") }}{% endif %} · {{ describe_scope(c.scope) }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+{%- endmacro %}
+{% block content %}
+{% if not choices %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
+  </section>
+{% else %}
+  <section class="card report-card" aria-labelledby="run-report-title">
+    <h2 class="card-title" id="run-report-title">Run report</h2>
+    <p class="hint">A one-page summary of a run: counts per severity, the fix-first list, coverage gaps and failed images. Print it or save it as PDF from the browser.</p>
+    <form method="get" action="/report" class="filters">
+      {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
+      {{ picker() }}
+      <div class="filter-actions">
+        <button type="submit" class="btn">Open report</button>
+      </div>
+    </form>
+  </section>
+  <section class="card report-card" aria-labelledby="findings-csv-title">
+    <h2 class="card-title" id="findings-csv-title">Findings CSV</h2>
+    <p class="hint">Every finding of a run that matches the filters, as a spreadsheet: the same rows the Findings page shows with these filters.</p>
+    <form method="get" action="/findings.csv" class="filters">
+      {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
+      {{ picker() }}
+      <fieldset class="filter-severity">
+        <legend>Severity</legend>
+        {%- for name, checked in severities %}
+        <label class="pill sev-{{ name | lower }}"><input type="checkbox" name="severity" value="{{ name }}"{% if checked %} checked{% endif %}>{{ name | title }}</label>
+        {%- endfor %}
+      </fieldset>
+      <label>Namespace
+        <input type="text" name="namespace" list="report-namespaces" placeholder="any">
+      </label>
+      <datalist id="report-namespaces">
+        {%- for ns in namespaces %}
+        <option value="{{ ns }}"></option>
+        {%- endfor %}
+      </datalist>
+      <label>Fix
+        <select name="has_fix">
+          <option value="any" selected>any</option>
+          <option value="yes">has a fix</option>
+          <option value="no">no fix</option>
+        </select>
+      </label>
+      <label>Package class
+        <select name="pkg">
+          <option value="all" selected>all</option>
+          <option value="os">OS</option>
+          <option value="library">library</option>
+        </select>
+      </label>
+      <label>Accepted
+        <select name="accepted">
+          <option value="hide" selected>hide</option>
+          <option value="only">only</option>
+          <option value="all">show too</option>
+        </select>
+      </label>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Download CSV</button>
+      </div>
+    </form>
+  </section>
+{% endif %}
+{% endblock %}

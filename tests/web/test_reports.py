@@ -144,3 +144,64 @@ def test_report_links_and_pinning(client, seed):
 def test_report_without_runs_points_to_scans(client):
     html = client.get("/report").text
     assert "No scans of" in html and 'href="/scans"' in html
+
+
+def _form(html, action):
+    return html.split(f'<form method="get" action="{action}"', 1)[1].split("</form>", 1)[0]
+
+
+def test_reports_page_offers_each_run_for_the_report_and_the_csv(client, seed):
+    first = _run(seed)
+    newest = _seed(seed)
+    _add(seed, newest, "reg.example.com/c:1", [], namespaces=("jobs",))
+    html = client.get("/reports").text
+    assert '<li><a href="/reports" aria-current="page">Reports</a></li>' in html
+    report = _form(html, "/report")
+    options = re.findall(r'<option value="(\d+)"( selected)?>Run (\d+)', report)
+    assert options == [(str(newest), " selected", "2"), (str(first), "", "1")]
+    assert '<button type="submit" class="btn">Open report</button>' in report
+    export = _form(html, "/findings.csv")
+    assert re.findall(r'<option value="(\d+)"( selected)?>Run', export) == [
+        (str(newest), " selected"),
+        (str(first), ""),
+    ]
+    checked = re.findall(r'name="severity" value="(\w+)"( checked)?', export)
+    assert checked == [("CRITICAL", " checked"), ("HIGH", " checked"), ("MEDIUM", ""), ("LOW", ""), ("UNKNOWN", "")]
+    assert re.findall(
+        r'<option value="([\w-]+)"></option>',
+        html.split('<datalist id="report-namespaces">')[1].split("</datalist>")[0],
+    ) == ["api", "jobs", "web"]
+    for name in ("has_fix", "pkg", "accepted"):
+        assert f'name="{name}"' in export
+    assert '<button type="submit" class="btn">Download CSV</button>' in export
+
+
+def test_reports_page_forms_send_what_the_reports_take(client, seed):
+    run_id = _seed(seed)
+    report = client.get("/report", params={"run_id": run_id})
+    assert report.status_code == 200
+    sent = [
+        ("run_id", run_id), ("severity", "CRITICAL"), ("severity", "HIGH"), ("namespace", ""),
+        ("has_fix", "any"), ("pkg", "all"), ("accepted", "hide"),
+    ]  # fmt: skip
+    export = client.get("/findings.csv", params=sent)
+    assert export.status_code == 200
+    rows = _csv(export)
+    assert {r[0] for r in rows[1:]} == {"CRITICAL", "HIGH"}
+
+
+def test_reports_page_keeps_the_shown_context(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    _seed(seed)
+    theirs = _run(seed, context="prod-eu")
+    html = client.get("/reports", params={"context": "prod-eu"}).text
+    for action in ("/report", "/findings.csv"):
+        form = _form(html, action)
+        assert '<input type="hidden" name="context" value="prod-eu">' in form
+        assert re.findall(r'<option value="(\d+)"', form) == [str(theirs)]
+
+
+def test_reports_page_without_runs_points_to_scans(client):
+    html = client.get("/reports").text
+    assert "No scans of" in html and 'href="/scans"' in html
+    assert "<form" not in html.split("<main", 1)[1]

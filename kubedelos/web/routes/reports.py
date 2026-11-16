@@ -1,4 +1,5 @@
-"""Reports: a CSV of the findings view as filtered (``GET /findings.csv``) and a print sheet of a run (``GET /report``).
+"""Reports: a CSV of the findings view as filtered (``GET /findings.csv``), a print sheet of a run (``GET /report``),
+and the Reports page (``GET /reports``) that picks a run and the filters for either.
 
 The CSV takes the findings page's query parameters (``findings.view_filter`` reads them the same way), holds every row
 of the view rather than one page, and is streamed from SQL in batches, so a run of 100,000 findings never sits in
@@ -7,6 +8,8 @@ read-only connection of its own, opened after the run was checked: the response 
 
 The print sheet shows the dashboard's run (or the pinned ``run_id``): its numbers, the fix-first list with the accepted
 findings it leaves out, and the failed images. A print stylesheet drops the UI around it; the browser saves it as PDF.
+
+The Reports page only holds GET forms that send what the two reports already take, so it can never drift from them.
 """
 
 import csv
@@ -18,6 +21,7 @@ from collections.abc import Iterator
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 
+from kubedelos.models import Severity
 from kubedelos.store import db
 from kubedelos.store.queries import (
     FindingFilter,
@@ -28,6 +32,8 @@ from kubedelos.store.queries import (
     get_run,
     kpis,
     newest_run,
+    result_runs,
+    run_namespaces,
 )
 from kubedelos.trivy.runner import error_cause
 from kubedelos.web.pages import MAX_ID, open_db, render, shown_context
@@ -35,6 +41,7 @@ from kubedelos.web.routes.findings import view_filter
 
 router = APIRouter()
 
+CSV_SEVERITIES = ("CRITICAL", "HIGH")  # ticked on the Reports page's CSV form
 COLUMNS = (
     "severity",
     "cve",
@@ -136,3 +143,20 @@ def report(request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID)) 
         failed_total=failed_total,
     )
     return render(request, "report.html", ctx)
+
+
+@router.get("/reports", response_class=HTMLResponse)
+def reports(request: Request) -> HTMLResponse:
+    with open_db(request) as conn:
+        context = shown_context(request, conn)
+        choices = result_runs(conn, context)
+        namespaces = run_namespaces(conn, choices[0].id) if choices else []
+        newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+    ctx = {
+        "now": request.app.state.clock(),
+        "run": newest,
+        "choices": choices,
+        "namespaces": namespaces,
+        "severities": [(s.value, s.value in CSV_SEVERITIES) for s in Severity],
+    }
+    return render(request, "reports.html", ctx)

@@ -96,10 +96,14 @@ follows the system light or dark theme.
   owner or team, and `has` keeps namespaces with at least one finding of a severity. A namespace counts a finding when
   the finding's image runs there, as the findings page's namespace filter does, so each count links to exactly those
   findings.
+- **Reports (`/reports`)**: the place to produce a report. Pick a run of the shown cluster (newest first) and open its
+  print report, or pick a run and the findings filters (severity, namespace, fix, package class, accepted; Critical and
+  High ticked) and download the CSV. The forms send what `/report` and `/findings.csv` take, so a CSV from here holds
+  the same rows as the Findings page with those filters.
 - **Report (`/report`)**: a print sheet of the dashboard's run (or `?run_id=`): cluster, run, scope, the counts per
   severity, the fix-first list (50 fixes, with how many accepted findings it leaves out) and the failed images. Print
-  it, or save it as PDF, from the browser; the sidebar is left off the print. Linked from the dashboard's Fix first card
-  and from each run in the Scans history.
+  it, or save it as PDF, from the browser; the sidebar is left off the print. Linked from the Reports page, the
+  dashboard's Fix first card and each run in the Scans history.
 - **Compare (`/diff`)**: what changed between two runs of the shown cluster. By default it compares the dashboard's run
   with its previous comparable run; `from` and `to` (or the two pickers) choose any two. Images are matched by
   repository, so a tag bump reads as a changed image and a CVE that survives it stays open instead of showing as fixed

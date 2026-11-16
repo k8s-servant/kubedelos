@@ -78,6 +78,7 @@ def test_nav_lists_accepted_after_namespaces(client, seed):
         "Findings",
         "Namespaces",
         "Compare",
+        "Reports",
         "Accepted",
         "Scans",
     ]
