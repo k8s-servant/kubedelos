@@ -1369,3 +1369,33 @@ select {
 .readout-failures li + li {
   margin-top: 0.25rem;
 }
+
+/* Compare: cautions above the numbers, five count tiles, and the image changes. */
+
+.diff-caution {
+  margin-bottom: 0.75rem;
+}
+
+.diff-tiles {
+  grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+
+.diff-findings,
+.diff-images {
+  margin-top: 1rem;
+}
+
+.diff-images h3 {
+  margin: 0.75rem 0 0.25rem;
+  font-size: 0.8125rem;
+}
+
+.diff-image-list {
+  margin: 0;
+  padding-left: 1rem;
+  font-size: 0.75rem;
+}
+
+.diff-image-list code {
+  overflow-wrap: anywhere;
+}

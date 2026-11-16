@@ -73,7 +73,14 @@ FORM = {"cve": "CVE-1", "reason": "not reachable", "owner": "sam", "expires": "2
 
 def test_nav_lists_accepted_after_namespaces(client, seed):
     nav = client.get("/accepted").text.split('<nav aria-label="Main">', 1)[1].split("</nav>", 1)[0]
-    assert re.findall(r">([A-Z][a-z]+)</a>", nav) == ["Dashboard", "Findings", "Namespaces", "Accepted", "Scans"]
+    assert re.findall(r">([A-Z][a-z]+)</a>", nav) == [
+        "Dashboard",
+        "Findings",
+        "Namespaces",
+        "Compare",
+        "Accepted",
+        "Scans",
+    ]
     assert 'href="/accepted" aria-current="page"' in nav
 
 

@@ -32,7 +32,7 @@
         {%- if tile.suffix %} <span class="tile-suffix">{{ tile.suffix }}</span>{% endif %}
         {%- if tile.caution %} <span class="caution" title="This run is incomplete: some namespaces or resources could not be listed">⚠<span class="visually-hidden"> incomplete run</span></span>{% endif %}
       </span>
-      <span class="tile-change">{{ tile.change }}
+      <span class="tile-change">{% if tile.change_href %}<a href="{{ tile.change_href }}">{{ tile.change }}</a>{% else %}{{ tile.change }}{% endif %}
         {%- if tile.change_caution %} <span class="caution" title="{{ caution }}">⚠<span class="visually-hidden"> {{ caution }}</span></span>{% endif %}
       </span>
       {%- if tile.key == "findings" %}
