@@ -153,6 +153,15 @@ def test_filters_to_one_kind_with_a_count_per_kind(client, seed):
     assert client.get(f"/scans/{run_id}/failed", params={"kind": "bogus"}).status_code == 400
 
 
+def test_a_page_past_the_end_says_so(client, seed):
+    run_id = _run(seed, "partial")
+    _put(seed, run_id, "reg.example.com/a:1", kind="timeout", error=LAYER_TIMEOUT)
+    html = client.get(f"/scans/{run_id}/failed", params={"page": 5}).text
+    assert "No failures on page 5; there is 1 page." in html and "None" not in html
+    narrow = client.get(f"/scans/{run_id}/failed", params={"kind": "auth"}).text
+    assert "No image of run 1 failed with auth." in narrow
+
+
 def test_paging_keeps_the_kind(client, seed):
     run_id = _run(seed, "partial")
     for i in range(101):

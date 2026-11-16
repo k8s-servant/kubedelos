@@ -51,7 +51,11 @@
   </nav>
   <div class="card">
   {%- if not rows %}
+  {%- if kind %}
   <p class="hint">No image of run {{ shown_run.number }} failed with {{ kind }}.</p>
+  {%- else %}
+  <p class="hint">No failures on page {{ page }}; there {{ "is" if last_page == 1 else "are" }} {{ last_page }} {{ last_page | plural("page") }}.</p>
+  {%- endif %}
   {%- else %}
   <div class="table-wrap">
     <table class="failed">

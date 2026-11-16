@@ -88,7 +88,7 @@ def failure(row) -> dict:
         "ref": row["ref"],
         "short": short_image({"repo": row["repo"], "tag": row["tag"], "digest": row["digest"], "image": row["ref"]}),
         "platform": row["platform"],
-        "kind": row["error_kind"] or "unknown",
+        "kind": row["error_kind"] if row["error_kind"] in KIND_HELP else "unknown",
         "cause": short_cause(row["error_kind"], error),
         "detail": error_text(error) or None,
         "retried": error.startswith(RETRIED_PREFIX),

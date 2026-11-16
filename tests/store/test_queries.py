@@ -494,6 +494,15 @@ def test_run_failures_narrow_to_one_kind(db):
     assert run_failures(conn, run_id, limit=10)[1] == 3
 
 
+def test_a_kind_this_version_does_not_know_counts_as_unknown(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _fail(repo, run_id, "reg.example.com/o:1", "timeout")
+    conn.execute("UPDATE image_result SET error_kind = 'oom' WHERE ref = 'reg.example.com/o:1'")
+    assert failure_kinds(conn, run_id) == [("unknown", 1)]
+    assert [r["ref"] for r in run_failures(conn, run_id, limit=10, kind="unknown")[0]] == ["reg.example.com/o:1"]
+
+
 def test_auth_failed_refs_ignores_other_failures(db):
     conn, repo = db
     run_id = _run(repo)

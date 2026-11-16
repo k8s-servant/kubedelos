@@ -1,4 +1,5 @@
 import re
+import sqlite3
 import time
 from datetime import datetime, timedelta
 from html import unescape
@@ -563,6 +564,15 @@ def test_failed_images_stay_one_line_however_many_fail(client, seed):
     assert card.count('<li class="failed-kind">') == 1 and "<strong>27</strong>" in card
     assert "app00:1" not in card
     assert f'href="/scans/{run_id}/failed">See all 27</a>' in card
+
+
+def test_failed_images_count_a_kind_this_version_does_not_know_as_unknown(client, seed):
+    run_id = _run(seed)
+    _add_failed(seed, run_id, "registry.example.com/team/a:1", "timeout", "timed out")
+    with sqlite3.connect(seed.settings.db_path) as conn:
+        conn.execute("UPDATE image_result SET error_kind = 'oom'")
+    html = client.get("/").text
+    assert f'href="/scans/{run_id}/failed?kind=unknown">unknown</a>' in html
 
 
 def test_failed_images_offer_the_retry_only_where_it_is_allowed(client, seed):
