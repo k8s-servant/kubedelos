@@ -238,3 +238,24 @@ def test_findings_say_when_every_finding_is_accepted(client, seed):
     html = client.get("/findings", params={"run_id": run_id}).text
     assert "Every finding here is accepted" in html and "No vulnerabilities found" not in html
     assert "3 accepted findings not shown" in html
+
+
+def test_inactive_entries_show_no_cover_link_and_links_keep_the_narrowing(client, seed):
+    run_id = _seed(seed)
+    active = _accept(seed, namespace="web", pkg_name="openssl")
+    revoked = _accept(seed, "CVE-2")
+    accepted.revoke(seed.repo._conn, revoked, seed.clock.now)
+    html = client.get("/accepted").text
+    body = html[html.index("<tbody>") :]
+    revoked_row = body[body.index("CVE-2") :]
+    assert "covers" not in revoked_row.split("</tr>")[0]
+    link = f"/findings?run_id={run_id}&amp;cve=CVE-1&amp;package=openssl&amp;namespace=web&amp;accepted=only"
+    assert f'href="{link}"' in html and active
+
+
+def test_revoke_with_an_unreadable_body_is_refused(client, seed):
+    entry = _accept(seed)
+    headers = {**ORIGIN, "x-csrf-token": _csrf(client), "content-type": "application/x-www-form-urlencoded"}
+    response = client.post(f"/accepted/{entry}/revoke", headers=headers, content=b"\xff\xfe", follow_redirects=False)
+    assert response.status_code == 400
+    assert accepted.register(seed.repo._conn, "my-cluster", None, TODAY)[0].state == "active"

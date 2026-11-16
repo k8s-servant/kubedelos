@@ -46,9 +46,10 @@
             {%- else %}{{ e.expires.isoformat() }} <span class="hint">{{ row.days }}</span>{% endif -%}
           </td>
           <td>
-            {%- if e.covers is none %}<span class="zero">no run yet</span>
-            {%- elif e.covers == 0 %}{% if e.state == "active" %}<span class="chip chip-stale">covers nothing</span>{% else %}<span class="zero">0</span>{% endif %}
-            {%- else %}<a href="{{ link('/findings', run_id=run.id, cve=e.vuln_id, accepted='all') }}">covers {{ e.covers }} {{ e.covers | plural("finding") }}</a> in run {{ run.id }}{% endif -%}
+            {%- if e.state != "active" %}<span class="zero">—</span>
+            {%- elif e.covers is none %}<span class="zero">no run yet</span>
+            {%- elif e.covers == 0 %}<span class="chip chip-stale">covers nothing</span>
+            {%- else %}<a href="{{ link('/findings', run_id=run.id, cve=e.vuln_id, package=e.pkg_name, namespace=e.namespace, accepted='only') }}">covers {{ e.covers }} {{ e.covers | plural("finding") }}</a> in run {{ run.id }}{% endif -%}
           </td>
           <td>
             {%- if e.state != "revoked" %}

@@ -41,18 +41,17 @@ accepted AS MATERIALIZED (
         AND c2.installed_version IS c.installed_version AND c2.e_ns = n.namespace))))
 """
 
-# How many units of the run each listed entry's conditions match, ignoring the every-namespace rule: "covers N".
-_COVERS_SQL = """
-SELECT id, COUNT(*) AS n FROM (
-  SELECT DISTINCT e.id, r.ref, f.vuln_id, f.pkg_name, f.installed_version
-  FROM image_result r CROSS JOIN acceptance e CROSS JOIN finding f
-    ON f.image_result_id = r.id AND f.vuln_id = e.vuln_id
-  WHERE r.run_id = :run AND e.id IN (SELECT value FROM json_each(:ids))
-    AND (e.pkg_name IS NULL OR e.pkg_name = f.pkg_name) AND (e.repo IS NULL OR e.repo = r.repo)
-    AND (e.namespace IS NULL OR EXISTS (
-      SELECT 1 FROM workload w WHERE w.image_result_id = r.id AND w.namespace = e.namespace)))
-GROUP BY id
-"""
+# "Covers N": the accepted units of the run each listed active entry matches, so it counts exactly what the entry takes
+# off the work lists (alone or together with other entries). An inactive entry covers nothing.
+_COVERS_SQL = f"""
+WITH {ACCEPTED_CTES}
+SELECT e.id, COUNT(*) AS n
+FROM acceptance e JOIN accepted k ON k.vuln_id = e.vuln_id AND (e.pkg_name IS NULL OR e.pkg_name = k.pkg_name)
+WHERE e.id IN (SELECT value FROM json_each(:ids)) AND e.revoked_at IS NULL AND e.expires_at >= :today
+  AND (e.repo IS NULL OR e.repo = (SELECT MAX(r.repo) FROM image_result r WHERE r.run_id = :run AND r.ref = k.ref))
+  AND (e.namespace IS NULL OR EXISTS (SELECT 1 FROM acc_ns n WHERE n.ref = k.ref AND n.namespace = e.namespace))
+GROUP BY e.id
+"""  # noqa: S608 - only module constants are interpolated
 
 State = Literal["active", "expired", "revoked"]
 
@@ -97,6 +96,8 @@ def add(
 ) -> int:
     """Store a new acceptance and return its id. Raises ValueError when a required field is blank or ``expires`` is past."""
     vuln_id, reason, owner = vuln_id.strip(), reason.strip(), owner.strip()
+    if vuln_id.lower().startswith("cve-"):
+        vuln_id = vuln_id.upper()  # Trivy writes CVE ids in capitals; other ids (GHSA-...) keep their case
     for name, value in (("a CVE", vuln_id), ("a reason", reason), ("an owner", owner)):
         if not value:
             raise ValueError(f"{name} is required")
@@ -166,7 +167,10 @@ def register(
     if run_id is not None and rows:
         covers = {
             r["id"]: r["n"]
-            for r in conn.execute(_COVERS_SQL, {"run": run_id, "ids": json.dumps([row["id"] for row in rows])})
+            for r in conn.execute(
+                _COVERS_SQL,
+                {"run": run_id, "today": today.isoformat(), "ids": json.dumps([row["id"] for row in rows])},
+            )
         }
     entries = [
         Entry(

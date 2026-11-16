@@ -179,8 +179,11 @@ async def revoke(request: Request, entry_id: int = Path(ge=1, le=MAX_ID)) -> Res
 
 
 def _revoke(request: Request, entry_id: int, body: bytes) -> Response:
+    fields = _fields(body)
+    if fields is None:  # never fall back to the startup context: the entry would be judged against the wrong cluster
+        return render(request, "error.html", {"title": "Bad request", "message": "the form could not be read"}, 400)
     with open_db(request) as conn:
-        context = _target(request, conn, _fields(body) or {})
+        context = _target(request, conn, fields)
     with open_db_rw(request) as conn:
         entry = accepted.get(conn, entry_id)
         applies = entry is not None and entry["context"] in (None, context)

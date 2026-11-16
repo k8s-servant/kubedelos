@@ -125,7 +125,7 @@ def test_register_lists_this_cluster_and_all_clusters_with_state_and_cover(db):
     assert [e.id for e in entries] == [nothing, soon, later, expired, revoked]
     by_id = {e.id: e for e in entries}
     assert (by_id[soon].state, by_id[soon].days_left, by_id[soon].covers) == ("active", 3, 2)
-    assert by_id[later].context is None and by_id[later].covers == 1  # a runs in web; counted though api is not covered
+    assert by_id[later].context is None and by_id[later].covers == 0  # a also runs in api, so it stays on the lists
     assert by_id[nothing].covers == 0
     assert (by_id[expired].state, by_id[expired].days_left) == ("expired", -1)
     assert by_id[revoked].state == "revoked" and by_id[revoked].revoked_at == NOW
@@ -148,3 +148,26 @@ def test_add_rejects_what_the_form_must_not_store(db):
     assert accepted.register(conn, "ctx", None, TODAY)[0].id == blank
     entry = accepted.register(conn, "ctx", None, TODAY)[0]
     assert (entry.namespace, entry.repo, entry.pkg_name) == (None, None, None)  # blank means anywhere
+
+
+def test_covers_counts_what_the_entry_takes_off_the_work_lists(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add(repo, run_id, "a", ["web", "api"], ["CVE-1"])
+    _add(repo, run_id, "b", ["web"], ["CVE-1"])
+    web = _accept(conn, namespace="web")
+    gone = _accept(conn)
+    accepted.revoke(conn, gone, NOW)
+    by_id = {e.id: e for e in accepted.register(conn, "ctx", run_id, TODAY)}
+    assert by_id[web].covers == 1  # b only: a still runs in api, so it stays on the work lists
+    assert by_id[gone].covers == 0  # a revoked entry covers nothing
+    api = _accept(conn, namespace="api")
+    by_id = {e.id: e for e in accepted.register(conn, "ctx", run_id, TODAY)}
+    assert (by_id[web].covers, by_id[api].covers) == (2, 1)  # together they cover a
+
+
+def test_a_lowercase_cve_id_is_stored_as_trivy_writes_it(db):
+    conn, _ = db
+    _accept(conn, " cve-2026-1 ")
+    _accept(conn, "GHSA-abcd-ef12-3456")  # GHSA ids keep their lowercase part
+    assert [e.vuln_id for e in accepted.register(conn, "ctx", None, TODAY)] == ["CVE-2026-1", "GHSA-abcd-ef12-3456"]
