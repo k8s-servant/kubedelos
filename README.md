@@ -94,6 +94,13 @@ follows the system light or dark theme.
   owner or team, and `has` keeps namespaces with at least one finding of a severity. A namespace counts a finding when
   the finding's image runs there, as the findings page's namespace filter does, so each count links to exactly those
   findings.
+- **Failed images (`/scans/<run>/failed`)**: every image of a run that failed to scan, with platform, error kind,
+  namespaces and cause, plus the redacted error text and registry login hints for auth failures. It is linked from the
+  failed count in the Scans history, from the dashboard's Failed images panel and from the progress readout, which also
+  lists the newest failures while the scan runs. An image that fails with a passing network error (an interrupted
+  download, a reset connection, a 502/503/504 or 429 from the registry) is scanned once more after 2 seconds before it
+  counts as failed, and is marked "retried" when the second attempt fails too. Timeouts, auth and not-found errors are
+  not retried.
 - **Accepted (`/accepted`)**: the accepted risk register. An acceptance names a CVE, a reason, an owner (your OS user
   by default) and an expiry (90 days by default, at most a year), and optionally a namespace, an image repository (any
   tag) and a package. It applies to its cluster, or to all clusters when you choose so. It takes the findings it covers

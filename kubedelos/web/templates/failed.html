@@ -1,0 +1,53 @@
+{#- The failures page: every image of one run that failed to scan, with its cause; the error text is folded away. -#}
+{% extends "base.html" %}
+{% block title %}Failed images · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Failed images of run {{ shown_run.number }}</h1></div>{% endblock %}
+{% block content %}
+  {% if not total %}
+  <section class="notice"><p>No image failed to scan in run {{ shown_run.number }} ({{ shown_run.status }}). <a href="{{ scans_href }}">Back to Scans</a>.</p></section>
+  {% else %}
+  <p class="notice">{{ total }} {{ total | plural("image") }} failed to scan in run {{ shown_run.number }} ({{ shown_run.status }}).
+    A network error such as an interrupted download is retried once before it counts as a failure.</p>
+  {%- for hint in login_hints %}
+  <p class="failed-hint">hint: {{ hint }}</p>
+  {%- endfor %}
+  <div class="card">
+  <div class="table-wrap">
+    <table class="failed">
+      <thead>
+        <tr>
+          <th scope="col">Image</th>
+          <th scope="col">Platform</th>
+          <th scope="col">Kind</th>
+          <th scope="col">Namespaces</th>
+          <th scope="col">Cause</th>
+        </tr>
+      </thead>
+      <tbody>
+        {%- for row in rows %}
+        <tr>
+          <td><code class="ref">{{ row.ref }}</code></td>
+          <td>{{ row.platform }}</td>
+          <td><span class="chip chip-bad">{{ row.kind }}</span>{% if row.retried %} <span class="chip chip-stale">retried</span>{% endif %}</td>
+          <td>{{ row.namespaces | join(", ") }}</td>
+          <td class="cause">{{ row.cause }}
+            {%- if row.detail %}
+            <details><summary>error text</summary><pre>{{ row.detail }}</pre></details>
+            {%- endif %}
+          </td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+  </div>
+  <nav class="pager" aria-label="Pages">
+    <span class="findings-count">{{ first }}–{{ last }} of {{ total }}</span>
+    <div class="pages">
+      {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
+      <span>page <span class="current" aria-current="page">{{ page }}</span> of {{ last_page }}</span>
+      {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
+    </div>
+  </nav>
+  </div>
+  {% endif %}
+{% endblock %}

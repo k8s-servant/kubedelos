@@ -1339,3 +1339,33 @@ select {
   width: 100%;
   font: inherit;
 }
+
+/* Failed images: the failures page and the newest failures in the progress readout. */
+
+.failed .ref,
+.readout-failures code {
+  overflow-wrap: anywhere;
+}
+
+.failed .cause {
+  max-width: 36rem;
+  overflow-wrap: anywhere;
+}
+
+.failed details pre {
+  margin: 0.375rem 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.71875rem;
+}
+
+.readout-failures {
+  margin: 0.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-size: 0.75rem;
+}
+
+.readout-failures li + li {
+  margin-top: 0.25rem;
+}

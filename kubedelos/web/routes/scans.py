@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from kubedelos.analytics import describe_pkg_types
 from kubedelos.config import Settings
 from kubedelos.store import runlock
-from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_history, run_number
+from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_failures, run_history, run_number
 from kubedelos.web.jobs import ScanBusy
 from kubedelos.web.pages import (
     UnknownContext,
@@ -40,6 +40,7 @@ from kubedelos.web.pages import (
     short_image,
     shown_context,
 )
+from kubedelos.web.routes.failed import failure
 
 router = APIRouter()
 
@@ -64,6 +65,7 @@ FIELDS = {
     "pkg_types": "Package types",
 }
 LIST_FIELDS = ("namespaces", "exclude_namespaces", "exclude_images")
+READOUT_FAILURES = 5  # the newest failures the progress readout lists; the failures page has them all
 PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scanning", "saving": "saving"}
 _MAX_FORM_FIELDS = 100
 _MAX_BODY = 64 * 1024
@@ -98,6 +100,7 @@ def _row(request: Request, run: HistoryRow) -> dict:
         "pkg_types": run.pkg_types,
         "images": run.images,
         "failed": run.failed,
+        "failed_href": link(request, f"/scans/{run.id}/failed") if run.failed else None,
         "duration": duration_text(run.started_at, run.finished_at),
     }
 
@@ -151,6 +154,12 @@ def _job(request: Request, conn: sqlite3.Connection) -> dict | None:
     target = view.context if view.context != request.app.state.context else None
     where = f" of {view.context}" if other else ""
     titles = {"finished": f"Last scan{where}", "error": f"Scan{where} failed"}
+    # The run's failures so far: each result is written as its image finishes, so they are there while it runs.
+    run_id = p.run_id if p is not None else None
+    failures, failures_total = (
+        run_failures(conn, run_id, limit=READOUT_FAILURES, newest_first=True) if run_id is not None else ([], 0)
+    )
+    failures_href = f"/scans/{run_id}/failed" + ("?" + urlencode({"context": target}) if target else "")
     return {
         "state": view.state,
         "context": view.context,
@@ -172,6 +181,9 @@ def _job(request: Request, conn: sqlite3.Connection) -> dict | None:
         "href": findings_link(view.run_id, target) if linked else None,
         "error": (view.error or "the scan failed") if view.state == "error" else None,
         "cancellable": view.state in ("starting", "running"),
+        "failures": [failure(row) for row in failures],
+        "failures_total": failures_total,
+        "failures_href": failures_href if failures_total else None,
     }
 
 

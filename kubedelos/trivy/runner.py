@@ -240,6 +240,14 @@ def _short(text: str) -> str:
     return _redact(_tail(text.strip()))[-_MAX_ERROR_CHARS:]
 
 
+def error_text(text: str | None) -> str:
+    """A stored error as a page shows it in full: its lines kept, redacted again (a row may predate a redaction rule),
+    unprintable characters replaced, at most :data:`_MAX_ERROR_CHARS` characters from the end.
+    """
+    shown = _redact(_tail((text or "").strip()))
+    return "".join(ch if ch.isprintable() or ch == "\n" else "?" for ch in shown)[-_MAX_ERROR_CHARS:]
+
+
 def error_cause(text: str | None, limit: int = 300) -> str:
     """The cause of a failed Trivy run, as one printable line of at most ``limit`` characters.
 

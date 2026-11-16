@@ -63,7 +63,9 @@ def test_scans_page_lists_every_status_but_links_only_results(client, seed):
         assert linked == (status in ("ok", "partial")), status
     assert "whole cluster" in by_id["ok"] and "os + library packages" in by_id["ok"]
     assert "1 min 0 s" in by_id["ok"]
-    assert re.search(r"<td[^>]*>2</td>\s*<td[^>]*>1</td>", by_id["partial"])  # 2 images, 1 failed
+    assert re.search(
+        r"<td[^>]*>2</td>\s*<td[^>]*><a href=\"/scans/\d+/failed\">1</a></td>", by_id["partial"]
+    )  # 2 images, 1 failed, linked
     assert "1\u20134 of 4" in html
 
 
@@ -690,3 +692,16 @@ def test_kubeconfig_is_read_once_per_request(client, app, kube_contexts, fake):
     calls.clear()
     _start(client, context="nowhere")  # the refusal re-renders the page
     assert len(calls) == 1
+
+
+def test_progress_lists_the_newest_failures_while_scanning(client, app, fake, seed):
+    run_id = _run(seed, "running")
+    for i in range(7):
+        _put(seed, run_id, f"reg.example.com/app{i}:1", status="error")
+    _start(client)
+    assert fake.entered.wait(5)
+    fake.on_progress(Progress(total=9, done=7, errors=7, current="a", phase="scanning", run_id=run_id))
+    html = _progress(client)
+    listed = re.findall(r'<li class="failure">(.*?)</li>', html, re.S)
+    assert len(listed) == 5 and "app6" in listed[0]  # the newest first
+    assert f'href="/scans/{run_id}/failed">see all 7 failures</a>' in html

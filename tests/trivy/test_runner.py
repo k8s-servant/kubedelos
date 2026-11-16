@@ -623,3 +623,13 @@ def test_no_retry_after_a_cancel(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "_RETRY_DELAY_S", 0)
     (result,) = _scan_one(tmp_path, cancel)
     assert len(calls) == 1 and result.error == _EOF_ERROR
+
+
+def test_error_text_keeps_lines_and_redacts_again():
+    from kubedelos.trivy.runner import error_text
+
+    text = "line one\nGET https://user:secret@reg.example.com/v2/?sig=abc\x1b[31m\nlast"
+    shown = error_text(text)
+    assert shown.splitlines()[0] == "line one" and shown.endswith("last")
+    assert "secret" not in shown and "sig=abc" not in shown and "\x1b" not in shown
+    assert error_text(None) == ""

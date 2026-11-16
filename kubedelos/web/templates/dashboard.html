@@ -77,7 +77,7 @@
       {%- endfor %}
     </ul>
     {% if failed_total > failed | length %}
-    <p class="failed-overflow">showing {{ failed | length }} of {{ failed_total }}</p>
+    <p class="failed-overflow">showing {{ failed | length }} of {{ failed_total }}: <a href="{{ failed_href }}">see all {{ failed_total }}</a></p>
     {% endif %}
     {%- for hint in login_hints %}
     <p class="failed-hint">hint: {{ hint }}</p>
