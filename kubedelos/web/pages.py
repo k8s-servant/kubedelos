@@ -27,6 +27,7 @@ NAV = (
     ("Findings", "/findings"),
     ("Namespaces", "/namespaces"),
     ("Compare", "/diff"),
+    ("Reports", "/reports"),
     ("Accepted", "/accepted"),
     ("Scans", "/scans"),
 )
