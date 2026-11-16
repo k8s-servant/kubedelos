@@ -6,6 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
+- Compare: a Compare page shows what changed between two runs of a cluster (new findings, fixed or gone, images added, gone and changed), matching images by repository so a tag bump does not read as everything fixed and everything new. It names scope differences, failed images and coverage gaps above the numbers.
 - Failed images: a page per run lists every image that failed to scan with its cause, linked from the Scans history, the dashboard and the progress readout, which also shows the newest failures while a scan runs. An image that fails with a passing network error (such as "unexpected EOF" mid-download) is retried once.
 - Runs are numbered per cluster: each cluster's first run is Run 1, wherever the UI names a run. URLs keep the run id. Schema migration 8 numbers existing runs.
 - Accepted risk: accept a CVE from any findings row (for one cluster or all, optionally narrowed to a namespace, an image repository or a package, with a reason, an owner and an expiry of at most a year). Accepted findings leave the fix-first list and the findings page until they expire or are revoked, and each list says how many it left out; counts never change. The Accepted page lists every entry with its state, days left and what it covers. Schema migration 7 adds the `acceptance` table.

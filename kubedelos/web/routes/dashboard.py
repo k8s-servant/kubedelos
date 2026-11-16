@@ -51,6 +51,7 @@ class Tile:
     change_caution: bool
     caution: bool
     error: bool = False
+    change_href: str | None = None  # the compare page of this run and the one the change is against
 
 
 @dataclass(frozen=True)
@@ -171,8 +172,10 @@ def _change(current: int, previous: int | None) -> str:
     return f"+{diff}" if diff > 0 else f"\N{MINUS SIGN}{-diff}"
 
 
-def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
+def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None, context: str | None = None) -> list[Tile]:
     prev_run, prev = before if before else (None, None)
+    query = {"context": context, "from": prev_run.id, "to": run.id} if prev_run else None
+    compare_href = "/diff?" + urlencode({k: v for k, v in query.items() if v is not None}) if query else None
     scanned = now.images - now.images_failed
     noisy = bool(run.gaps or run.images_failed or (prev_run and (prev_run.gaps or prev_run.images_failed)))
     specs = [
@@ -200,6 +203,7 @@ def _tiles(run: Run, now: Kpis, before: tuple[Run, Kpis] | None) -> list[Tile]:
             change_caution=noisy,
             caution=bool(run.gaps),
             error=error,
+            change_href=compare_href,
         )
         for key, label, value, suffix, previous, error in specs
     ]
@@ -233,7 +237,7 @@ def dashboard(
         failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
         auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
         worst = worst_images(conn, run.id)
-    ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
+    ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before, c))
     ctx.update(
         failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
         failed_total=failed_total,

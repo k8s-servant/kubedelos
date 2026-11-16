@@ -91,6 +91,36 @@ def get_run(conn: sqlite3.Connection, context: str, run_id: int) -> Run:
     return _build(conn, row)
 
 
+@dataclass(frozen=True)
+class RunChoice:
+    """One result run in a picker."""
+
+    id: int
+    number: int
+    finished_at: datetime | None
+    scope: dict | None
+    pkg_types: str | None
+
+
+def result_runs(conn: sqlite3.Connection, context: str, limit: int = 200) -> list[RunChoice]:
+    """The context's newest result runs, newest first, for a picker."""
+    rows = conn.execute(
+        f"SELECT id, number, finished_at, scope, pkg_types FROM scan_run WHERE context = ? AND status IN {_STATUS_SQL}"  # noqa: S608
+        " ORDER BY id DESC LIMIT ?",
+        (context, limit),
+    )
+    return [
+        RunChoice(
+            id=r["id"],
+            number=r["number"],
+            finished_at=datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
+            scope=json.loads(r["scope"]) if r["scope"] else None,
+            pkg_types=r["pkg_types"],
+        )
+        for r in rows
+    ]
+
+
 def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
     """The newest earlier result run with the same context, scope text and package types; NULL scope never matches."""
     row = conn.execute(

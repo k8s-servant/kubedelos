@@ -1,0 +1,98 @@
+{#- The compare page: two run pickers, cautions about the pair, count tiles, then the new and the fixed-or-gone findings
+    worst first and the image changes. Every link is built in the route. -#}
+{% extends "base.html" %}
+{% block title %}Compare · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>{% if result %}Run {{ old.number }} → Run {{ new.number }}{% else %}Compare runs{% endif %}</h1></div>{% endblock %}
+{% macro picker(name, label, chosen) -%}
+  <label>{{ label }}
+    <select name="{{ name }}">
+      {%- for c in choices %}
+      <option value="{{ c.id }}"{% if chosen and c.id == chosen.id %} selected{% endif %}>Run {{ c.number }}{% if c.finished_at %} · {{ c.finished_at.strftime("%Y-%m-%d %H:%M") }}{% endif %} · {{ describe_scope(c.scope) }}</option>
+      {%- endfor %}
+    </select>
+  </label>
+{%- endmacro %}
+{% block content %}
+{% if not new %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
+  </section>
+{% else %}
+  <form method="get" action="/diff" class="card filters">
+    {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
+    {{ picker("from", "From", old) }}
+    {{ picker("to", "To", new) }}
+    <div class="filter-actions">
+      <button type="submit" class="btn">Compare</button>
+    </div>
+  </form>
+  {% if not old %}
+  <p class="notice">Run {{ new.number }} has no earlier comparable run (the same scope and package types). Pick two runs above to compare them anyway.</p>
+  {% elif not result %}
+  <p class="notice">Pick two different runs.</p>
+  {% else %}
+  {%- for note in cautions %}
+  <div class="callout diff-caution" role="note"><p>{{ note }}</p></div>
+  {%- endfor %}
+  <ul class="tiles diff-tiles">
+    {%- for key, label, value in tiles %}
+    <li class="card tile" data-tile="{{ key }}">
+      <span class="tile-label">{{ label }}</span>
+      <span class="tile-figure"><span class="tile-value">{{ value }}</span></span>
+    </li>
+    {%- endfor %}
+  </ul>
+  <p class="table-foot">{{ result.still_open }} still open in both runs · {{ result.images_unchanged }} {{ result.images_unchanged | plural("image") }} unchanged</p>
+
+  {% for key, title, rows, total in [("new", "New findings", new_rows, result.new_total), ("gone", "Fixed or gone", gone_rows, result.gone_total)] %}
+  <section class="card diff-findings" aria-labelledby="{{ key }}-title">
+    <h2 class="card-title" id="{{ key }}-title">{{ title }}</h2>
+    {% if not rows %}
+    <p class="notice">None.</p>
+    {% else %}
+    <div class="table-wrap">
+      <table class="findings">
+        <thead>
+          <tr><th scope="col">Severity</th><th scope="col">CVE</th><th scope="col">Package</th><th scope="col">Fixed in</th><th scope="col">Image</th><th scope="col" class="num">Tags</th></tr>
+        </thead>
+        <tbody>
+          {%- for f, href in rows %}
+          <tr>
+            <td><span class="sev sev-{{ f.severity | lower }}">{{ f.severity | title }}</span></td>
+            <td class="cve"><a href="{{ href }}">{{ f.vuln_id }}</a></td>
+            <td>{{ f.pkg_name or "" }}</td>
+            <td class="version">{{ f.fixed_version }}</td>
+            <td><code class="ref">{{ f.repo }}</code>{% if f.image_gone %} <span class="chip chip-stale">image gone</span>{% endif %}</td>
+            <td class="num">{{ f.images }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% if total > rows | length %}<p class="table-foot">showing {{ rows | length }} of {{ total }}</p>{% endif %}
+    {% endif %}
+  </section>
+  {% endfor %}
+
+  <section class="card diff-images" aria-labelledby="images-title">
+    <h2 class="card-title" id="images-title">Images</h2>
+    {% for label, changes, total in [("Added", result.images_added, result.images_added_total), ("Gone", result.images_gone, result.images_gone_total), ("Changed", result.images_changed, result.images_changed_total)] %}
+    <h3>{{ label }} ({{ total }})</h3>
+    {% if changes %}
+    <ul class="diff-image-list">
+      {%- for c in changes %}
+      <li>
+        {%- if c.refs_from and c.refs_to %}<code>{{ c.refs_from | join(", ") }}</code> → <code>{{ c.refs_to | join(", ") }}</code>
+        {%- else %}<code>{{ (c.refs_to or c.refs_from) | join(", ") }}</code>{% endif -%}
+      </li>
+      {%- endfor %}
+    </ul>
+    {% if total > changes | length %}<p class="table-foot">showing {{ changes | length }} of {{ total }}</p>{% endif %}
+    {% else %}
+    <p class="zero">none</p>
+    {% endif %}
+    {% endfor %}
+  </section>
+  {% endif %}
+{% endif %}
+{% endblock %}

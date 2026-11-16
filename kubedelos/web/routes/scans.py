@@ -96,6 +96,7 @@ def _row(request: Request, run: HistoryRow) -> dict:
         "status": status,
         "chip": CHIP.get(status, ""),
         "href": link(request, "/findings", run_id=run.id) if run.status in RESULT_STATUSES else None,
+        "compare_href": link(request, "/diff", to=run.id) if run.status in RESULT_STATUSES else None,
         "scope": run.scope,
         "pkg_types": run.pkg_types,
         "images": run.images,
