@@ -393,3 +393,14 @@ def test_migration_numbers_existing_runs_per_context(tmp_path):
     assert [tuple(r) for r in rows] == [("a", 1), ("b", 1), ("a", 2), (None, 1), ("a", 3)]
     repo = Repo(conn)
     assert repo.get_run(repo.start_run("a", "ui", "0.76.1", scan_level="os"))["number"] == 4
+
+
+def test_run_numbers_are_unique_with_or_without_a_context(tmp_path):
+    repo = _repo(tmp_path)
+    for context in ("a", None):
+        run = repo.start_run(context, "ui", "0.76.1", scan_level="os")
+        number = repo.get_run(run)["number"]
+        with pytest.raises(sqlite3.IntegrityError):
+            repo._conn.execute(
+                "INSERT INTO scan_run (started_at, status, context, number) VALUES ('x', 'ok', ?, ?)", (context, number)
+            )
