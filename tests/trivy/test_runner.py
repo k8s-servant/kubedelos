@@ -551,3 +551,75 @@ def test_scan_image_records_the_scanned_image_id(tmp_path, monkeypatch, image_id
     monkeypatch.setenv("FAKE_TRIVY_REPORT", str(path))
     result = scan_image(FAKE_TRIVY, REF, "linux/amd64", 60)
     assert result.status == "ok" and result.scanned_image_id == expected
+
+
+_EOF_ERROR = "2026-11-16T09:15:44+02:00\tFATAL\tFatal error\trun error: walk error: failed to extract the archive: unexpected EOF"
+
+
+def _scripted(monkeypatch, *results):
+    """Make scan_image return ``results`` in turn (one image at a time), and record each call's ref."""
+    calls: list[str] = []
+    queue = list(results)
+
+    def fake(trivy, image, platform, *args, **kwargs):
+        calls.append(image.ref)
+        kind, error = queue.pop(0)
+        if kind is None:
+            return ImageResult(image=image, platform=platform, status="ok", findings=[])
+        return ImageResult(image=image, platform=platform, status="error", error_kind=kind, error=error)
+
+    monkeypatch.setattr(runner, "scan_image", fake)
+    monkeypatch.setattr(runner, "_RETRY_DELAY_S", 0)
+    return calls
+
+
+def _scan_one(tmp_path, cancel=None):
+    results: list[ImageResult] = []
+    scan_many(
+        _items(1), cache_dir=tmp_path, trivy=FAKE_TRIVY, settings=Settings(cache_dir=tmp_path, parallelism=1),
+        on_result=results.append, cancel=cancel or threading.Event(),
+    )  # fmt: skip
+    return results
+
+
+def test_a_passing_network_error_is_retried_once(tmp_path, monkeypatch):
+    calls = _scripted(monkeypatch, ("trivy", _EOF_ERROR), (None, None))
+    (result,) = _scan_one(tmp_path)
+    assert result.status == "ok" and len(calls) == 2
+
+
+def test_a_second_failure_is_recorded_as_failed_twice(tmp_path, monkeypatch):
+    calls = _scripted(monkeypatch, ("trivy", _EOF_ERROR), ("trivy", "dial tcp: connection reset by peer"))
+    (result,) = _scan_one(tmp_path)
+    assert len(calls) == 2 and result.status == "error"
+    assert result.error.startswith("failed twice: ") and "connection reset" in result.error
+
+
+@pytest.mark.parametrize(
+    "kind, error",
+    [
+        ("timeout", "context deadline exceeded"),
+        ("auth", "UNAUTHORIZED: authentication required; unexpected EOF"),
+        ("not_found", "MANIFEST_UNKNOWN: manifest unknown"),
+        ("trivy", "failed analysis: unsupported media type"),
+    ],
+)
+def test_other_errors_are_not_retried(tmp_path, monkeypatch, kind, error):
+    calls = _scripted(monkeypatch, (kind, error))
+    (result,) = _scan_one(tmp_path)
+    assert len(calls) == 1 and result.error == error
+
+
+def test_no_retry_after_a_cancel(tmp_path, monkeypatch):
+    cancel = threading.Event()
+    calls: list[str] = []
+
+    def fails_then_cancels(trivy, image, platform, *args, **kwargs):
+        calls.append(image.ref)
+        cancel.set()  # the user cancels while this image is scanning
+        return ImageResult(image=image, platform=platform, status="error", error_kind="trivy", error=_EOF_ERROR)
+
+    monkeypatch.setattr(runner, "scan_image", fails_then_cancels)
+    monkeypatch.setattr(runner, "_RETRY_DELAY_S", 0)
+    (result,) = _scan_one(tmp_path, cancel)
+    assert len(calls) == 1 and result.error == _EOF_ERROR

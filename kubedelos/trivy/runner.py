@@ -38,6 +38,31 @@ _ERROR_PATTERNS: tuple[tuple[ErrorKind, tuple[str, ...]], ...] = (
 )
 
 
+# Errors a second attempt usually gets past: a registry or network hiccup mid-download. Matched case-insensitively on a
+# failed result's error. Timeouts (Trivy's own deadline), auth and not-found errors are never retried.
+_PASSING_ERRORS = (
+    "unexpected eof",
+    "connection reset",
+    "broken pipe",
+    "i/o timeout",
+    "tls handshake timeout",
+    "502 bad gateway",
+    "503 service unavailable",
+    "504 gateway timeout",
+    "too many requests",
+)
+_RETRY_DELAY_S = 2.0
+RETRIED_PREFIX = "failed twice: "
+
+
+def _passing(result: ImageResult) -> bool:
+    """Whether ``result`` failed in a way one more attempt is likely to get past."""
+    if result.status != "error" or result.error_kind not in ("trivy", "unknown"):
+        return False
+    lowered = (result.error or "").lower()
+    return any(p in lowered for p in _PASSING_ERRORS)
+
+
 def _kill_group(pgid: int, sig: signal.Signals) -> None:
     # Already gone is fine. macOS answers EPERM when only zombies are left in the group.
     with contextlib.suppress(ProcessLookupError, PermissionError):
@@ -330,6 +355,8 @@ def scan_many(
 ) -> None:
     """Scan ``items`` with ``settings.parallelism`` workers, handing each result to ``on_result`` on this thread.
 
+    An image that fails with a passing network error (``_PASSING_ERRORS``) is scanned once more after
+    ``_RETRY_DELAY_S``, unless ``cancel`` is set by then; when that fails too, its error starts with ``RETRIED_PREFIX``.
     Once ``cancel`` is set no new image starts; scans already running finish and are reported. An exception from
     ``on_result`` (or an interrupt) kills the running scans and propagates.
     """
@@ -338,7 +365,7 @@ def scan_many(
     workers = settings.parallelism
     groups = _ClientGroups()
 
-    def work(item: InventoryItem) -> ImageResult:
+    def attempt(item: InventoryItem) -> ImageResult:
         try:
             return scan_image(
                 trivy,
@@ -357,6 +384,15 @@ def scan_many(
                 error_kind="unknown",
                 error=_short(f"{type(exc).__name__}: {exc}"),
             )
+
+    def work(item: InventoryItem) -> ImageResult:
+        result = attempt(item)
+        if not _passing(result) or cancel.wait(_RETRY_DELAY_S):
+            return result
+        again = attempt(item)
+        if again.status != "error":
+            return again
+        return again.model_copy(update={"error": RETRIED_PREFIX + (again.error or "")})
 
     remaining = iter(items)
     exhausted = False
