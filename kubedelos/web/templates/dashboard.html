@@ -93,6 +93,7 @@
         {% if by == "fix" %}<strong aria-current="true">by fix</strong>{% else %}<a href="{{ by_fix_href }}">by fix</a>{% endif %}
         ·
         {% if by == "image" %}<strong aria-current="true">by image</strong>{% else %}<a href="{{ by_image_href }}">by image</a>{% endif %}
+        · <a href="{{ report_href }}">Print report</a>
       </p>
     </div>
     {% if not fix_rows %}

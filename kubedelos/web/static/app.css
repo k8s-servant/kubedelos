@@ -1232,7 +1232,8 @@ select {
 }
 
 @media print {
-  .sidebar {
+  .sidebar,
+  .no-print {
     display: none;
   }
 
@@ -1398,4 +1399,60 @@ select {
 
 .diff-image-list code {
   overflow-wrap: anywhere;
+}
+
+/* The report sheet: a plain document, readable on screen and printed (the print rules above drop the sidebar). */
+
+.report-sheet {
+  max-width: 52rem;
+  font-size: 0.8125rem;
+}
+
+.report-sheet h2 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.9375rem;
+}
+
+.report-meta,
+.report-counts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.25rem 1rem;
+  margin: 0;
+}
+
+.report-meta dt,
+.report-counts dt {
+  color: var(--muted);
+}
+
+.report-meta dd,
+.report-counts dd {
+  margin: 0;
+}
+
+.report-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.report-table th,
+.report-table td {
+  padding: 0.25rem 0.5rem;
+  border-bottom: 1px solid var(--line-soft);
+  text-align: left;
+}
+
+.report-table .num {
+  text-align: right;
+}
+
+.report-failed code {
+  overflow-wrap: anywhere;
+}
+
+@media print {
+  .report-table tr {
+    break-inside: avoid;
+  }
 }

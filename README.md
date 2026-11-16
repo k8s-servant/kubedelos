@@ -87,13 +87,18 @@ follows the system light or dark theme.
   is grouped by fix, or by image with `?by=image`. Failed images are listed with the cause and a registry login hint, and
   a newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`,
-  `accepted`), sort, 100 per page. Accepted findings are hidden by default (`accepted=hide`; `only` and `all` show them
+  `accepted`), sort, 100 per page. **download CSV** (`/findings.csv`, same parameters) saves every row of the view as
+  filtered, streamed, with cells a spreadsheet would run as a formula prefixed with `'`. Accepted findings are hidden by default (`accepted=hide`; `only` and `all` show them
   with a badge), and the page says how many it left out. Each row has an **Accept…** link.
 - **Namespaces (`/namespaces`)**: one row per namespace of the dashboard's run, worst first (Critical, then High),
   with owner, team, a count per severity, the total and the images. Every column sorts; `q` filters by namespace,
   owner or team, and `has` keeps namespaces with at least one finding of a severity. A namespace counts a finding when
   the finding's image runs there, as the findings page's namespace filter does, so each count links to exactly those
   findings.
+- **Report (`/report`)**: a print sheet of the dashboard's run (or `?run_id=`): cluster, run, scope, the counts per
+  severity, the fix-first list (50 fixes, with how many accepted findings it leaves out) and the failed images. Print
+  it, or save it as PDF, from the browser; the sidebar is left off the print. Linked from the dashboard's Fix first card
+  and from each run in the Scans history.
 - **Compare (`/diff`)**: what changed between two runs of the shown cluster. By default it compares the dashboard's run
   with its previous comparable run; `from` and `to` (or the two pickers) choose any two. Images are matched by
   repository, so a tag bump reads as a changed image and a CVE that survives it stays open instead of showing as fixed

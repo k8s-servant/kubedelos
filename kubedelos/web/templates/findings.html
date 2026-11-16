@@ -118,7 +118,7 @@
       </table>
     </div>
     <nav class="pager" aria-label="Pages">
-      <span class="findings-count">{{ first }}–{{ last }} of {{ total }}</span>
+      <span class="findings-count">{{ first }}–{{ last }} of {{ total }} · <a href="{{ csv_href }}" download>download CSV</a></span>
       <div class="pages">
         {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
         <span>page <span class="current" aria-current="page">{{ page }}</span> of {{ last_page }}</span>
