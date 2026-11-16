@@ -1,5 +1,6 @@
-{#- The failures page: every image of one run that failed to scan, with its cause; the error text is folded away. The
-    newest partial run of a context also has the retry form; the notes of earlier retries come first. -#}
+{#- The failures page: every image of one run that failed to scan, named short with its cause in a few words; the full
+    ref and the error text are folded away. A count per kind narrows the list. The newest partial run of a context also
+    has the retry form; the notes of earlier retries come first. -#}
 {% extends "base.html" %}
 {% block title %}Failed images · kubedelos{% endblock %}
 {% block run_line %}<div class="page-head"><h1>Failed images of run {{ shown_run.number }}</h1></div>{% endblock %}
@@ -39,7 +40,19 @@
   {%- for hint in login_hints %}
   <p class="failed-hint">hint: {{ hint }}</p>
   {%- endfor %}
+  <nav class="kind-filter" aria-label="Kinds">
+    {%- for k in kinds %}
+    {%- if k.current %}
+    <strong aria-current="true">{{ k.label }} {{ k.count }}</strong>
+    {%- else %}
+    <a href="{{ k.href }}">{{ k.label }} {{ k.count }}</a>
+    {%- endif %}
+    {%- endfor %}
+  </nav>
   <div class="card">
+  {%- if not rows %}
+  <p class="hint">No image of run {{ shown_run.number }} failed with {{ kind }}.</p>
+  {%- else %}
   <div class="table-wrap">
     <table class="failed">
       <thead>
@@ -54,14 +67,15 @@
       <tbody>
         {%- for row in rows %}
         <tr>
-          <td><code class="ref">{{ row.ref }}</code></td>
+          <td><code class="ref" title="{{ row.ref }}">{{ row.short }}</code></td>
           <td>{{ row.platform }}</td>
           <td><span class="chip chip-bad">{{ row.kind }}</span>{% if row.retried %} <span class="chip chip-stale">retried</span>{% endif %}</td>
           <td>{{ row.namespaces | join(", ") }}</td>
           <td class="cause">{{ row.cause }}
-            {%- if row.detail %}
-            <details><summary>error text</summary><pre>{{ row.detail }}</pre></details>
-            {%- endif %}
+            <details><summary>details</summary><pre>{{ row.ref }}
+{%- if row.detail %}
+
+{{ row.detail }}{% endif %}</pre></details>
           </td>
         </tr>
         {%- endfor %}
@@ -69,13 +83,14 @@
     </table>
   </div>
   <nav class="pager" aria-label="Pages">
-    <span class="findings-count">{{ first }}–{{ last }} of {{ total }}</span>
+    <span class="findings-count">{{ first }}–{{ last }} of {{ shown }}</span>
     <div class="pages">
       {%- if prev_href %}<a href="{{ prev_href }}" rel="prev">previous</a>{% endif %}
       <span>page <span class="current" aria-current="page">{{ page }}</span> of {{ last_page }}</span>
       {%- if next_href %}<a href="{{ next_href }}" rel="next">next</a>{% endif %}
     </div>
   </nav>
+  {%- endif %}
   </div>
   {% endif %}
 {% endblock %}

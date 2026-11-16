@@ -1,9 +1,10 @@
 """The failures page (``GET /scans/{run_id}/failed``): every image of one run that failed to scan, and why.
 
 It shows any run of the shown context, whatever its status, so a running, cancelled or narrow run's failures can be
-read too; the dashboard's panel shows only its own run, capped. Each row gives the cause (``error_cause``, which
-redacts credentials) and, folded away, the redacted error text; auth failures add the registry login hints. Paged in
-SQL, 100 rows a page.
+read too; the dashboard's card only counts its own run's failures by kind. Each row names the image short
+(``short_image``) and gives the cause in a few words (``short_cause``); the full ref and the redacted error text are
+folded away. Auth failures add the registry login hints. ``?kind=`` narrows the list to one error kind, with a count
+per kind to pick from. Paged in SQL, 100 rows a page.
 
 The newest result run of a context, once it finished ``partial``, also offers a retry of its failed images
 (``POST /scans/{run_id}/retry``, with the CSRF token): the app's ``ScanRunner`` scans them again with the posted time
@@ -12,6 +13,7 @@ lists the notes earlier retries left.
 """
 
 import json
+import re
 import sqlite3
 from math import ceil
 from urllib.parse import parse_qs, urlencode
@@ -28,15 +30,16 @@ from kubedelos.store.queries import (
     RunLabel,
     RunNotShown,
     auth_failed_refs,
+    failure_kinds,
     newest_run,
     retry_notes,
     run_failures,
     run_label,
 )
 from kubedelos.trivy.pins import TRIVY_VERSION
-from kubedelos.trivy.runner import RETRIED_PREFIX, error_cause, error_text
+from kubedelos.trivy.runner import RETRIED_PREFIX, ErrorKind, error_cause, error_text
 from kubedelos.web.jobs import ScanBusy
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, shown_context
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_image, shown_context
 
 router = APIRouter()
 
@@ -46,6 +49,31 @@ RETRY_PARALLELISM = 2
 _MAX_FORM_FIELDS = 20
 _MAX_BODY = 4 * 1024
 UNREADABLE = "the form could not be read"
+
+# What each error kind means and what to do about it, as the dashboard's failed-images card says it.
+KIND_HELP: dict[str, str] = {
+    "timeout": "Trivy ran out of time, usually on a large image. A retry with a longer time limit fixes most.",
+    "not_found": "The tag or digest is no longer in the registry, so the workload can't pull it either.",
+    "auth": "The registry refused access. Log in to it and scan again.",
+    "trivy": "Trivy could not read the image. The error text is on the failures page.",
+    "unknown": "Something else went wrong. The error text is on the failures page.",
+}
+_FINISHED_WITHIN = re.compile(r"did not finish within (\d+)s")
+_MISSING_TAG = re.compile(r'manifest tagged by "([^"]{1,128})" is not found')
+
+
+def short_cause(kind: str | None, error: str | None) -> str:
+    """What went wrong, in a few words: a plain sentence for the kinds that say it all, else ``error_cause``."""
+    text = error or ""
+    if kind == "timeout":
+        limit = _FINISHED_WITHIN.search(text)
+        return f"did not finish within {limit[1]} s" if limit else "ran out of time while analysing the image"
+    if kind == "not_found":
+        tag = _MISSING_TAG.search(text)
+        return f"tag {tag[1]} is not in the registry" if tag else "the image is not in the registry"
+    if kind == "auth":
+        return "the registry refused access"
+    return error_cause(text) if text else ""
 
 
 def failed_href(request: Request, run_id: int, **params: object) -> str:
@@ -58,9 +86,10 @@ def failure(row) -> dict:
     error = row["error"] or ""
     return {
         "ref": row["ref"],
+        "short": short_image({"repo": row["repo"], "tag": row["tag"], "digest": row["digest"], "image": row["ref"]}),
         "platform": row["platform"],
         "kind": row["error_kind"] or "unknown",
-        "cause": error_cause(error),
+        "cause": short_cause(row["error_kind"], error),
         "detail": error_text(error) or None,
         "retried": error.startswith(RETRIED_PREFIX),
         "namespaces": json.loads(row["namespaces"]),
@@ -86,8 +115,13 @@ def default_timeout(settings: Settings) -> int:
 
 
 @router.get("/scans/{run_id}/failed", response_class=HTMLResponse)
-def failed(request: Request, run_id: int = Path(ge=1, le=MAX_ID), page: int = Query(1, ge=1, le=10**9)) -> HTMLResponse:
-    return _page(request, run_id, page)
+def failed(
+    request: Request,
+    run_id: int = Path(ge=1, le=MAX_ID),
+    page: int = Query(1, ge=1, le=10**9),
+    kind: ErrorKind | None = None,
+) -> HTMLResponse:
+    return _page(request, run_id, page, kind=kind)
 
 
 def _page(
@@ -99,21 +133,26 @@ def _page(
     sent: dict | None = None,
     status: int = 200,
     context: str | None = None,
+    kind: str | None = None,
 ) -> HTMLResponse:
-    """The failures page of ``run_id``, with the retry form's ``error`` and what was ``sent`` after a refused POST."""
+    """The failures page of ``run_id``, narrowed to ``kind`` if given, with the retry form's ``error`` and what was
+    ``sent`` after a refused POST.
+    """
     with open_db(request) as conn:
         context = shown_context(request, conn, context)
         try:
             run = run_label(conn, context, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
-        rows, total = run_failures(conn, run.id, limit=PER_PAGE, offset=(page - 1) * PER_PAGE)
+        kinds = failure_kinds(conn, run.id)
+        rows, shown = run_failures(conn, run.id, limit=PER_PAGE, offset=(page - 1) * PER_PAGE, kind=kind)
+        total = sum(n for _, n in kinds)
         auth_refs = auth_failed_refs(conn, run.id) if total else []
         newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
         retryable = retry_problem(request, conn, context, run) is None
         notes = retry_notes(conn, run.id)
     settings = request.app.state.settings
-    last_page = max(1, ceil(total / PER_PAGE))
+    last_page = max(1, ceil(shown / PER_PAGE))
     first = (page - 1) * PER_PAGE + 1
     ctx = {
         "now": request.app.state.clock(),
@@ -121,12 +160,21 @@ def _page(
         "shown_run": run,
         "rows": [failure(r) for r in rows],
         "total": total,
+        "shown": shown,
+        "kind": kind,
+        "kinds": [
+            {"label": "all", "count": total, "current": kind is None, "href": failed_href(request, run.id)},
+            *(
+                {"label": k, "count": n, "current": k == kind, "href": failed_href(request, run.id, kind=k)}
+                for k, n in kinds
+            ),
+        ],
         "first": first,
         "last": first + len(rows) - 1,
         "page": page,
         "last_page": last_page,
-        "prev_href": failed_href(request, run.id, page=page - 1 if page > 2 else None) if page > 1 else None,
-        "next_href": failed_href(request, run.id, page=page + 1) if page < last_page else None,
+        "prev_href": failed_href(request, run.id, kind=kind, page=page - 1 if page > 2 else None) if page > 1 else None,
+        "next_href": failed_href(request, run.id, kind=kind, page=page + 1) if page < last_page else None,
         "login_hints": login_hints_for(auth_refs),
         "scans_href": link(request, "/scans"),
         "notes": notes,

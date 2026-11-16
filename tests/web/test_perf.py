@@ -57,6 +57,8 @@ def test_query_plans_use_indexes(tmp_path):
         ),
         "findings_page q": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(q="lib"), 1),
         "failed_images": lambda: queries.failed_images(conn, run_id),
+        "failure_kinds": lambda: queries.failure_kinds(conn, run_id),
+        "run_failures kind": lambda: queries.run_failures(conn, run_id, limit=100, kind="timeout"),
         "run_namespaces": lambda: queries.run_namespaces(conn, run_id),
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),

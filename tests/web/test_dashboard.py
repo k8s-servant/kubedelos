@@ -531,17 +531,22 @@ def _add_failed(seed, run_id, ref, kind, error, platform="linux/amd64"):
     )
 
 
-def test_failed_images_show_cause_and_one_hint_per_host(client, seed):
+def test_failed_images_one_line_per_kind_with_one_hint_per_host(client, seed):
     run_id = _run(seed)
     _add_failed(seed, run_id, "registry.example.com/team/a:1", "auth", FATAL)
     _add_failed(seed, run_id, "registry.example.com/team/b:1", "auth", FATAL)
     _add_failed(seed, run_id, "registry.example.com/team/c:1", "not_found", FATAL)
     html = unescape(client.get("/").text)
-    assert "Failed images" in html
-    assert "MANIFEST_UNKNOWN: manifest unknown; unable to find the image" in html
-    assert "run error: image scan error" not in html
-    assert html.count("docker login registry.example.com`") == 1
-    assert "registry.example.com/team/c:1" in html
+    card = html.split('class="card card-error failed-images"', 1)[1].split("</section>", 1)[0]
+    assert "Failed images · 3" in card
+    kinds = re.findall(r'<li class="failed-kind">(.*?)</li>', card, re.S)
+    assert len(kinds) == 2
+    assert f'href="/scans/{run_id}/failed?kind=auth">auth</a>' in kinds[0] and "<strong>2</strong>" in kinds[0]
+    assert "refused access" in kinds[0]
+    assert f'href="/scans/{run_id}/failed?kind=not_found">not_found</a>' in kinds[1]
+    assert "no longer in the registry" in kinds[1]
+    assert "registry.example.com/team/c:1" not in card and "MANIFEST_UNKNOWN" not in card
+    assert card.count("docker login registry.example.com`") == 1
 
 
 def test_failed_images_section_hidden_without_failures(client, seed):
@@ -550,14 +555,24 @@ def test_failed_images_section_hidden_without_failures(client, seed):
     assert "Failed images" not in client.get("/").text
 
 
-def test_failed_images_over_the_cap_say_so(client, seed):
+def test_failed_images_stay_one_line_however_many_fail(client, seed):
     run_id = _run(seed)
     for i in range(27):
         _add_failed(seed, run_id, f"registry.example.com/team/app{i:02d}:1", "timeout", "timed out")
-    html = client.get("/").text
-    assert "showing 25 of 27" in html
-    assert "app24:1" in html
-    assert "app26:1" not in html
+    card = client.get("/").text.split('class="card card-error failed-images"', 1)[1].split("</section>", 1)[0]
+    assert card.count('<li class="failed-kind">') == 1 and "<strong>27</strong>" in card
+    assert "app00:1" not in card
+    assert f'href="/scans/{run_id}/failed">See all 27</a>' in card
+
+
+def test_failed_images_offer_the_retry_only_where_it_is_allowed(client, seed):
+    old = _run(seed, status="partial")
+    _add_failed(seed, old, "registry.example.com/team/a:1", "timeout", "timed out")
+    assert f'href="/scans/{old}/failed#retry"' in client.get("/").text
+    new = _run(seed, status="partial")
+    _add_failed(seed, new, "registry.example.com/team/a:1", "timeout", "timed out")
+    assert f'href="/scans/{old}/failed#retry"' not in client.get(f"/?run_id={old}").text
+    assert f'href="/scans/{new}/failed#retry"' in client.get("/").text
 
 
 def test_hostile_strings_are_escaped(client, seed):
@@ -596,7 +611,6 @@ def test_login_hint_covers_auth_failures_past_the_list_cap(client, seed):
     _add_failed(seed, run_id, "zz.example.com/<b>x</b>:1", "auth", FATAL)
     _add_failed(seed, run_id, "zz.example.com/<b>y</b>:1", "auth", FATAL)
     html = client.get("/").text
-    assert "showing 25 of 28" in html
     assert "<b>x" not in html
     assert unescape(html).count("docker login zz.example.com`") == 1
 
