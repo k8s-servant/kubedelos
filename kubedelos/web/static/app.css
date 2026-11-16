@@ -855,20 +855,77 @@ tbody tr:hover td {
   border-left: 3px solid var(--critical);
 }
 
-.failed-images h2 {
-  margin: 0 0 0.5rem;
+.failed-images .card-head {
+  justify-content: space-between;
 }
 
-.failed-list {
+.failed-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: baseline;
   margin: 0;
-  padding-left: 1.25rem;
-  overflow-wrap: anywhere;
+  font-size: 0.75rem;
+}
+
+a.btn {
+  text-decoration: none;
+}
+
+.failed-kinds {
+  display: grid;
+  grid-template-columns: auto auto 1fr;
+  gap: 0.375rem 0.75rem;
+  align-items: baseline;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.failed-kind {
+  display: contents;
+}
+
+.failed-kind strong {
+  color: var(--fg-strong);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.failed-kind .help {
+  color: var(--muted);
 }
 
 .failed-overflow,
 .failed-hint {
   margin: 0.5rem 0 0;
   color: var(--muted);
+}
+
+/* The kinds on the failures page: one pill per kind, the shown one filled. */
+
+.kind-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin: 0 0 0.75rem;
+}
+
+.kind-filter a,
+.kind-filter strong {
+  padding: 0.25rem 0.625rem;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--tint);
+  color: var(--nav);
+  font-size: 0.71875rem;
+  font-weight: 400;
+  text-decoration: none;
+}
+
+.kind-filter strong {
+  border-color: color-mix(in srgb, var(--accent) 50%, transparent);
+  background: var(--accent-soft);
+  color: var(--fg-strong);
 }
 
 /* Findings: the filters card, severity pills, the table card and the pager. */
@@ -1346,6 +1403,13 @@ select {
 .failed .ref,
 .readout-failures code {
   overflow-wrap: anywhere;
+}
+
+/* A kind chip never breaks inside its word ("not_found"). */
+.failed .chip,
+.failed-kind .chip {
+  white-space: nowrap;
+  overflow-wrap: normal;
 }
 
 .failed .cause {

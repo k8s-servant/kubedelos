@@ -84,8 +84,9 @@ follows the system light or dark theme.
 - **Dashboard (`/`)**: the latest whole-cluster run, with an incomplete marker when some namespaces could not be listed.
   KPI tiles show the change against the previous comparable run; the all findings tile carries a severity bar and a
   legend whose entries link to the findings. A Worst images panel ranks images by Critical and High, and a fix-first list
-  is grouped by fix, or by image with `?by=image`. Failed images are listed with the cause and a registry login hint, and
-  a newer, narrower run is mentioned with a link to its findings.
+  is grouped by fix, or by image with `?by=image`. Failed images are counted by kind (timeout, not_found, auth...), one
+  line each with what it means and a link to just those failures, plus a registry login hint and, where the run can be
+  retried, a Retry button. A newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`,
   `accepted`), sort, 100 per page. **download CSV** (`/findings.csv`, same parameters) saves every row of the view as
   filtered, streamed, with cells a spreadsheet would run as a formula prefixed with `'`. Accepted findings are hidden by default (`accepted=hide`; `only` and `all` show them
@@ -106,9 +107,10 @@ follows the system light or dark theme.
   first, 100 at most with the real total. A difference in scope or package types, failed images or coverage gaps is
   named above the numbers. A finding open in both runs is only counted ("still open"), even if its severity or fix
   changed. The dashboard's change figures and each run in the Scans history link here.
-- **Failed images (`/scans/<run>/failed`)**: every image of a run that failed to scan, with platform, error kind,
-  namespaces and cause, plus the redacted error text and registry login hints for auth failures. It is linked from the
-  failed count in the Scans history, from the dashboard's Failed images panel and from the progress readout, which also
+- **Failed images (`/scans/<run>/failed`)**: every image of a run that failed to scan, named as `repo:tag` plus a short
+  digest, with platform, error kind, namespaces and the cause in a few words ("tag 1.2 is not in the registry"). The full
+  ref and the redacted error text are folded away under each row, and auth failures add registry login hints. A pill per
+  kind, with its count, narrows the list (`?kind=timeout`). It is linked from the failed count in the Scans history, from the dashboard's Failed images panel and from the progress readout, which also
   lists the newest failures while the scan runs. An image that fails with a passing network error (an interrupted
   download, a reset connection, a 502/503/504 or 429 from the registry) is scanned once more after 2 seconds before it
   counts as failed, and is marked "retried" when the second attempt fails too. Timeouts, auth and not-found errors are

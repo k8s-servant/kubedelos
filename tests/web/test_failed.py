@@ -1,5 +1,6 @@
 import re
 import threading
+from typing import get_args
 
 import pytest
 
@@ -7,8 +8,9 @@ from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.scan.service import ScanOutcome
-from kubedelos.trivy.runner import RETRIED_PREFIX
+from kubedelos.trivy.runner import RETRIED_PREFIX, ErrorKind
 from kubedelos.web.jobs import ScanRunner
+from kubedelos.web.routes.failed import KIND_HELP, short_cause
 
 CLUSTER = Settings().scope
 ORIGIN = {"origin": "http://127.0.0.1:9370"}
@@ -86,7 +88,88 @@ def test_history_and_dashboard_link_to_the_failures(client, seed):
     history = client.get("/scans").text
     assert f'<a href="/scans/{run_id}/failed">30</a>' in history
     dashboard = client.get("/").text
-    assert f'href="/scans/{run_id}/failed">see all 30</a>' in dashboard
+    assert f'href="/scans/{run_id}/failed">See all 30</a>' in dashboard
+
+
+NOT_FOUND = (
+    "remote error: GET https://reg.example.com/v2/team/app/manifests/2026.1: MANIFEST_UNKNOWN: manifest tagged by"
+    ' "2026.1" is not found; map[Tag:2026.1]'
+)
+LAYER_TIMEOUT = (
+    "analyze error: pipeline error: failed to analyze layer (sha256:abc): walk error: failed to process the file:"
+    " failed to analyze usr/lib/libx.so: semaphore acquire: context deadline exceeded"
+)
+
+
+@pytest.mark.parametrize(
+    ("kind", "error", "cause"),
+    [
+        ("timeout", "trivy did not finish within 630s", "did not finish within 630 s"),
+        ("timeout", LAYER_TIMEOUT, "ran out of time while analysing the image"),
+        ("not_found", NOT_FOUND, "tag 2026.1 is not in the registry"),
+        ("not_found", "MANIFEST_UNKNOWN: manifest unknown", "the image is not in the registry"),
+        ("auth", AUTH_ERROR, "the registry refused access"),
+        ("trivy", EOF_ERROR, "run error: failed to extract the archive: unexpected EOF"),
+        (None, None, ""),
+    ],
+)
+def test_short_cause_says_what_went_wrong_in_a_few_words(kind, error, cause):
+    assert short_cause(kind, error) == cause
+
+
+def test_every_error_kind_has_its_help():
+    assert set(KIND_HELP) == set(get_args(ErrorKind))
+
+
+def test_rows_give_the_short_cause_and_fold_the_full_ref_and_error_away(client, seed):
+    run_id = _run(seed, "partial")
+    digest = "sha256:" + "b" * 64
+    ref = f"reg.example.com/team/app@{digest}"
+    image = ImageRef(ref=ref, repo="reg.example.com/team/app", tag=None, digest=digest)
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
+    result = ImageResult(image=image, platform="linux/amd64", status="error", error_kind="timeout", error=LAYER_TIMEOUT)
+    seed.repo.add_result(run_id, item, result)
+    (row,) = _rows(client.get(f"/scans/{run_id}/failed").text)
+    assert f'<code class="ref" title="{ref}">reg.example.com/team/app@sha256:bbbbbbbb</code>' in row
+    cause, folded = row.split("<details>", 1)
+    assert "ran out of time while analysing the image" in cause and "semaphore" not in cause
+    assert ref in folded and "semaphore acquire: context deadline exceeded" in folded
+
+
+def test_filters_to_one_kind_with_a_count_per_kind(client, seed):
+    run_id = _run(seed, "partial")
+    for i in range(3):
+        _put(seed, run_id, f"reg.example.com/t{i}:1", kind="timeout", error=LAYER_TIMEOUT)
+    _put(seed, run_id, "reg.example.com/n:1", kind="not_found", error=NOT_FOUND)
+    html = client.get(f"/scans/{run_id}/failed").text
+    kinds = html.split('<nav class="kind-filter"', 1)[1].split("</nav>", 1)[0]
+    assert '<strong aria-current="true">all 4</strong>' in kinds
+    assert f'<a href="/scans/{run_id}/failed?kind=timeout">timeout 3</a>' in kinds
+    assert f'<a href="/scans/{run_id}/failed?kind=not_found">not_found 1</a>' in kinds
+    narrow = client.get(f"/scans/{run_id}/failed", params={"kind": "not_found"}).text
+    assert [("reg.example.com/n:1" in r) for r in _rows(narrow)] == [True]
+    assert "4 images failed to scan in run 1" in narrow and "1\u20131 of 1" in narrow
+    assert '<strong aria-current="true">not_found 1</strong>' in narrow
+    assert client.get(f"/scans/{run_id}/failed", params={"kind": "bogus"}).status_code == 400
+
+
+def test_a_page_past_the_end_says_so(client, seed):
+    run_id = _run(seed, "partial")
+    _put(seed, run_id, "reg.example.com/a:1", kind="timeout", error=LAYER_TIMEOUT)
+    html = client.get(f"/scans/{run_id}/failed", params={"page": 5}).text
+    assert "No failures on page 5; there is 1 page." in html and "None" not in html
+    narrow = client.get(f"/scans/{run_id}/failed", params={"kind": "auth"}).text
+    assert "No image of run 1 failed with auth." in narrow
+
+
+def test_paging_keeps_the_kind(client, seed):
+    run_id = _run(seed, "partial")
+    for i in range(101):
+        _put(seed, run_id, f"reg.example.com/app{i:03}:1", kind="trivy", error=EOF_ERROR)
+    _put(seed, run_id, "reg.example.com/zz:1", kind="auth", error=AUTH_ERROR)
+    html = client.get(f"/scans/{run_id}/failed", params={"kind": "trivy"}).text
+    assert f'href="/scans/{run_id}/failed?kind=trivy&amp;page=2"' in html
+    assert len(_rows(client.get(f"/scans/{run_id}/failed", params={"kind": "trivy", "page": 2}).text)) == 1
 
 
 def test_hostile_error_text_is_escaped(client, seed):

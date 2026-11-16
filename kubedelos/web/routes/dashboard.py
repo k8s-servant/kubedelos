@@ -20,17 +20,18 @@ from kubedelos.store.queries import (
     RunNotShown,
     WorstImage,
     auth_failed_refs,
-    failed_images,
+    failure_kinds,
     fix_by_fix,
     fix_by_image,
     get_run,
     kpis,
     newest_run,
     previous_comparable,
+    run_label,
     worst_images,
 )
-from kubedelos.trivy.runner import error_cause
 from kubedelos.web.pages import MAX_ID, context_param, link, open_db, plural, render, shown_context
+from kubedelos.web.routes.failed import KIND_HELP, failed_href, retry_problem
 
 router = APIRouter()
 
@@ -234,14 +235,19 @@ def dashboard(
         before = (previous, kpis(conn, previous.id)) if previous else None
         today = now.date()
         fixes = fix_by_fix(conn, run.id, today=today) if by == "fix" else fix_by_image(conn, run.id, today=today)
-        failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
-        auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
+        kinds = failure_kinds(conn, run.id) if current.images_failed else []
+        auth_refs = auth_failed_refs(conn, run.id) if kinds else []
+        retryable = bool(kinds) and retry_problem(request, conn, context, run_label(conn, context, run.id)) is None
         worst = worst_images(conn, run.id)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before, c))
     ctx.update(
-        failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
-        failed_total=failed_total,
-        failed_href=link(request, f"/scans/{run.id}/failed"),
+        failed_kinds=[
+            {"kind": k, "count": n, "help": KIND_HELP[k], "href": failed_href(request, run.id, kind=k)}
+            for k, n in kinds
+        ],
+        failed_total=sum(n for _, n in kinds),
+        failed_href=failed_href(request, run.id),
+        retry_href=failed_href(request, run.id) + "#retry" if retryable else None,
         report_href=link(request, "/report", run_id=run.id),
         login_hints=login_hints_for(auth_refs),
     )

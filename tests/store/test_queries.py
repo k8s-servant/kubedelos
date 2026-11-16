@@ -19,6 +19,7 @@ from kubedelos.store.queries import (
     WorstImage,
     auth_failed_refs,
     failed_images,
+    failure_kinds,
     findings_page,
     fix_by_fix,
     fix_by_image,
@@ -26,6 +27,7 @@ from kubedelos.store.queries import (
     kpis,
     newest_run,
     previous_comparable,
+    run_failures,
     run_history,
     run_namespaces,
     worst_images,
@@ -457,6 +459,48 @@ def test_failed_images_cap_and_total(db):
     ]
     assert set(rows[0].keys()) == {"ref", "platform", "error_kind", "error"}
     assert failed_images(conn, run_id)[1] == 31
+
+
+def _fail(repo, run_id, ref, kind):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
+    result = ImageResult(image=image, platform="linux/amd64", status="error", error_kind=kind, error="x")
+    repo.add_result(run_id, item, result)
+
+
+def test_failure_kinds_count_each_kind_most_first(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add(repo, run_id, "ok-image", "linux/amd64")
+    for i in range(3):
+        _fail(repo, run_id, f"reg.example.com/t{i}:1", "timeout")
+    _fail(repo, run_id, "reg.example.com/n:1", "not_found")
+    _fail(repo, run_id, "reg.example.com/a:1", "auth")
+    _fail(repo, run_id, "reg.example.com/u:1", None)
+    assert failure_kinds(conn, run_id) == [("timeout", 3), ("auth", 1), ("not_found", 1), ("unknown", 1)]
+    assert failure_kinds(conn, _run(repo)) == []
+
+
+def test_run_failures_narrow_to_one_kind(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _fail(repo, run_id, "reg.example.com/t:1", "timeout")
+    _fail(repo, run_id, "reg.example.com/n:1", "not_found")
+    _fail(repo, run_id, "reg.example.com/u:1", None)
+    rows, total = run_failures(conn, run_id, limit=10, kind="timeout")
+    assert total == 1 and [r["ref"] for r in rows] == ["reg.example.com/t:1"]
+    assert {"repo", "tag", "digest"} <= set(rows[0].keys())
+    assert [r["ref"] for r in run_failures(conn, run_id, limit=10, kind="unknown")[0]] == ["reg.example.com/u:1"]
+    assert run_failures(conn, run_id, limit=10)[1] == 3
+
+
+def test_a_kind_this_version_does_not_know_counts_as_unknown(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _fail(repo, run_id, "reg.example.com/o:1", "timeout")
+    conn.execute("UPDATE image_result SET error_kind = 'oom' WHERE ref = 'reg.example.com/o:1'")
+    assert failure_kinds(conn, run_id) == [("unknown", 1)]
+    assert [r["ref"] for r in run_failures(conn, run_id, limit=10, kind="unknown")[0]] == ["reg.example.com/o:1"]
 
 
 def test_auth_failed_refs_ignores_other_failures(db):

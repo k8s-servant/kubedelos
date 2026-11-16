@@ -68,17 +68,20 @@
     {% endif %}
   {% endif %}
 
-  {% if failed %}
+  {% if failed_total %}
   <section class="card card-error failed-images" aria-labelledby="failed-images-title">
-    <h2 id="failed-images-title">Failed images</h2>
-    <ul class="failed-list">
-      {%- for ref, platform, kind, cause in failed %}
-      <li><code>{{ ref }}</code> [{{ platform }}] {{ kind }}: {{ cause }}</li>
+    <div class="card-head">
+      <h2 class="card-title" id="failed-images-title">Failed images · {{ failed_total }}</h2>
+      <p class="failed-actions">
+        {%- if retry_href %}<a class="btn" href="{{ retry_href }}">Retry failed images</a>{% endif %}
+        <a href="{{ failed_href }}">See all {{ failed_total }}</a>
+      </p>
+    </div>
+    <ul class="failed-kinds">
+      {%- for k in failed_kinds %}
+      <li class="failed-kind"><a class="chip chip-bad" href="{{ k.href }}">{{ k.kind }}</a> <strong>{{ k.count }}</strong> <span class="help">{{ k.help }}</span></li>
       {%- endfor %}
     </ul>
-    {% if failed_total > failed | length %}
-    <p class="failed-overflow">showing {{ failed | length }} of {{ failed_total }}: <a href="{{ failed_href }}">see all {{ failed_total }}</a></p>
-    {% endif %}
     {%- for hint in login_hints %}
     <p class="failed-hint">hint: {{ hint }}</p>
     {%- endfor %}

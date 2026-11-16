@@ -11,10 +11,11 @@ import json
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from kubedelos.store.accepted import ACCEPTED_CTES
 from kubedelos.store.repo import RETRY_NOTE_PREFIX
+from kubedelos.trivy.runner import ErrorKind
 
 RESULT_STATUSES = ("ok", "partial")
 _STATUS_SQL = "(" + ", ".join(f"'{s}'" for s in RESULT_STATUSES) + ")"
@@ -472,25 +473,57 @@ def run_label(conn: sqlite3.Connection, context: str, run_id: int) -> RunLabel:
     return RunLabel(row["id"], row["number"], row["context"], row["status"])
 
 
+# A failure's error kind as the UI groups it: one of the kinds this version knows, and anything else (no kind, or a kind
+# a newer version wrote) as "unknown".
+_KIND_SQL = (
+    "CASE WHEN {col} IN ("
+    + ", ".join(f"'{k}'" for k in get_args(ErrorKind) if k != "unknown")
+    + ") THEN {col} ELSE 'unknown' END"
+)
+
+
 def run_failures(
-    conn: sqlite3.Connection, run_id: int, *, limit: int, offset: int = 0, newest_first: bool = False
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    limit: int,
+    offset: int = 0,
+    newest_first: bool = False,
+    kind: str | None = None,
 ) -> tuple[list[sqlite3.Row], int]:
     """The run's failed (image, platform) rows with the namespaces the image runs in (a JSON array), by ref then
-    platform or newest first, and how many there are in all.
+    platform or newest first, and how many there are in all. ``kind`` narrows both to one error kind (``unknown``
+    also matches a row without a kind this version knows).
     """
     order = "r.id DESC" if newest_first else "r.ref, r.platform"
+    narrow = f" AND {_KIND_SQL.format(col='r.error_kind')} = :kind" if kind else ""
+    params = {"run": run_id, "kind": kind, "limit": limit, "offset": offset}
     rows = conn.execute(
-        "SELECT r.ref, r.platform, r.error_kind, r.error,"  # noqa: S608 - only a constant ORDER BY is interpolated
+        "SELECT r.ref, r.repo, r.tag, r.digest, r.platform, r.error_kind, r.error,"  # noqa: S608 - only constants
         " (SELECT json_group_array(namespace) FROM (SELECT DISTINCT w.namespace FROM image_result o"
         "   JOIN workload w ON w.image_result_id = o.id WHERE o.run_id = r.run_id AND o.ref = r.ref"
         "   ORDER BY w.namespace)) AS namespaces"
-        f" FROM image_result r WHERE r.run_id = ? AND r.status = 'error' ORDER BY {order} LIMIT ? OFFSET ?",
-        (run_id, limit, offset),
+        f" FROM image_result r WHERE r.run_id = :run AND r.status = 'error'{narrow}"
+        f" ORDER BY {order} LIMIT :limit OFFSET :offset",
+        params,
     ).fetchall()
     total = conn.execute(
-        "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
+        f"SELECT COUNT(*) FROM image_result r WHERE r.run_id = :run AND r.status = 'error'{narrow}",  # noqa: S608
+        params,
     ).fetchone()[0]
     return rows, total
+
+
+def failure_kinds(conn: sqlite3.Connection, run_id: int) -> list[tuple[str, int]]:
+    """How many of the run's images failed with each error kind, most first; a row without a kind this version knows
+    counts as ``unknown``.
+    """
+    rows = conn.execute(
+        f"SELECT {_KIND_SQL.format(col='error_kind')} AS kind, COUNT(*) AS n FROM image_result"  # noqa: S608 - constant
+        " WHERE run_id = ? AND status = 'error' GROUP BY kind ORDER BY n DESC, kind",
+        (run_id,),
+    )
+    return [(row["kind"], row["n"]) for row in rows]
 
 
 def retry_notes(conn: sqlite3.Connection, run_id: int) -> list[str]:
