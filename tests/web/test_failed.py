@@ -1,6 +1,7 @@
 import re
 
 from kubedelos.config import Settings
+from kubedelos.hints import login_hint
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.trivy.runner import RETRIED_PREFIX
 
@@ -46,7 +47,7 @@ def test_lists_every_failure_of_the_run_with_its_cause(client, seed):
     assert "failed to extract the archive: unexpected EOF" in b and "api, web" in b
     assert "retried" in b and "<details>" in b
     assert "2 images failed to scan in run 1" in html
-    assert "reg.example.com" in html.split("<tbody>")[0]  # the login hint names the registry
+    assert f"hint: {login_hint('reg.example.com')}" in html.split("<tbody>")[0]  # the registry's login hint
 
 
 def test_any_status_of_the_shown_context_and_no_other(client, seed, kube_contexts):

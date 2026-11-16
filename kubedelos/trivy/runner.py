@@ -395,12 +395,14 @@ def scan_many(
 
     def work(item: InventoryItem) -> ImageResult:
         result = attempt(item)
+        # The wait holds this worker's slot, so a burst of 503s briefly narrows the scan; one retry keeps that short.
         if not _passing(result) or cancel.wait(_RETRY_DELAY_S):
             return result
         again = attempt(item)
         if again.status != "error":
             return again
-        return again.model_copy(update={"error": RETRIED_PREFIX + (again.error or "")})
+        kept = (again.error or "")[-(_MAX_ERROR_CHARS - len(RETRIED_PREFIX)) :]  # the prefix stays within the cap
+        return again.model_copy(update={"error": RETRIED_PREFIX + kept})
 
     remaining = iter(items)
     exhausted = False

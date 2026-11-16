@@ -595,6 +595,13 @@ def test_a_second_failure_is_recorded_as_failed_twice(tmp_path, monkeypatch):
     assert result.error.startswith("failed twice: ") and "connection reset" in result.error
 
 
+def test_a_failed_twice_error_stays_within_the_cap(tmp_path, monkeypatch):
+    _scripted(monkeypatch, ("trivy", _EOF_ERROR), ("trivy", "x" * runner._MAX_ERROR_CHARS + " unexpected EOF"))
+    (result,) = _scan_one(tmp_path)
+    assert len(result.error) == runner._MAX_ERROR_CHARS and result.error.startswith(runner.RETRIED_PREFIX)
+    assert result.error.endswith("unexpected EOF")  # the end, where the cause is, survives
+
+
 @pytest.mark.parametrize(
     "kind, error",
     [
