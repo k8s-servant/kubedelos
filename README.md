@@ -78,7 +78,7 @@ Keep the same port on both ends: the UI checks the `Host` header against the por
 Every page has a sidebar with the kube-context and a freshness dot that turns from green to amber once the shown run is
 over 24 hours old, and a footer naming the Trivy that scanned it ("Scanned with Trivy v0.76.1", or "a custom Trivy" for
 `KUBEDELOS_TRIVY_PATH` runs); below 760 px the sidebar becomes a top bar, which leaves the footer out. The page head names the
-run in chips: its number, scope, package types, age, image count and failures, and whether it is pinned or stale. The UI
+run in chips: its number (counted per cluster, so each cluster's first run is Run 1), scope, package types, age, image count and failures, and whether it is pinned or stale. The UI
 follows the system light or dark theme.
 
 - **Dashboard (`/`)**: the latest whole-cluster run, with an incomplete marker when some namespaces could not be listed.

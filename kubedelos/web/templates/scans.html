@@ -88,7 +88,7 @@
           {%- for row in rows %}
           <tr>
             <td><span class="chip{% if row.chip %} {{ row.chip }}{% endif %}">{{ row.status }}</span></td>
-            <td>{% if row.href %}<a href="{{ row.href }}">Run {{ row.id }}</a>{% else %}Run {{ row.id }}{% endif %}</td>
+            <td>{% if row.href %}<a href="{{ row.href }}">Run {{ row.number }}</a>{% else %}Run {{ row.number }}{% endif %}</td>
             <td>{{ describe_scope(row.scope) }}</td>
             <td>{{ describe_pkg_types(row.pkg_types) }}</td>
             <td class="num">{{ row.images }}</td>

@@ -134,6 +134,18 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_acceptance_vuln ON acceptance(vuln_id);
     """,
+    # 8: each run's number within its context (1, 2, 3, ...), which the UI shows; the id stays the key and stays in
+    # URLs. Stored, not counted on read, so a run keeps its number when older runs are deleted. A unique index treats
+    # NULLs as distinct, so runs with no context get their own partial index.
+    """
+    ALTER TABLE scan_run ADD COLUMN number INTEGER;
+    UPDATE scan_run SET number = (
+        SELECT n FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY context ORDER BY id) AS n FROM scan_run) o
+        WHERE o.id = scan_run.id
+    );
+    CREATE UNIQUE INDEX idx_scan_run_number ON scan_run(context, number);
+    CREATE UNIQUE INDEX idx_scan_run_number_no_context ON scan_run(number) WHERE context IS NULL;
+    """,
 ]
 
 

@@ -4,7 +4,7 @@
   <h1>{{ page_title }}</h1>
   {%- if run %}
   <ul class="chips">
-    <li class="chip">Run {{ run.id }}</li>
+    <li class="chip">Run {{ run.number }}</li>
     <li class="chip">{{ describe_scope(run.scope) }}</li>
     <li class="chip">{{ describe_pkg_types(run.pkg_types) }}</li>
     <li class="chip">finished {{ finished_text(run, now) }}</li>

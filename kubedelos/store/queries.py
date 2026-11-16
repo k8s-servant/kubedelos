@@ -25,7 +25,7 @@ CLUSTER_SCOPE_SQL = (
 )
 
 _RUN_SQL = """
-SELECT id, context, status, finished_at, pkg_types, scope, trivy_version,
+SELECT id, number, context, status, finished_at, pkg_types, scope, trivy_version,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS images_failed
 FROM scan_run
@@ -42,7 +42,8 @@ class RunNotShown(Exception):
 
 @dataclass(frozen=True)
 class Run:
-    id: int
+    id: int  # the key, used in URLs
+    number: int  # the run's number within its context, which the UI shows
     context: str | None
     status: str
     finished_at: datetime | None
@@ -58,6 +59,7 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
     gaps = conn.execute("SELECT text FROM run_warning WHERE run_id = ? AND coverage = 1 ORDER BY id", (row["id"],))
     return Run(
         id=row["id"],
+        number=row["number"],
         context=row["context"],
         status=row["status"],
         finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
@@ -83,9 +85,9 @@ def get_run(conn: sqlite3.Connection, context: str, run_id: int) -> Run:
     if row is None:
         raise RunNotShown(f"no run {run_id}")
     if row["context"] != context:
-        raise RunNotShown(f"run {run_id} belongs to context {row['context']}, not {context}")
+        raise RunNotShown(f"that run belongs to context {row['context']}, not {context}")
     if row["status"] not in RESULT_STATUSES:
-        raise RunNotShown(f"run {run_id} is {row['status']}, so it has no results to show")
+        raise RunNotShown(f"run {row['number']} is {row['status']}, so it has no results to show")
     return _build(conn, row)
 
 
@@ -617,6 +619,7 @@ class HistoryRow:
     """One run in the scans page's history, whatever its status. ``images`` and ``failed`` count distinct refs."""
 
     id: int
+    number: int
     status: str
     scope: dict | None
     pkg_types: str | None
@@ -631,7 +634,7 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
     """One page of the context's runs of every status, newest first, and how many runs the context has in all."""
     total = conn.execute("SELECT COUNT(*) FROM scan_run WHERE context = ?", (context,)).fetchone()[0]
     rows = conn.execute(
-        "SELECT id, status, scope, pkg_types, started_at, finished_at, owner,"
+        "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed"
         " FROM scan_run WHERE context = ? ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -640,6 +643,7 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
     history = [
         HistoryRow(
             id=r["id"],
+            number=r["number"],
             status=r["status"],
             scope=json.loads(r["scope"]) if r["scope"] else None,
             pkg_types=r["pkg_types"],
@@ -652,6 +656,12 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
         for r in rows
     ]
     return history, total
+
+
+def run_number(conn: sqlite3.Connection, run_id: int) -> int | None:
+    """The run's number within its context, or None when there is no such run."""
+    row = conn.execute("SELECT number FROM scan_run WHERE id = ?", (run_id,)).fetchone()
+    return row["number"] if row else None
 
 
 def context_scans(conn: sqlite3.Connection) -> dict[str, datetime | None]:

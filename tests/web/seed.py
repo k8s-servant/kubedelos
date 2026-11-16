@@ -48,9 +48,9 @@ def seed_large(conn: sqlite3.Connection, *, images: int = 1000, findings: int = 
     finished = (_START + timedelta(hours=run_count + 1)).isoformat()
     with conn:
         run_id = conn.execute(
-            "INSERT INTO scan_run (started_at, finished_at, status, context, trigger, trivy_version, pkg_types, scope)"
-            " VALUES (?, ?, 'ok', ?, 'cli', '0.76.1', 'library,os', ?)",
-            (finished, finished, CONTEXT, Settings().scope),
+            "INSERT INTO scan_run (started_at, finished_at, status, context, trigger, trivy_version, pkg_types, scope,"
+            " number) VALUES (?, ?, 'ok', ?, 'cli', '0.76.1', 'library,os', ?, ?)",
+            (finished, finished, CONTEXT, Settings().scope, run_count + 1),
         ).lastrowid
         failed = images * FAILED_PERCENT // 100
         ok = images - failed

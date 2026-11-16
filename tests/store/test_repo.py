@@ -363,3 +363,44 @@ def test_close_stale_leaves_a_finished_run_alone(tmp_path):
     assert repo.close_stale(run, "closed by kubedelos") is False
     assert repo.get_run(run)["status"] == "ok"
     assert repo.run_warnings(run) == []
+
+
+def test_runs_are_numbered_per_context(tmp_path):
+    repo = _repo(tmp_path)
+    a1 = repo.start_run("a", "ui", "0.76.1", scan_level="library,os")
+    b1 = repo.start_run("b", "ui", "0.76.1", scan_level="library,os")
+    a2 = repo.start_run("a", "ui", "0.76.1", scan_level="library,os")
+    none = repo.start_run(None, "cli", "0.76.1", scan_level="library,os")
+    assert [repo.get_run(i)["number"] for i in (a1, b1, a2, none)] == [1, 1, 2, 1]
+
+
+def test_migration_numbers_existing_runs_per_context(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    for index, script in enumerate(MIGRATIONS[:7]):
+        old.executescript(f"BEGIN;\n{script}\nPRAGMA user_version = {index + 1};\nCOMMIT;")
+    for context in ("a", "b", "a", None, "a"):
+        old.execute(
+            "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version)"
+            " VALUES ('2026-11-01T00:00:00+00:00', 'ok', ?, 'cli', '0.76.1')",
+            (context,),
+        )
+    old.commit()
+    old.close()
+    conn = connect(path)
+    _OPEN.append(conn)
+    rows = conn.execute("SELECT context, number FROM scan_run ORDER BY id").fetchall()
+    assert [tuple(r) for r in rows] == [("a", 1), ("b", 1), ("a", 2), (None, 1), ("a", 3)]
+    repo = Repo(conn)
+    assert repo.get_run(repo.start_run("a", "ui", "0.76.1", scan_level="os"))["number"] == 4
+
+
+def test_run_numbers_are_unique_with_or_without_a_context(tmp_path):
+    repo = _repo(tmp_path)
+    for context in ("a", None):
+        run = repo.start_run(context, "ui", "0.76.1", scan_level="os")
+        number = repo.get_run(run)["number"]
+        with pytest.raises(sqlite3.IntegrityError):
+            repo._conn.execute(
+                "INSERT INTO scan_run (started_at, status, context, number) VALUES ('x', 'ok', ?, ?)", (context, number)
+            )
