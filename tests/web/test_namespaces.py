@@ -148,3 +148,11 @@ def test_another_contexts_run_is_not_shown(client, seed, kube_contexts):
     assert f'href="/findings?context=prod-eu&amp;run_id={theirs}&amp;namespace=prod-ns&amp;severity=CRITICAL"' in html
     form = html[html.index('<form method="get" action="/namespaces"') : html.index("</form>")]
     assert '<input type="hidden" name="context" value="prod-eu">' in form
+
+
+def test_the_form_s_any_severity_submits_an_empty_has(client, seed):
+    _seed(seed)
+    response = client.get("/namespaces", params={"q": "PAY", "has": ""})  # what the form sends for "any severity"
+    assert response.status_code == 200 and _names(response.text) == ["web"]
+    assert '<option value="">any severity</option>' in response.text
+    assert client.get("/namespaces", params={"has": "SEVERE"}).status_code == 400  # a real bad value still is

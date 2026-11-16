@@ -33,6 +33,7 @@
 
 ### Bug Fixes
 
+- The namespaces filter no longer answers 400 "invalid parameter: has" when "any severity" is selected, and a 400 page keeps the cluster it was shown for.
 - Static files are served under a content-hashed URL, so a browser never pairs a new page with a stylesheet it cached from an older release.
 - Images with no registry digest, such as kind's preloaded images, are now cached by their local image ID when Trivy scanned that exact image, so a repeat scan of a kind cluster takes seconds instead of rescanning every image.
 - The local UI keeps at most 64 sessions, so repeated token visits no longer grow its memory.

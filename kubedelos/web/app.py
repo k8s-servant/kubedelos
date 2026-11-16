@@ -6,7 +6,9 @@ can import the routes at the top level without an import cycle. The app owns one
 ``server.serve`` shuts it down when the server stops.
 """
 
+import contextlib
 import hashlib
+import sqlite3
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,7 +26,7 @@ from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stal
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.web.jobs import ScanRunner
-from kubedelos.web.pages import UnknownContext, plural, render
+from kubedelos.web.pages import UnknownContext, open_db, plural, render, shown_context
 from kubedelos.web.routes import accepted, dashboard, failed, findings, namespaces, scans
 from kubedelos.web.security import Guard, install
 
@@ -109,7 +111,12 @@ def create_app(
     @app.exception_handler(RequestValidationError)
     async def invalid_parameter(request: Request, exc: RequestValidationError) -> HTMLResponse:
         errors = exc.errors()
-        name = errors[0]["loc"][-1] if errors and errors[0].get("loc") else "request"
+        loc = errors[0].get("loc", ()) if errors else ()
+        # ("query", name, ...): the parameter's name, not the union member a typed parameter adds after it.
+        name = loc[1] if len(loc) > 1 else (loc[0] if loc else "request")
+        # Validation fails before the route resolves ``?context=``, so resolve it here: the page keeps its cluster.
+        with contextlib.suppress(UnknownContext, sqlite3.Error), open_db(request) as conn:
+            shown_context(request, conn)
         return render(request, "error.html", {"title": "Bad request", "message": f"invalid parameter: {name}"}, 400)
 
     @app.exception_handler(UnknownContext)
