@@ -49,7 +49,7 @@
     </noscript>
   {%- endif %}
   {%- if job.href %}
-    <p><a href="{{ job.href }}">see results</a> of run {{ job.run_id }}</p>
+    <p><a href="{{ job.href }}">see results</a>{% if job.run_number %} of run {{ job.run_number }}{% endif %}</p>
   {%- endif %}
   {%- if job.cancellable %}
     <form method="post" action="/scans/cancel">

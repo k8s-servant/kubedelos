@@ -6,6 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
+- Runs are numbered per cluster: each cluster's first run is Run 1, wherever the UI names a run. URLs keep the run id. Schema migration 8 numbers existing runs.
 - Accepted risk: accept a CVE from any findings row (for one cluster or all, optionally narrowed to a namespace, an image repository or a package, with a reason, an owner and an expiry of at most a year). Accepted findings leave the fix-first list and the findings page until they expire or are revoked, and each list says how many it left out; counts never change. The Accepted page lists every entry with its state, days left and what it covers. Schema migration 7 adds the `acceptance` table.
 - A Namespaces page lists each namespace of the dashboard's run, worst first, with owner, team, counts per severity and images; every column sorts, it filters by text and by severity, and each count links to exactly its findings.
 - The UI shows every kube-context: the sidebar's context card opens a list of the kubeconfig's contexts (read on each page) and those in the scan history, with when each was last scanned. The shown context travels in the URL (`?context=`), and the Scans page scans it; one scan runs at a time across contexts.

@@ -259,3 +259,13 @@ def test_revoke_with_an_unreadable_body_is_refused(client, seed):
     response = client.post(f"/accepted/{entry}/revoke", headers=headers, content=b"\xff\xfe", follow_redirects=False)
     assert response.status_code == 400
     assert accepted.register(seed.repo._conn, "my-cluster", None, TODAY)[0].state == "active"
+
+
+def test_register_names_the_run_by_its_number_in_the_cluster(client, seed, kube_contexts):
+    kube_contexts.append("prod-eu")
+    _run(seed)  # my-cluster's run 1, id 1
+    theirs = _run(seed, context="prod-eu")
+    _add(seed, theirs, "app", ["web"], ["CVE-1"])
+    _accept(seed, context="prod-eu")
+    html = client.get("/accepted", params={"context": "prod-eu"}).text
+    assert theirs == 2 and "covers 1 finding</a> in run 1" in html

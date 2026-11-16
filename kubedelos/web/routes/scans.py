@@ -27,7 +27,7 @@ from starlette.concurrency import run_in_threadpool
 from kubedelos.analytics import describe_pkg_types
 from kubedelos.config import Settings
 from kubedelos.store import runlock
-from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_history
+from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_history, run_number
 from kubedelos.web.jobs import ScanBusy
 from kubedelos.web.pages import (
     UnknownContext,
@@ -90,6 +90,7 @@ def _row(request: Request, run: HistoryRow) -> dict:
         status = "interrupted"
     return {
         "id": run.id,
+        "number": run.number,
         "status": status,
         "chip": CHIP.get(status, ""),
         "href": link(request, "/findings", run_id=run.id) if run.status in RESULT_STATUSES else None,
@@ -136,7 +137,7 @@ def short_ref(ref: str) -> str:
     return short_image({"repo": name, "tag": None, "digest": digest, "image": ref}) if at else ref
 
 
-def _job(request: Request) -> dict | None:
+def _job(request: Request, conn: sqlite3.Connection) -> dict | None:
     """What the progress readout shows of the current or last UI scan, or None before the first one."""
     view = request.app.state.scans.view()
     if view is None:
@@ -167,7 +168,7 @@ def _job(request: Request) -> dict | None:
         "eta": eta_text(view.eta) if view.eta is not None and view.state == "running" else None,
         "status": view.status if finished else None,
         "chip": CHIP.get(view.status or "", ""),
-        "run_id": view.run_id,
+        "run_number": run_number(conn, view.run_id) if view.run_id is not None else None,
         "href": findings_link(view.run_id, target) if linked else None,
         "error": (view.error or "the scan failed") if view.state == "error" else None,
         "cancellable": view.state in ("starting", "running"),
@@ -192,6 +193,7 @@ def _page(
         context = shown_context(request, conn, context)
         history, total = run_history(conn, context, page, PER_PAGE)
         run = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        job = _job(request, conn)
     last_page = max(1, ceil(total / PER_PAGE))
     first = (page - 1) * PER_PAGE + 1
     ctx = {
@@ -200,7 +202,7 @@ def _page(
         "form": _form(request, sent),
         "form_error": error,
         "pkg_choices": PKG_TYPES,
-        "job": _job(request),
+        "job": job,
         "rows": [_row(request, r) for r in history],
         "total": total,
         "page": page,
@@ -305,7 +307,7 @@ def progress(request: Request) -> HTMLResponse:
     # Resolve the page's context as the page did, so the polled readout matches the one it replaces.
     with open_db(request) as conn:
         shown_context(request, conn)
-    job = _job(request)
+        job = _job(request, conn)
     response = render(request, "partials/scan_progress.html", {"job": job})
     # The scan htmx was polling has ended: reload the page so the run history shows the run's final row too. The
     # reloaded page has no poller, since the job is no longer active, so this can't loop.

@@ -676,7 +676,8 @@ def test_dashboard_shows_the_requested_context(client, seed, kube_contexts):
     theirs = _run(seed, context="prod-eu")
     _add(seed, theirs, "reg.example.com/app:theirs", ["HIGH", "HIGH"])
     html = client.get("/", params={"context": "prod-eu"}).text
-    assert f"Run {theirs}" in html or f"run {theirs}" in html.lower()
+    assert theirs == 2 and '<li class="chip">Run 1</li>' in html  # numbered within its cluster; the id stays in URLs
+    assert f"run_id={theirs}" in html
     assert "app:theirs" in html and "app:mine" not in html
     assert "/findings?context=prod-eu&amp;run_id=" in html  # every findings link keeps the cluster
     assert client.get("/", params={"context": "prod-eu", "run_id": mine}).status_code == 404  # another cluster's run

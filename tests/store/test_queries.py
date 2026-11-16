@@ -138,10 +138,10 @@ def test_get_run_reasons(db):
     assert exc.value.reason == "no run 999"
     with pytest.raises(RunNotShown) as exc:
         get_run(conn, "ctx", other)
-    assert exc.value.reason == f"run {other} belongs to context other, not ctx"
+    assert exc.value.reason == "that run belongs to context other, not ctx"
     with pytest.raises(RunNotShown) as exc:
         get_run(conn, "ctx", failed)
-    assert exc.value.reason == f"run {failed} is failed, so it has no results to show"
+    assert exc.value.reason == "run 2 is failed, so it has no results to show"  # its number in ctx
 
 
 def test_run_counts_distinct_refs(db):

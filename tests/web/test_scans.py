@@ -588,15 +588,15 @@ def test_live_region_is_a_stable_ancestor_of_the_swapped_box(client, fake):
 
 def test_scans_page_of_another_context_scans_that_context(client, seed, kube_contexts):
     kube_contexts.append("prod-eu")
+    _run(seed)
     theirs = seed.repo.start_run("prod-eu", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(theirs, "ok")
-    _run(seed)
     html = client.get("/scans", params={"context": "prod-eu"}).text
     form = html.split('<form method="post" action="/scans"', 1)[1].split("</form>", 1)[0]
     assert '<input type="hidden" name="context" value="prod-eu">' in form
     assert ">Scan prod-eu</button>" in form
     rows = _rows(html)
-    assert len(rows) == 1 and f"Run {theirs}<" in rows[0]
+    assert theirs == 2 and len(rows) == 1 and "Run 1<" in rows[0]  # numbered within its cluster
     assert f'href="/findings?context=prod-eu&amp;run_id={theirs}"' in rows[0]
 
 

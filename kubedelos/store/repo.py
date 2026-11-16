@@ -55,9 +55,10 @@ class Repo:
     ) -> int:
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope, owner)"
-                " VALUES (?, 'running', ?, ?, ?, ?, ?, ?)",
-                (self._now(), context, trigger, trivy_version, scan_level, scope, owner),
+                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope, owner,"
+                " number) VALUES (?, 'running', ?, ?, ?, ?, ?, ?,"
+                " (SELECT COALESCE(MAX(number), 0) + 1 FROM scan_run WHERE context IS ?))",
+                (self._now(), context, trigger, trivy_version, scan_level, scope, owner, context),
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
