@@ -97,9 +97,9 @@ def add(
 ) -> int:
     """Store a new acceptance and return its id. Raises ValueError when a required field is blank or ``expires`` is past."""
     vuln_id, reason, owner = vuln_id.strip(), reason.strip(), owner.strip()
-    for name, value in (("CVE", vuln_id), ("reason", reason), ("owner", owner)):
+    for name, value in (("a CVE", vuln_id), ("a reason", reason), ("an owner", owner)):
         if not value:
-            raise ValueError(f"a {name} is required")
+            raise ValueError(f"{name} is required")
     if expires < now.date():
         raise ValueError("the expiry date is in the past")
     with conn:

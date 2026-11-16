@@ -54,6 +54,13 @@
         <option value="library"{% if selected.pkg == "library" %} selected{% endif %}>library</option>
       </select>
     </label>
+    <label>Accepted
+      <select name="accepted">
+        <option value="hide"{% if selected.accepted == "hide" %} selected{% endif %}>hide</option>
+        <option value="only"{% if selected.accepted == "only" %} selected{% endif %}>only</option>
+        <option value="all"{% if selected.accepted == "all" %} selected{% endif %}>show too</option>
+      </select>
+    </label>
     <label>Search <input type="search" name="q" value="{{ selected.q }}"></label>
     <div class="filter-actions">
       <button type="submit" class="btn">Apply filters</button>
@@ -61,8 +68,13 @@
     </div>
   </form>
 
+  {% if left_out %}
+  <p class="notice accepted-left-out"><a href="{{ accepted_only_href }}">{{ left_out }} accepted {{ left_out | plural("finding") }} not shown</a></p>
+  {% endif %}
   {% if total == 0 %}
-    {% if filtered %}
+    {% if left_out %}
+    <p class="notice">Every finding here is accepted.</p>
+    {% elif filtered %}
     <p class="notice">No findings match these filters. <a href="{{ clear_href }}">clear filters</a></p>
     {% else %}
     <p class="notice">No vulnerabilities found in this run.</p>
@@ -96,6 +108,10 @@
             <td>{{ row.pkg_class or "unknown" }}</td>
             <td><span class="ref" title="{{ row.ref }}">{% for part in row.image.split("/") %}{{ part }}{% if not loop.last %}/<wbr>{% endif %}{% endfor %}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
+            <td class="risk">
+              {%- if row.accepted %}<a class="chip chip-accepted" href="{{ row.accepted_href }}">accepted</a>
+              {%- else %}<a class="accept" href="{{ row.accept_href }}">Accept…</a>{% endif -%}
+            </td>
           </tr>
           {%- endfor %}
         </tbody>
