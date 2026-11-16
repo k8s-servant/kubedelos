@@ -400,3 +400,111 @@ def test_tag_ref_without_image_id_is_still_not_cached(env, monkeypatch):
     service.run_scan(settings, api=api, repo=repo)
     service.run_scan(settings, api=api, repo=repo)
     assert len(calls) == 2
+
+
+def _partial_run(env, monkeypatch, *, pkg_types=("library", "os")):
+    """A finished partial run of the fake cluster in which reg.io/b failed."""
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls, fail_ref="reg.io/b@" + D2))
+    out = service.run_scan(settings.model_copy(update={"pkg_types": pkg_types}), api=_api(), repo=repo)
+    calls.clear()
+    return out.run_id
+
+
+def test_retry_rescans_only_the_failed_images_in_the_same_run(env, monkeypatch):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch, pkg_types=("os",))
+    seen = []
+
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+        seen.append(settings)
+        _fake_scan(calls)(
+            items, cache_dir=cache_dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel
+        )
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    progress = []
+    retry = settings.model_copy(update={"scan_timeout_s": 1800, "parallelism": 2})
+    out = service.retry_failed(retry, run_id, repo=repo, on_progress=progress.append)
+    assert (out.run_id, out.status) == (run_id, "ok")
+    assert [[i.image.ref for i in items] for items in calls] == [["reg.io/b@" + D2]]
+    assert [i.workloads[0].container for i in calls[0]] == ["c2"]
+    assert (seen[0].pkg_types, seen[0].scan_timeout_s, seen[0].parallelism) == (("os",), 1800, 2)  # the run's level
+    run = repo.get_run(run_id)
+    assert (run["status"], run["images_total"], run["images_error"]) == ("ok", 2, 0)
+    assert _finding_count(repo, run_id) == 2
+    assert repo.run_warnings(run_id)[-1]["text"].endswith(": 1 scanned, 0 still failing")
+    assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1), scan_level="os") is not None
+    assert {p.run_id for p in progress} == {run_id} and progress[-1].phase == "saving"
+    assert [(p.total, p.done) for p in progress if p.current] == [(1, 1)]
+
+
+def test_retry_uses_a_cached_result(env, monkeypatch):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    item = repo.failed_items(run_id)[0][1]
+    repo.put_cache(D2, "linux/amd64", ImageResult(image=item.image, platform="linux/amd64", status="ok"),
+                   scan_level="library,os")  # fmt: skip
+    out = service.retry_failed(settings, run_id, repo=repo)
+    assert out.status == "ok" and calls == []
+
+
+def test_retry_that_fails_again_keeps_the_run_partial(env, monkeypatch):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls, fail_ref="reg.io/b@" + D2))
+    assert service.retry_failed(settings, run_id, repo=repo).status == "partial"
+    assert repo.get_run(run_id)["images_error"] == 1
+    assert repo.run_warnings(run_id)[-1]["text"].endswith(": 0 scanned, 1 still failing")
+
+
+def test_retry_cancelled_keeps_what_finished_and_settles_the_run(env, monkeypatch):
+    settings, repo, _calls = env
+    run_id = _partial_run(env, monkeypatch)
+
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+        cancel.set()
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    out = service.retry_failed(settings, run_id, repo=repo)
+    assert out.status == "partial" and repo.get_run(run_id)["status"] == "partial"
+    assert "1 still failing" in repo.run_warnings(run_id)[-1]["text"]
+
+
+def test_retry_settles_the_run_when_the_scan_raises(env, monkeypatch):
+    settings, repo, _calls = env
+    run_id = _partial_run(env, monkeypatch)
+
+    def scan_many(items, **kw):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    with pytest.raises(KeyboardInterrupt):
+        service.retry_failed(settings, run_id, repo=repo)
+    assert repo.get_run(run_id)["status"] == "partial"
+    assert repo.run_warnings(run_id)[-1]["text"].startswith("retried 1 failed image at ")
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ("missing", "no run"),
+        ("ok", "has no failed images"),
+        ("running", "is running"),
+        ("trivy", "scanned with Trivy 0.1.0"),
+    ],
+)
+def test_retry_refuses_a_run_it_cannot_retry(env, monkeypatch, change, message):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    if change == "missing":
+        run_id += 100
+    elif change == "ok":
+        repo.finish_run(run_id, "ok")
+    else:
+        column, value = ("status", "running") if change == "running" else ("trivy_version", "0.1.0")
+        repo._conn.execute(f"UPDATE scan_run SET {column} = ? WHERE id = ?", (value, run_id))  # noqa: S608
+        repo._conn.commit()
+    with pytest.raises(service.RetryRefused, match=message):
+        service.retry_failed(settings, run_id, repo=repo)
+    assert calls == []

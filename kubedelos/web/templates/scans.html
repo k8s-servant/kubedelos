@@ -92,7 +92,7 @@
             <td>{{ describe_scope(row.scope) }}</td>
             <td>{{ describe_pkg_types(row.pkg_types) }}</td>
             <td class="num">{{ row.images }}</td>
-            <td class="num">{% if row.failed_href %}<a href="{{ row.failed_href }}">{{ row.failed }}</a>{% else %}{{ row.failed }}{% endif %}</td>
+            <td class="num">{% if row.failed_href %}<a href="{{ row.failed_href }}">{{ row.failed }}</a>{% else %}{{ row.failed }}{% endif %}{% if row.retry_href %} · <a href="{{ row.retry_href }}">retry</a>{% endif %}</td>
             <td class="num">{{ row.duration }}</td>
           </tr>
           {%- endfor %}

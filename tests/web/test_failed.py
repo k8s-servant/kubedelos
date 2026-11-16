@@ -1,11 +1,17 @@
 import re
+import threading
+
+import pytest
 
 from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
+from kubedelos.scan.service import ScanOutcome
 from kubedelos.trivy.runner import RETRIED_PREFIX
+from kubedelos.web.jobs import ScanRunner
 
 CLUSTER = Settings().scope
+ORIGIN = {"origin": "http://127.0.0.1:9370"}
 EOF_ERROR = "2026-11-16T09:15:44+02:00\tFATAL\tFatal error\trun error: failed to extract the archive: unexpected EOF"
 AUTH_ERROR = "2026-11-16T09:15:44+02:00\tFATAL\tFatal error\tGET https://reg.example.com/v2/: UNAUTHORIZED: login"
 
@@ -88,3 +94,149 @@ def test_hostile_error_text_is_escaped(client, seed):
     _put(seed, run_id, "reg.example.com/a:1", kind="trivy", error="<script>alert(1)</script>")
     html = client.get(f"/scans/{run_id}/failed").text
     assert "<script>alert(1)</script>" not in html and "&lt;script&gt;" in html
+
+
+class FakeRetry:
+    """A stand-in for ``retry_failed`` that blocks until released, so a test can look at the running job."""
+
+    def __init__(self) -> None:
+        self.release = threading.Event()
+        self.entered = threading.Event()
+        self.calls: list[dict] = []
+
+    def __call__(self, settings, **kw):
+        self.calls.append({"settings": settings, **kw})
+        self.entered.set()
+        self.release.wait(5)
+        return ScanOutcome(run_id=kw["run_id"], warnings=[], status="ok")
+
+
+@pytest.fixture
+def retry(app):
+    fake = FakeRetry()
+    runner = ScanRunner(app.state.settings, app.state.context, scan=FakeRetry(), retry=fake)
+    app.state.scans = runner
+    yield fake
+    fake.release.set()
+    runner.shutdown(timeout=5)
+
+
+def _retryable(seed, context=None):
+    run_id = _run(seed, "partial", context=context)
+    _put(seed, run_id, "reg.example.com/ok:1")
+    _put(seed, run_id, "reg.example.com/a:1", kind="timeout", error="context deadline exceeded")
+    return run_id
+
+
+def _form(html):
+    return html.split('<form method="post" action="/scans/', 1)[1].split("</form>", 1)[0]
+
+
+def _csrf(client) -> str:
+    guard = client.app.state.guard
+    return guard.csrf_token(client.cookies[guard.cookie_name])
+
+
+def _retry(client, run_id, **fields):
+    data = {"timeout": "1800", "parallelism": "2", "csrf_token": _csrf(client), **fields}
+    return client.post(f"/scans/{run_id}/retry", data=data, headers=ORIGIN, follow_redirects=False)
+
+
+def test_the_newest_partial_run_offers_a_retry_with_longer_limits(client, seed):
+    run_id = _retryable(seed)
+    form = _form(client.get(f"/scans/{run_id}/failed").text)
+    assert form.startswith(f'{run_id}/retry"')
+    assert re.search(r'name="timeout"[^>]*value="1800"', form)  # 3x the 600 s setting
+    assert re.search(r'name="parallelism"[^>]*value="2"', form)
+    assert 'name="csrf_token"' in form and "Retry 1 failed image" in form
+
+
+@pytest.mark.parametrize("which", ["older", "ok", "running"])
+def test_no_retry_form_where_a_retry_is_not_allowed(client, seed, which):
+    run_id = _retryable(seed)
+    if which == "older":
+        _run(seed, "ok")
+    elif which != "ok":
+        seed.repo._conn.execute("UPDATE scan_run SET status = ? WHERE id = ?", (which, run_id))
+        seed.repo._conn.commit()
+    else:
+        seed.repo.finish_run(run_id, "ok")
+    assert 'action="/scans/' not in client.get(f"/scans/{run_id}/failed").text
+
+
+def test_retry_requires_csrf(client, seed, retry):
+    run_id = _retryable(seed)
+    response = client.post(f"/scans/{run_id}/retry", data={"timeout": "1800"}, headers=ORIGIN, follow_redirects=False)
+    assert response.status_code == 403 and retry.calls == []
+
+
+def test_retry_starts_with_the_form_limits(client, app, seed, retry):
+    run_id = _retryable(seed)
+    response = _retry(client, run_id, timeout=" 2400 ", parallelism="3")
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    assert retry.entered.wait(5)
+    call = retry.calls[0]
+    assert call["run_id"] == run_id
+    assert (call["settings"].scan_timeout_s, call["settings"].parallelism) == (2400, 3)
+    assert call["settings"].context == app.state.context
+    progress = client.get("/scans/progress").text
+    assert "Retrying failed images of run 1" in progress
+
+
+def test_retry_of_another_contexts_run_goes_back_to_that_context(client, seed, retry, kube_contexts):
+    kube_contexts.append("prod-eu")
+    run_id = _retryable(seed, context="prod-eu")
+    assert _retry(client, run_id).status_code == 404
+    response = _retry(client, run_id, context="prod-eu")
+    assert response.status_code == 303 and response.headers["location"] == "/scans?context=prod-eu"
+    assert retry.entered.wait(5) and retry.calls[0]["settings"].context == "prod-eu"
+
+
+@pytest.mark.parametrize(
+    ("fields", "message"),
+    [
+        ({"timeout": "59"}, "Time limit: must be between 60 and 3600 seconds"),
+        ({"timeout": "3601"}, "Time limit: must be between 60 and 3600 seconds"),
+        ({"timeout": "soon"}, "Time limit: must be between 60 and 3600 seconds"),
+        ({"parallelism": "0"}, "Parallel images:"),
+    ],
+)
+def test_retry_with_bad_limits_rerenders_with_400(client, seed, retry, fields, message):
+    run_id = _retryable(seed)
+    response = _retry(client, run_id, **fields)
+    assert response.status_code == 400 and message in response.text
+    assert retry.calls == []
+
+
+def test_retry_of_a_run_that_is_not_retryable_is_refused(client, seed, retry):
+    run_id = _retryable(seed)
+    _run(seed, "ok")
+    response = _retry(client, run_id)
+    assert response.status_code == 409 and "only the newest run of my-cluster can be retried" in response.text
+    clean = _run(seed, "partial")
+    response = _retry(client, clean)
+    assert response.status_code == 409 and "run 3 has no failed images" in response.text
+    assert retry.calls == []
+
+
+def test_retry_while_a_scan_runs_is_refused(client, seed, retry):
+    run_id = _retryable(seed)
+    assert _retry(client, run_id).status_code == 303
+    assert retry.entered.wait(5)
+    response = _retry(client, run_id)
+    assert response.status_code == 409 and "a scan is already running" in response.text
+
+
+def test_failures_page_shows_the_retry_notes(client, seed):
+    run_id = _retryable(seed)
+    seed.repo.settle_retry(run_id, retried=1)
+    html = client.get(f"/scans/{run_id}/failed").text
+    assert re.search(r"retried 1 failed image at \d\d:\d\d UTC: 0 scanned, 1 still failing", html)
+
+
+def test_history_offers_retry_on_the_newest_partial_run_only(client, seed):
+    older = _retryable(seed)
+    newest = _retryable(seed)
+    history = client.get("/scans").text
+    assert f'href="/scans/{newest}/failed#retry">retry</a>' in history
+    assert f'href="/scans/{older}/failed#retry"' not in history

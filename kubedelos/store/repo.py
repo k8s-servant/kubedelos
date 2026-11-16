@@ -8,7 +8,7 @@ from datetime import UTC, datetime, timedelta
 from pydantic import ValidationError
 
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import ImageResult, InventoryItem
+from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.trivy.pins import TRIVY_VERSION
 
 # Cached reports are scoped by Trivy version and by the shape of kubedelos' own models: bump the "+cN" suffix when
@@ -17,6 +17,7 @@ CACHE_VERSION = f"{TRIVY_VERSION}+c1"
 
 # A cache key is either a bare digest or "<repo>@<digest>"; anything else is a mutable tag ref.
 _DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}\Z")  # \Z: unlike $, no match before a trailing newline
+RETRY_NOTE_PREFIX = "retried "  # starts the run note a retry of failed images leaves
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _FINISH_RUN_SQL = (
@@ -91,17 +92,75 @@ class Repo:
                 "INSERT INTO workload (image_result_id, namespace, kind, name, container, owner, team) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [(result_id, w.namespace, w.kind, w.name, w.container, w.owner, w.team) for w in item.workloads],
             )
-            self._conn.executemany(
-                "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, fixed_version, severity,"
-                " title, primary_url, target, pkg_type, pkg_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                [
-                    (
-                        result_id, f.vuln_id, f.pkg_name, f.installed_version, f.fixed_version, f.severity.value,
-                        f.title, f.primary_url, f.target, f.pkg_type, f.pkg_class,
-                    )
-                    for f in result.findings
-                ],
-            )  # fmt: skip
+            self._add_findings(result_id, result)
+
+    def _add_findings(self, result_id: int, result: ImageResult) -> None:
+        self._conn.executemany(
+            "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, fixed_version, severity,"
+            " title, primary_url, target, pkg_type, pkg_class) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            [
+                (
+                    result_id, f.vuln_id, f.pkg_name, f.installed_version, f.fixed_version, f.severity.value,
+                    f.title, f.primary_url, f.target, f.pkg_type, f.pkg_class,
+                )
+                for f in result.findings
+            ],
+        )  # fmt: skip
+
+    def failed_items(self, run_id: int) -> list[tuple[int, InventoryItem]]:
+        """The run's failed images as ``(image_result id, item)``, by ref, rebuilt from the stored refs and workloads."""
+        rows = self._conn.execute(
+            "SELECT id, ref, repo, tag, digest, platform FROM image_result"
+            " WHERE run_id = ? AND status = 'error' ORDER BY ref, platform",
+            (run_id,),
+        ).fetchall()
+        failed = []
+        for row in rows:
+            workloads = self._conn.execute(
+                "SELECT namespace, kind, name, container, owner, team FROM workload WHERE image_result_id = ?"
+                " ORDER BY id",
+                (row["id"],),
+            ).fetchall()
+            image = ImageRef(ref=row["ref"], repo=row["repo"], tag=row["tag"], digest=row["digest"])
+            item = InventoryItem(
+                image=image, platform=row["platform"], workloads=[Workload(**dict(w)) for w in workloads]
+            )
+            failed.append((row["id"], item))
+        return failed
+
+    def replace_result(self, result_id: int, result: ImageResult) -> None:
+        """Put ``result`` in place of the failure stored as ``result_id``; a row that is no longer a failure is kept."""
+        with self._conn:
+            cur = self._conn.execute(
+                "UPDATE image_result SET status = ?, error_kind = ?, error = ?, os_family = ?"
+                " WHERE id = ? AND status = 'error'",
+                (result.status, result.error_kind, result.error, result.os_family, result_id),
+            )
+            if cur.rowcount == 1:
+                self._add_findings(result_id, result)
+
+    def settle_retry(self, run_id: int, *, retried: int) -> str:
+        """Recount the run after a retry of its ``retried`` failed images, note the retry and return the run's status.
+
+        Images a cancel left untried count as still failing.
+
+        The status becomes ``ok`` once nothing fails and stays ``partial`` otherwise; ``finished_at`` is kept.
+        """
+        with self._conn:
+            failing = self._conn.execute(
+                "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
+            ).fetchone()[0]
+            status = "partial" if failing else "ok"
+            self._conn.execute(
+                "UPDATE scan_run SET status = ?, images_error = ? WHERE id = ?", (status, failing, run_id)
+            )
+            at = self._clock().astimezone(UTC).strftime("%H:%M UTC")
+            note = (
+                f"{RETRY_NOTE_PREFIX}{retried} failed {'image' if retried == 1 else 'images'} at {at}: "
+                f"{retried - failing} scanned, {failing} still failing"
+            )
+            self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, note))
+        return status
 
     def finish_run(self, run_id: int, status: str) -> None:
         if status not in _FINAL_STATUSES:
