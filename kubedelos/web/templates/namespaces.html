@@ -1,0 +1,73 @@
+{#- The namespaces page: a filter form, then one row per namespace, worst first. Every link is built in the route, from
+    the current filters and the shown context. -#}
+{% extends "base.html" %}
+{% block title %}Namespaces · kubedelos{% endblock %}
+{% block page_title %}Namespaces{% endblock %}
+{% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
+{% block content %}
+{% if not run %}
+  {% if narrower_href %}
+  <section class="notice">
+    <p>There is no cluster-wide run of <strong>{{ context }}</strong> yet, only narrower ones.
+      <a href="{{ narrower_href }}">See the newest run's findings</a>.</p>
+  </section>
+  {% else %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
+  </section>
+  {% endif %}
+{% else %}
+  <form method="get" action="/namespaces" class="card filters">
+    {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}
+    {%- if pinned %}<input type="hidden" name="run_id" value="{{ run.id }}">{% endif %}
+    {%- if sort %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    {%- if direction %}<input type="hidden" name="dir" value="{{ direction }}">{% endif %}
+    <label>Search <input type="search" name="q" value="{{ selected.q }}" placeholder="namespace, owner or team"></label>
+    <label>Has at least one
+      <select name="has">
+        <option value="">any severity</option>
+        {%- for name in severities %}
+        <option value="{{ name }}"{% if name == selected.has %} selected{% endif %}>{{ name | title }}</option>
+        {%- endfor %}
+      </select>
+    </label>
+    <div class="filter-actions">
+      <button type="submit" class="btn">Apply filters</button>
+      <a class="clear" href="{{ clear_href }}">clear filters</a>
+    </div>
+  </form>
+
+  {% if not rows %}
+    <p class="notice">No namespaces match these filters. <a href="{{ clear_href }}">clear filters</a></p>
+  {% else %}
+    <div class="card">
+    <div class="table-wrap">
+      <table class="namespaces">
+        <thead>
+          <tr>
+            {%- for h in headers %}
+            <th scope="col"{% if h.numeric %} class="num"{% endif %}{% if h.aria_sort %} aria-sort="{{ h.aria_sort }}"{% endif %}><a href="{{ h.href }}">{{ h.label }}</a></th>
+            {%- endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr>
+            <th scope="row">{{ row.namespace }}</th>
+            <td>{{ row.owner or "" }}</td>
+            <td>{{ row.team or "" }}</td>
+            {%- for count, href in row.cells %}
+            <td class="num">{% if href %}<a href="{{ href }}">{{ count }}</a>{% else %}<span class="zero">{{ count }}</span>{% endif %}</td>
+            {%- endfor %}
+            <td class="num">{% if row.total_href %}<a href="{{ row.total_href }}">{{ row.total }}</a>{% else %}<span class="zero">0</span>{% endif %}</td>
+            <td class="num">{{ row.images }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="table-foot">{% if shown == all %}{{ all }} {{ all | plural("namespace") }}{% else %}{{ shown }} of {{ all }} {{ all | plural("namespace") }}{% endif %}</p>
+    </div>
+  {% endif %}
+{% endif %}
+{% endblock %}

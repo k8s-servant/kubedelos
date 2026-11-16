@@ -605,3 +605,53 @@ def context_scans(conn: sqlite3.Connection) -> dict[str, datetime | None]:
         " FROM scan_run WHERE context IS NOT NULL GROUP BY context ORDER BY context"
     ).fetchall()
     return {r["context"]: datetime.fromisoformat(r["finished"]) if r["finished"] else None for r in rows}
+
+
+@dataclass(frozen=True)
+class NamespaceRow:
+    """One namespace of a run: its finding units by severity, and its images (distinct refs, failed ones included)."""
+
+    namespace: str
+    owner: str | None
+    team: str | None
+    counts: dict[str, int]
+    total: int
+    images: int
+
+
+# A namespace counts a unit when the unit's image runs in it, the rule the findings page's namespace filter applies,
+# so each count equals the findings its link opens. ``ns`` holds each (image, namespace) once, however many workloads
+# and platforms repeat it.
+_NAMESPACE_COUNTS_SQL = f"""
+WITH units AS MATERIALIZED ({_UNIT_COUNTS_SQL}),
+ns AS MATERIALIZED (
+    SELECT r.ref, w.namespace, MAX(w.owner) AS owner, MAX(w.team) AS team
+    FROM image_result r JOIN workload w ON w.image_result_id = r.id
+    WHERE r.run_id = :run
+    GROUP BY r.ref, w.namespace
+),
+info AS (SELECT namespace, COUNT(*) AS images, MAX(owner) AS owner, MAX(team) AS team FROM ns GROUP BY namespace),
+per AS (
+    SELECT ns.namespace, u.sev_rank, COUNT(*) AS n
+    FROM ns JOIN units u ON u.ref = ns.ref
+    GROUP BY ns.namespace, u.sev_rank
+)
+SELECT i.namespace, i.images, i.owner, i.team, p.sev_rank, p.n
+FROM info i LEFT JOIN per p ON p.namespace = i.namespace
+"""  # noqa: S608 - only module constants are interpolated
+
+
+def namespace_counts(conn: sqlite3.Connection, run_id: int) -> list[NamespaceRow]:
+    """Every namespace with a workload in the run, unordered; the page sorts and filters them."""
+    found: dict[str, dict] = {}
+    for r in conn.execute(_NAMESPACE_COUNTS_SQL, {"run": run_id}):
+        row = found.setdefault(
+            r["namespace"],
+            {"owner": r["owner"], "team": r["team"], "images": r["images"], "counts": dict.fromkeys(_SEVERITIES, 0)},
+        )
+        if r["sev_rank"] is not None:
+            row["counts"][_SEVERITIES[4 - r["sev_rank"]]] = r["n"]
+    return [
+        NamespaceRow(name, v["owner"], v["team"], v["counts"], sum(v["counts"].values()), v["images"])
+        for name, v in found.items()
+    ]

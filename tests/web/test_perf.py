@@ -54,6 +54,7 @@ def test_query_plans_use_indexes(tmp_path):
         "findings_page q": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(q="lib"), 1),
         "failed_images": lambda: queries.failed_images(conn, run_id),
         "run_namespaces": lambda: queries.run_namespaces(conn, run_id),
+        "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
     }
     offenders = {}
     for name, call in calls.items():
@@ -91,7 +92,8 @@ def test_pages_under_300ms(settings):
     middle = (last + 1) // 2
     pages = ["/", "/?by=image", "/findings", "/findings?q=lib&sort=package", f"/findings?page={last}"]
     pages += [f"/findings?sort={s}&dir={d}&page={middle}" for s in SORTS for d in ("asc", "desc")]
-    app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT)
+    pages += ["/namespaces", "/namespaces?sort=namespace&q=ns-1&has=HIGH"]
+    app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT, list_contexts=lambda: [CONTEXT])
     with TestClient(app, base_url=BASE_URL) as client:
         assert client.get(f"/?token={TOKEN}", follow_redirects=False).status_code == 303
         for path in pages:

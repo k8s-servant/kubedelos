@@ -734,3 +734,40 @@ def test_context_scans_gives_each_context_its_newest_result(db):
     assert list(scans) == ["kind-lab", "prod-eu"]
     assert scans["kind-lab"] == datetime.fromisoformat(finished[newest]) != datetime.fromisoformat(finished[old])
     assert scans["prod-eu"] is None  # known from its history, never scanned to a result
+
+
+def _add_to_namespaces(
+    repo, run_id, ref, namespaces, findings=(), *, status="ok", platform="linux/amd64", owner=None, team=None
+):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + ref[0] * 64)
+    workloads = [
+        Workload(namespace=ns, kind="Deployment", name=f"w-{ref}", container="c", owner=owner, team=team)
+        for ns in namespaces
+    ]
+    item = InventoryItem(image=image, platform=platform, workloads=workloads)
+    repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status=status, findings=list(findings)))
+
+
+def test_namespace_counts_use_the_findings_units(db):
+    conn, repo = db
+    run_id = _run(repo)
+    crit = [_finding("CVE-1", "CRITICAL"), _finding("CVE-1", "CRITICAL", "jar")]  # one unit, two targets
+    _add_to_namespaces(repo, run_id, "a", ["web", "api"], crit, owner="web@example.com", team="web")
+    _add_to_namespaces(
+        repo, run_id, "a", ["web", "api"], crit, platform="linux/arm64", owner="web@example.com", team="web"
+    )
+    _add_to_namespaces(
+        repo, run_id, "b", ["api"], [_finding("CVE-2", "HIGH"), _finding("CVE-3", "LOW"), _finding("CVE-4", "UNKNOWN")]
+    )
+    _add_to_namespaces(repo, run_id, "c", ["idle"])  # no findings
+    _add_to_namespaces(repo, run_id, "d", ["idle"], status="error")  # failed to scan
+    other = _run(repo)
+    _add_to_namespaces(repo, other, "e", ["web"], [_finding("CVE-9", "CRITICAL")])  # another run
+    rows = {r.namespace: r for r in queries.namespace_counts(conn, run_id)}
+    assert set(rows) == {"web", "api", "idle"}
+    web, api, idle = rows["web"], rows["api"], rows["idle"]
+    assert web.counts == {"CRITICAL": 1, "HIGH": 0, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
+    assert (web.total, web.images, web.owner, web.team) == (1, 1, "web@example.com", "web")
+    assert api.counts == {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 1, "UNKNOWN": 1}
+    assert (api.total, api.images) == (4, 2)
+    assert (idle.total, idle.images, idle.owner, idle.team) == (0, 2, None, None)

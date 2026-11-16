@@ -6,6 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
+- A Namespaces page lists each namespace of the dashboard's run, worst first, with owner, team, counts per severity and images; every column sorts, it filters by text and by severity, and each count links to exactly its findings.
 - The UI shows every kube-context: the sidebar's context card opens a list of the kubeconfig's contexts (read on each page) and those in the scan history, with when each was last scanned. The shown context travels in the URL (`?context=`), and the Scans page scans it; one scan runs at a time across contexts.
 - `kubedelos trivy install` downloads the pinned Trivy v0.76.1 release and checks it against an embedded, Sigstore-verified SHA-256. A scan runs one standalone Trivy per image and stops them when `kubedelos ui` exits on Ctrl-C or SIGTERM; `registry test` also stops on SIGHUP.
 - A scan inventories a kube-context (running pods with their init and ephemeral containers, plus the templates of CronJobs and of workloads scaled to zero) and scans every unique image with Trivy.

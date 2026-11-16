@@ -88,6 +88,11 @@ follows the system light or dark theme.
   a newer, narrower run is mentioned with a link to its findings.
 - **Findings (`/findings`)**: filter by URL query (`severity`, `namespace`, `cve`, `package`, `has_fix`, `pkg`, `q`), sort,
   100 per page.
+- **Namespaces (`/namespaces`)**: one row per namespace of the dashboard's run, worst first (Critical, then High),
+  with owner, team, a count per severity, the total and the images. Every column sorts; `q` filters by namespace,
+  owner or team, and `has` keeps namespaces with at least one finding of a severity. A namespace counts a finding when
+  the finding's image runs there, as the findings page's namespace filter does, so each count links to exactly those
+  findings.
 - **Scans (`/scans`)**: start a scan of the shown context; the button names it. The form takes namespaces, namespace exclusions, a namespace
   selector, a label selector, image exclusions, the number of images scanned in parallel (1–32) and package types, each
   prefilled from your settings and labelled with the saved value. What you change applies to that scan only.
