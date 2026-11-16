@@ -96,7 +96,7 @@ def findings(
             sort=sort_key,
             desc=desc,
         )
-        rows, total = findings_page(conn, run.id, flt, page, PER_PAGE)
+        rows, total, _ = findings_page(conn, run.id, flt, page, PER_PAGE)
         all_namespaces = run_namespaces(conn, run.id)
 
     def href(**over: object) -> str:

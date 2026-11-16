@@ -15,7 +15,7 @@ from kubedelos.store import queries
 from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
 from tests.web.conftest import BASE_URL, PORT, TOKEN
-from tests.web.seed import CONTEXT, seed_large
+from tests.web.seed import CONTEXT, seed_acceptances, seed_large
 
 BUDGET = 0.3
 SORTS = ("severity", "cve", "package", "image", "namespace", "fixed")
@@ -42,6 +42,7 @@ def test_query_plans_use_indexes(tmp_path):
     for _ in range(PRIOR_RUNS):
         seed_large(conn, images=40, findings=2000, namespaces=5)
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
+    seed_acceptances(conn)
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
     calls = {
         "newest_run": lambda: queries.newest_run(conn, CONTEXT, cluster_scope=True),
@@ -51,6 +52,9 @@ def test_query_plans_use_indexes(tmp_path):
         "fix_by_image": lambda: queries.fix_by_image(conn, run_id),
         "worst_images": lambda: queries.worst_images(conn, run_id),
         "findings_page": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(), 2, per_page=10),
+        "findings_page accepted": lambda: queries.findings_page(
+            conn, run_id, queries.FindingFilter(accepted="only"), 1
+        ),
         "findings_page q": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(q="lib"), 1),
         "failed_images": lambda: queries.failed_images(conn, run_id),
         "run_namespaces": lambda: queries.run_namespaces(conn, run_id),
@@ -86,7 +90,8 @@ def test_pages_under_300ms(settings):
     for _ in range(PRIOR_RUNS):  # earlier comparable runs: the dashboard computes deltas and history is not free
         seed_large(conn)
     run_id = seed_large(conn)
-    _, total = queries.findings_page(conn, run_id, queries.FindingFilter(), 1)
+    seed_acceptances(conn)
+    _, total, _ = queries.findings_page(conn, run_id, queries.FindingFilter(), 1)
     conn.close()
     last = -(-total // 100)
     middle = (last + 1) // 2

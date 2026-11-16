@@ -98,3 +98,24 @@ def seed_large(conn: sqlite3.Connection, *, images: int = 1000, findings: int = 
             {"id": run_id},
         )
     return int(run_id)
+
+
+ACCEPTANCES = 50
+
+
+def seed_acceptances(conn: sqlite3.Connection, count: int = ACCEPTANCES) -> None:
+    """``count`` active acceptances of the seed's CVEs: a third anywhere, a third in one namespace, a third on one image."""
+    rows = []
+    for i in range(count):
+        vuln = f"CVE-2026-{i * 7:05}"
+        namespace = f"ns-{i % 50:02}" if i % 3 == 1 else None
+        repo = f"reg.example.com/team{i % 20}/app{i}" if i % 3 == 2 else None
+        rows.append(
+            (vuln, CONTEXT if i % 2 else None, namespace, repo, "seeded", "me", "2099-01-01", _START.isoformat())
+        )
+    with conn:
+        conn.executemany(
+            "INSERT INTO acceptance (vuln_id, context, namespace, repo, reason, owner, expires_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )

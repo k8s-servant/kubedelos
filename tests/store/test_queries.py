@@ -1,13 +1,13 @@
 import json
 import sqlite3
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
-from kubedelos.store import queries
+from kubedelos.store import accepted, queries
 from kubedelos.store.db import connect
 from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
@@ -481,7 +481,7 @@ def _fk(vuln, sev, *, pkg="openssl", version="1", fixed=None, pkg_class=None):
 
 
 def _page(conn, run_id, **filters):
-    rows, total = findings_page(conn, run_id, FindingFilter(**filters), 1)
+    rows, total, _ = findings_page(conn, run_id, FindingFilter(**filters), 1)
     return [(r["ref"], r["vuln_id"]) for r in rows], total
 
 
@@ -489,7 +489,7 @@ def test_findings_page_units_and_total(db):
     conn, repo = db
     run_id = _run(repo)
     _seed_units(repo, run_id)
-    rows, total = findings_page(conn, run_id, FindingFilter(), 1)
+    rows, total, _ = findings_page(conn, run_id, FindingFilter(), 1)
     assert total == 3
     assert [(r["ref"], r["vuln_id"], r["severity"]) for r in rows] == [
         ("a", "CVE-1", "CRITICAL"),
@@ -541,7 +541,7 @@ def test_findings_namespaces_column_lists_every_namespace(db):
     conn, repo = db
     run_id = _run(repo)
     _filter_dataset(repo, run_id)
-    rows, _ = findings_page(conn, run_id, FindingFilter(q="db-img"), 1)
+    rows, _, _ = findings_page(conn, run_id, FindingFilter(q="db-img"), 1)
     assert rows[0]["namespaces"] == '["db","web"]'
     assert run_namespaces(conn, run_id) == ["db", "web"]
 
@@ -555,7 +555,7 @@ def test_findings_sort_each_key_and_direction(db):
     _add_in(repo, run_id, "a-img", [_fk("CVE-5", "MEDIUM", pkg="bbb", fixed="3")], ("mm", "aa"))
 
     def order(sort, desc):
-        rows, _ = findings_page(conn, run_id, FindingFilter(sort=sort, desc=desc), 1)
+        rows, _, _ = findings_page(conn, run_id, FindingFilter(sort=sort, desc=desc), 1)
         return [r["vuln_id"] for r in rows]
 
     assert order("severity", True) == ["CVE-9", "CVE-5", "CVE-2"]
@@ -586,12 +586,12 @@ def test_findings_paging_total_matches_rows(db):
     _add_in(repo, run_id, "big", [_fk(f"CVE-{i:03}", "HIGH") for i in range(250)])
     sizes = []
     for page in (1, 2, 3):
-        rows, total = findings_page(conn, run_id, FindingFilter(), page)
+        rows, total, _ = findings_page(conn, run_id, FindingFilter(), page)
         sizes.append((len(rows), total))
     assert sizes == [(100, 250), (100, 250), (50, 250)]
-    rows, total = findings_page(conn, run_id, FindingFilter(), 4)
+    rows, total, _ = findings_page(conn, run_id, FindingFilter(), 4)
     assert (rows, total) == ([], 250)
-    rows, total = findings_page(conn, run_id, FindingFilter(), 1, per_page=10)
+    rows, total, _ = findings_page(conn, run_id, FindingFilter(), 1, per_page=10)
     assert (len(rows), total) == (10, 250)
 
 
@@ -639,11 +639,11 @@ def test_findings_deep_pages_follow_the_same_order_in_every_sort(db):
     for sort in ("severity", "cve", "package", "image", "namespace", "fixed"):
         for desc in (True, False):
             f = FindingFilter(sort=sort, desc=desc)
-            whole, total = findings_page(conn, run_id, f, 1, per_page=1000)
+            whole, total, _ = findings_page(conn, run_id, f, 1, per_page=1000)
             assert total == 270
             paged = []
             for page in (1, 2, 3, 4, 5):
-                rows, page_total = findings_page(conn, run_id, f, page, per_page=60)
+                rows, page_total, _ = findings_page(conn, run_id, f, page, per_page=60)
                 assert page_total == 270
                 paged += _keys(rows)
             assert paged == _keys(whole), (sort, desc)
@@ -655,7 +655,7 @@ def test_findings_page_rows_match_finding_units(db):
     run_id = _run(repo)
     _seed_units(repo, run_id)
     units = conn.execute(f"WITH u AS ({FINDING_UNITS_SQL}) SELECT * FROM u", {"run": run_id}).fetchall()  # noqa: S608
-    rows, _ = findings_page(conn, run_id, FindingFilter(), 1)
+    rows, _, _ = findings_page(conn, run_id, FindingFilter(), 1)
     columns = units[0].keys()
     got = {tuple(r[c] for c in columns) for r in rows}
     assert got == {tuple(u[c] for c in columns) for u in units}
@@ -771,3 +771,70 @@ def test_namespace_counts_use_the_findings_units(db):
     assert api.counts == {"CRITICAL": 1, "HIGH": 1, "MEDIUM": 0, "LOW": 1, "UNKNOWN": 1}
     assert (api.total, api.images) == (4, 2)
     assert (idle.total, idle.images, idle.owner, idle.team) == (0, 2, None, None)
+
+
+def _fixable(vuln, sev, fixed="2"):
+    return Finding(
+        vuln_id=vuln,
+        pkg_name="openssl",
+        installed_version="1",
+        fixed_version=fixed,
+        severity=Severity(sev),
+        target="os",
+        pkg_type="os",
+    )
+
+
+def _seed_accepting(repo):
+    """CVE-1 (fixable Critical) on images a (web) and b (api); CVE-2 (High, no fix) and CVE-3 (Low) on a."""
+    run_id = _run(repo)
+    _add_to_namespaces(repo, run_id, "a", ["web"], [_fixable("CVE-1", "CRITICAL"), _fixable("CVE-2", "HIGH", None)])
+    _add_to_namespaces(repo, run_id, "a", ["web"], [_fixable("CVE-3", "LOW")], platform="linux/arm64")
+    _add_to_namespaces(repo, run_id, "b", ["api"], [_fixable("CVE-1", "CRITICAL")])
+    return run_id
+
+
+def _accept(conn, vuln_id, **narrow):
+    accepted.add(
+        conn, vuln_id=vuln_id, reason="r", owner="me", expires=date(2026, 6, 1), context="ctx", now=ACCEPT_NOW, **narrow
+    )
+
+
+ACCEPT_NOW = datetime(2026, 3, 1, tzinfo=UTC)
+ACCEPT_TODAY = date(2026, 3, 1)
+
+
+def test_fix_lists_leave_accepted_units_out_and_count_them(db):
+    conn, repo = db
+    run_id = _seed_accepting(repo)
+    before = fix_by_fix(conn, run_id, today=ACCEPT_TODAY)
+    assert (before.rows[0].images, before.no_fix, before.accepted) == (2, 1, 0)
+    _accept(conn, "CVE-1", namespace="web")
+    _accept(conn, "CVE-2")
+    _accept(conn, "CVE-3")  # Low: never on the fix lists, so not counted as left out of them
+    after = fix_by_fix(conn, run_id, today=ACCEPT_TODAY)
+    assert [(r.vuln_id, r.images, r.namespaces) for r in after.rows] == [("CVE-1", 1, 1)]
+    assert [ref for ref, _ in after.rows[0].sample] == ["b"]
+    assert (after.no_fix, after.no_fix_images, after.accepted) == (0, 0, 2)
+    by_image = fix_by_image(conn, run_id, today=ACCEPT_TODAY)
+    assert ([r.ref for r in by_image.rows], by_image.total, by_image.accepted) == (["b"], 1, 2)
+    assert kpis(conn, run_id).findings == 4  # the counts stay as they are
+    expired = fix_by_fix(conn, run_id, today=date(2026, 6, 2))
+    assert (expired.rows[0].images, expired.accepted) == (2, 0)
+
+
+def test_findings_page_hides_accepted_units_by_default(db):
+    conn, repo = db
+    run_id = _seed_accepting(repo)
+    _accept(conn, "CVE-1", namespace="web")
+    _accept(conn, "CVE-3")
+
+    def page(**kw):
+        rows, total, left_out = findings_page(conn, run_id, FindingFilter(**kw), 1, today=ACCEPT_TODAY)
+        return [(r["ref"], r["vuln_id"], bool(r["accepted"])) for r in rows], total, left_out
+
+    assert page() == ([("b", "CVE-1", False), ("a", "CVE-2", False)], 2, 2)
+    assert page(accepted="only") == ([("a", "CVE-1", True), ("a", "CVE-3", True)], 2, 2)
+    assert page(accepted="all")[1:] == (4, 2)
+    assert page(severities=("LOW",)) == ([], 0, 1)  # left out among the findings the other filters keep
+    assert page(severities=("LOW",), accepted="all")[0] == [("a", "CVE-3", True)]
