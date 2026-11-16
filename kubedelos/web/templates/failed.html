@@ -1,8 +1,36 @@
-{#- The failures page: every image of one run that failed to scan, with its cause; the error text is folded away. -#}
+{#- The failures page: every image of one run that failed to scan, with its cause; the error text is folded away. The
+    newest partial run of a context also has the retry form; the notes of earlier retries come first. -#}
 {% extends "base.html" %}
 {% block title %}Failed images · kubedelos{% endblock %}
 {% block run_line %}<div class="page-head"><h1>Failed images of run {{ shown_run.number }}</h1></div>{% endblock %}
 {% block content %}
+  {%- for note in notes %}
+  <p class="notice retry-note">{{ note }}</p>
+  {%- endfor %}
+  {%- if retry %}
+  <section class="card retry" aria-labelledby="retry-title">
+    <h2 class="card-title" id="retry-title">Retry failed images</h2>
+    {%- if retry.error %}
+    <div class="callout" role="alert"><p>{{ retry.error }}</p></div>
+    {%- endif %}
+    {%- if total %}
+    <p class="hint">Scans the failed images again, with the run's package types, and puts the results into run {{ shown_run.number }}. The cluster is not read. A longer time limit and fewer parallel images help large images that ran out of time.</p>
+    <form method="post" action="{{ retry.action }}" class="filters" id="retry">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      {%- if retry.context %}<input type="hidden" name="context" value="{{ retry.context }}">{% endif %}
+      <label>Time limit per image (seconds)
+        <input type="number" name="timeout" value="{{ retry.timeout }}" min="{{ retry.min_timeout }}" max="{{ retry.max_timeout }}" required>
+      </label>
+      <label>Parallel images
+        <input type="number" name="parallelism" value="{{ retry.parallelism }}" min="1" max="32" required>
+      </label>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Retry {{ total }} failed {{ total | plural("image") }}</button>
+      </div>
+    </form>
+    {%- endif %}
+  </section>
+  {%- endif %}
   {% if not total %}
   <section class="notice"><p>No image failed to scan in run {{ shown_run.number }} ({{ shown_run.status }}). <a href="{{ scans_href }}">Back to Scans</a>.</p></section>
   {% else %}

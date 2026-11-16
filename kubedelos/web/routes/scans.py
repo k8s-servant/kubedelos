@@ -86,7 +86,7 @@ def scans_href(page: int, context: str | None = None) -> str:
     return "/scans?" + query if query else "/scans"
 
 
-def _row(request: Request, run: HistoryRow) -> dict:
+def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> dict:
     status = run.status
     if status == "running" and not (run.owner and runlock.is_owned(request.app.state.settings.data_dir, run.owner)):
         status = "interrupted"
@@ -103,6 +103,8 @@ def _row(request: Request, run: HistoryRow) -> dict:
         "images": run.images,
         "failed": run.failed,
         "failed_href": link(request, f"/scans/{run.id}/failed") if run.failed else None,
+        # The newest result run's failures can be retried; the failures page has the form and the last word on it.
+        "retry_href": link(request, f"/scans/{run.id}/failed") + "#retry" if run.id == retryable_id else None,
         "duration": duration_text(run.started_at, run.finished_at),
     }
 
@@ -156,6 +158,9 @@ def _job(request: Request, conn: sqlite3.Connection) -> dict | None:
     target = view.context if view.context != request.app.state.context else None
     where = f" of {view.context}" if other else ""
     titles = {"finished": f"Last scan{where}", "error": f"Scan{where} failed"}
+    if view.retry_of is not None:
+        number = run_number(conn, view.retry_of)
+        titles = {"finished": f"Last retry of run {number}{where}", "error": f"Retry of run {number}{where} failed"}
     # The run's failures so far: each result is written as its image finishes, so they are there while it runs.
     run_id = p.run_id if p is not None else None
     failures, failures_total = (
@@ -165,7 +170,10 @@ def _job(request: Request, conn: sqlite3.Connection) -> dict | None:
     return {
         "state": view.state,
         "context": view.context,
-        "title": titles.get(view.state, f"Scanning {view.context}"),
+        "title": titles.get(
+            view.state,
+            f"Retrying failed images of run {number}" if view.retry_of is not None else f"Scanning {view.context}",
+        ),
         "elsewhere_href": scans_href(1, target) if other else None,
         "scans_href": scans_href(1, target),
         "phase": PHASES.get(p.phase, p.phase) if p is not None and active else None,
@@ -208,6 +216,7 @@ def _page(
         history, total = run_history(conn, context, page, PER_PAGE)
         run = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
         job = _job(request, conn)
+    retryable_id = run.id if run is not None and run.status == "partial" else None
     last_page = max(1, ceil(total / PER_PAGE))
     first = (page - 1) * PER_PAGE + 1
     ctx = {
@@ -217,7 +226,7 @@ def _page(
         "form_error": error,
         "pkg_choices": PKG_TYPES,
         "job": job,
-        "rows": [_row(request, r) for r in history],
+        "rows": [_row(request, r, retryable_id) for r in history],
         "total": total,
         "page": page,
         "first": first,

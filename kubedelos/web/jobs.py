@@ -1,6 +1,7 @@
 """The UI's in-process scan runner: at most one scan at a time, on a background thread, with cancel and live progress.
 
-A scan started from the UI runs :func:`kubedelos.scan.service.run_scan` on a daemon thread, so the request that
+A scan started from the UI runs :func:`kubedelos.scan.service.run_scan` on a daemon thread (a retry of a run's
+failed images runs :func:`kubedelos.scan.service.retry_failed` in the same single slot), so the request that
 started it returns at once and the page polls :meth:`ScanRunner.view` for progress. ``run_scan`` opens its own kube
 API client and SQLite connection on that thread, so no sqlite object crosses threads. The scan always targets the
 UI's context, never the kubeconfig's current context at click time. Errors are shown through
@@ -20,7 +21,7 @@ from kubernetes.client.exceptions import ApiException
 from kubernetes.config import ConfigException
 
 from kubedelos.config import Settings
-from kubedelos.scan.service import Progress, ScanOutcome, run_scan
+from kubedelos.scan.service import Progress, ScanOutcome, retry_failed, run_scan
 from kubedelos.trivy.runner import error_cause, kill_all_running
 
 logger = logging.getLogger("kubedelos.web")
@@ -47,6 +48,7 @@ class JobView:
     error: str | None
     eta: timedelta | None
     context: str  # the kube-context this scan targets
+    retry_of: int | None = None  # the run whose failed images this job scans again; None for a scan
 
 
 def _utcnow() -> datetime:
@@ -88,6 +90,7 @@ class _Job:
     last_phase: str | None = None
     paced_from: datetime | None = None  # when image scanning began, after inventory and the Trivy DB download
     paced_base: int = 0  # images already done (cached or rejected) at that moment
+    retry_of: int | None = None
 
 
 class ScanRunner:
@@ -99,11 +102,13 @@ class ScanRunner:
         context: str,
         *,
         scan: Callable[..., ScanOutcome] = run_scan,
+        retry: Callable[..., ScanOutcome] = retry_failed,
         clock: Callable[[], datetime] = _utcnow,
     ) -> None:
         self._settings = settings
         self._context = context
         self._scan = scan
+        self._retry = retry
         self._clock = clock
         self._lock = threading.Lock()
         self._job: _Job | None = None
@@ -118,15 +123,39 @@ class ScanRunner:
         target = context or self._context
         # The context goes last so an override can never point the scan at another cluster.
         scan_settings = self._settings.model_copy(update={**overrides, "context": target})
+
+        def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
+            return self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=cancel)
+
+        self._launch(target, work)
+
+    def retry(self, run_id: int, overrides: dict, context: str | None = None) -> None:
+        """Scan the failed images of run ``run_id`` of ``context`` again, with ``overrides`` (the time limit and
+        parallelism) applied. The caller checks that the run is the context's newest; ``retry_failed`` checks the rest.
+
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        """
+        target = context or self._context
+        retry_settings = self._settings.model_copy(update={**overrides, "context": target})
+
+        def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
+            return self._retry(retry_settings, run_id=run_id, on_progress=on_progress, cancel=cancel)
+
+        self._launch(target, work, retry_of=run_id)
+
+    def _launch(
+        self,
+        target: str,
+        work: Callable[[Callable[[Progress], None], threading.Event], ScanOutcome],
+        retry_of: int | None = None,
+    ) -> None:
         with self._lock:
             if self._closed:
                 raise ScanBusy("the UI is shutting down")
             if self._job is not None and self._job.state in _ACTIVE:
                 raise ScanBusy("a scan is already running")
-            job = _Job(cancel=threading.Event(), context=target)
-            job.thread = threading.Thread(
-                target=self._run, args=(job, scan_settings), name="kubedelos-ui-scan", daemon=True
-            )
+            job = _Job(cancel=threading.Event(), context=target, retry_of=retry_of)
+            job.thread = threading.Thread(target=self._run, args=(job, work), name="kubedelos-ui-scan", daemon=True)
             # Start before publishing: if the thread can't start, no job is left stuck at "starting". The worker
             # touches job state only under this lock, so it waits until the job is published.
             job.thread.start()
@@ -151,7 +180,7 @@ class ScanRunner:
                 p = job.progress
                 left = eta(job.paced_from, self._clock(), p.done - job.paced_base, p.total - job.paced_base)
             progress = dataclasses.replace(job.progress) if job.progress is not None else None
-            return JobView(job.state, job.run_id, progress, job.status, job.error, left, job.context)
+            return JobView(job.state, job.run_id, progress, job.status, job.error, left, job.context, job.retry_of)
 
     def shutdown(self, timeout: float = 10.0) -> None:
         """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end.
@@ -174,7 +203,7 @@ class ScanRunner:
                 kill_all_running()
                 job.thread.join(_AFTER_KILL_S)
 
-    def _run(self, job: _Job, scan_settings: Settings) -> None:
+    def _run(self, job: _Job, work: Callable[[Callable[[Progress], None], threading.Event], ScanOutcome]) -> None:
         def on_progress(progress: Progress) -> None:
             with self._lock:
                 job.progress = progress
@@ -187,7 +216,7 @@ class ScanRunner:
                 job.last_phase = progress.phase
 
         try:
-            outcome = self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=job.cancel)
+            outcome = work(on_progress, job.cancel)
         except BaseException as exc:  # anything, including a failure before the run row exists: never stuck
             described = describe_error(exc)
             with self._lock:

@@ -61,8 +61,8 @@ def _join_workers():
         _RUNNERS.pop().shutdown(timeout=5)
 
 
-def _runner(settings, scan, clock=lambda: T0):
-    runner = ScanRunner(settings, "my-cluster", scan=scan, clock=clock)
+def _runner(settings, scan, clock=lambda: T0, retry=None):
+    runner = ScanRunner(settings, "my-cluster", scan=scan, clock=clock, retry=retry or FakeScan())
     _RUNNERS.append(runner)
     return runner
 
@@ -392,3 +392,34 @@ def test_api_error_without_status_or_reason_shows_its_type():
     assert describe_error(ApiException()) == "Kubernetes API error (ApiException)"
     assert describe_error(ApiException(status=500)) == "Kubernetes API error 500"
     assert describe_error(ApiException(reason="Forbidden")) == "Kubernetes API error: Forbidden"
+
+
+def test_retry_runs_in_the_same_slot_with_its_limits_and_the_view_says_so(settings):
+    scan, retry = FakeScan(), FakeScan()
+    runner = _runner(settings, scan, retry=retry)
+    runner.retry(7, {"scan_timeout_s": 1800, "parallelism": 2, "context": "elsewhere"}, context="prod-eu")
+    assert retry.entered.wait(5)
+    call = retry.calls[0]
+    assert call["run_id"] == 7 and isinstance(call["cancel"], threading.Event)
+    s = call["settings"]
+    assert (s.context, s.scan_timeout_s, s.parallelism) == ("prod-eu", 1800, 2)
+    view = runner.view()
+    assert (view.context, view.retry_of) == ("prod-eu", 7)
+    with pytest.raises(ScanBusy):
+        runner.start({})
+    retry.release.set()
+    view = _wait_for(runner, "finished")
+    assert (view.run_id, view.status, view.retry_of) == (7, "ok", 7)
+    assert scan.calls == []
+
+
+def test_retry_is_refused_while_a_scan_runs(settings):
+    scan = FakeScan()
+    runner = _runner(settings, scan)
+    runner.start({})
+    assert scan.entered.wait(5)
+    with pytest.raises(ScanBusy):
+        runner.retry(7, {})
+    assert runner.view().retry_of is None
+    scan.release.set()
+    _wait_for(runner, "finished")

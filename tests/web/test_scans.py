@@ -64,8 +64,10 @@ def test_scans_page_lists_every_status_but_links_only_results(client, seed):
     assert "whole cluster" in by_id["ok"] and "os + library packages" in by_id["ok"]
     assert "1 min 0 s" in by_id["ok"]
     assert re.search(
-        r"<td[^>]*>2</td>\s*<td[^>]*><a href=\"/scans/\d+/failed\">1</a></td>", by_id["partial"]
-    )  # 2 images, 1 failed, linked
+        r"<td[^>]*>2</td>\s*<td[^>]*><a href=\"/scans/(\d+)/failed\">1</a>"
+        r" · <a href=\"/scans/\1/failed#retry\">retry</a></td>",
+        by_id["partial"],
+    )  # 2 images, 1 failed, linked; the newest result run offers a retry
     assert "1\u20134 of 4" in html
 
 

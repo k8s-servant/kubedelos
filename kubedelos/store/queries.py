@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from typing import Literal
 
 from kubedelos.store.accepted import ACCEPTED_CTES
+from kubedelos.store.repo import RETRY_NOTE_PREFIX
 
 RESULT_STATUSES = ("ok", "partial")
 _STATUS_SQL = "(" + ", ".join(f"'{s}'" for s in RESULT_STATUSES) + ")"
@@ -490,6 +491,15 @@ def run_failures(
         "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
     ).fetchone()[0]
     return rows, total
+
+
+def retry_notes(conn: sqlite3.Connection, run_id: int) -> list[str]:
+    """The notes the retries of ``run_id``'s failed images left, oldest first."""
+    rows = conn.execute(
+        "SELECT text FROM run_warning WHERE run_id = ? AND coverage = 0 AND text LIKE ? ORDER BY id",
+        (run_id, RETRY_NOTE_PREFIX + "%"),
+    )
+    return [row["text"] for row in rows]
 
 
 def auth_failed_refs(conn: sqlite3.Connection, run_id: int) -> list[str]:

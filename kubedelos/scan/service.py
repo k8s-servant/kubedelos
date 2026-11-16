@@ -1,5 +1,10 @@
-"""Orchestrates one scan run: inventory, cache lookup, the Trivy DB cache, parallel scans and persistence."""
+"""Orchestrates one scan run: inventory, cache lookup, the Trivy DB cache, parallel scans and persistence.
 
+``retry_failed`` scans a finished run's failed images again through the same steps, minus the inventory: it puts each
+new result in place of its failure and recounts the run.
+"""
+
+import functools
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -69,7 +74,8 @@ def run_scan(
         )
         try:
             repo.add_warnings(run_id, warnings)
-            errors = _scan(settings, repo, run_id, items, on_progress, cancel, cache_max_age)
+            save = functools.partial(repo.add_result, run_id)
+            errors = _scan(settings, repo, run_id, items, save, on_progress, cancel, cache_max_age)
         except KeyboardInterrupt:
             cancel.set()
             repo.finish_run(run_id, "cancelled")
@@ -80,6 +86,52 @@ def run_scan(
         status = "cancelled" if cancel.is_set() else "partial" if errors else "ok"
         repo.finish_run(run_id, status)
     return ScanOutcome(run_id=run_id, warnings=warnings, status=status)
+
+
+class RetryRefused(Exception):
+    """The run can't be retried: missing, not a finished partial run, or scanned with another Trivy."""
+
+
+def retry_failed(
+    settings: Settings,
+    run_id: int,
+    *,
+    repo: Repo | None = None,
+    on_progress: Callable[[Progress], None] = lambda p: None,
+    cancel: threading.Event | None = None,
+    cache_max_age: timedelta = timedelta(hours=24),
+) -> ScanOutcome:
+    """Scan the failed images of the finished partial run ``run_id`` again and put the results in that run.
+
+    The refs, platforms and workloads come from the database, so the cluster is not read. The run's package types
+    apply; ``settings`` gives the time limit and parallelism. Each new result replaces its failure, and the run is
+    recounted (``ok`` once nothing fails) and noted, also when the retry is cancelled or interrupted.
+    """
+    repo = repo if repo is not None else Repo(db.connect(settings.db_path))
+    cancel = cancel if cancel is not None else threading.Event()
+    run = repo.get_run(run_id)
+    if run is None:
+        raise RetryRefused(f"no run {run_id}")
+    if run["status"] == "running":
+        raise RetryRefused(f"run {run['number']} is running")
+    trivy = CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION
+    if run["trivy_version"] != trivy:
+        raise RetryRefused(f"run {run['number']} was scanned with Trivy {run['trivy_version']}, not {trivy}")
+    failed = repo.failed_items(run_id) if run["status"] == "partial" else []
+    if not failed:
+        raise RetryRefused(f"run {run['number']} has no failed images")
+
+    ids = {id(item): result_id for result_id, item in failed}
+    run_settings = settings.model_copy(update={"pkg_types": tuple(run["pkg_types"].split(","))})
+
+    def save(item: InventoryItem, result: ImageResult) -> None:
+        repo.replace_result(ids[id(item)], result)
+
+    try:
+        _scan(run_settings, repo, run_id, [item for _, item in failed], save, on_progress, cancel, cache_max_age)
+    finally:
+        status = repo.settle_retry(run_id, retried=len(failed))
+    return ScanOutcome(run_id=run_id, warnings=[], status=status)
 
 
 def _cacheable(image: ImageRef, result: ImageResult) -> bool:
@@ -96,11 +148,12 @@ def _scan(
     repo: Repo,
     run_id: int,
     items: list[InventoryItem],
+    save: Callable[[InventoryItem, ImageResult], None],
     on_progress: Callable[[Progress], None],
     cancel: threading.Event,
     cache_max_age: timedelta,
 ) -> int:
-    """Persist cached and fresh results for ``items`` and return how many images errored."""
+    """Hand cached and fresh results for ``items`` to ``save`` and return how many images errored."""
     total = len(items)
     done = errors = cached_count = 0
     use_cache = settings.trivy_path is None  # results from an unpinned Trivy never enter or come from the cache
@@ -112,7 +165,7 @@ def _scan(
 
     def record(item: InventoryItem, result: ImageResult) -> None:
         nonlocal done, errors, cached_count
-        repo.add_result(run_id, item, result)
+        save(item, result)
         done += 1
         errors += result.status == "error"
         cached_count += result.status == "cached"

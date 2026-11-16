@@ -404,3 +404,73 @@ def test_run_numbers_are_unique_with_or_without_a_context(tmp_path):
             repo._conn.execute(
                 "INSERT INTO scan_run (started_at, status, context, number) VALUES ('x', 'ok', ?, ?)", (context, number)
             )
+
+
+def _failed_run(repo):
+    run = repo.start_run("a", "ui", "0.76.1", scan_level="os")
+    ok, bad, gone = _item("reg.io/app:1"), _item("reg.io/app:2", digest=None), _item("reg.io/old:1", digest=None)
+    repo.add_result(run, ok, _result(ok, findings=[_finding()]))
+    repo.add_result(run, bad, _result(bad, status="error", error_kind="timeout", error="deadline"))
+    repo.add_result(run, gone, _result(gone, status="error", error_kind="not_found", error="MANIFEST_UNKNOWN"))
+    repo.finish_run(run, "partial")
+    return run
+
+
+def test_failed_items_rebuild_each_failed_image_with_its_workloads(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    failed = repo.failed_items(run)
+    assert [item.image.ref for _, item in failed] == ["reg.io/app:2", "reg.io/old:1"]
+    _, item = failed[0]
+    assert item.image == ImageRef(ref="reg.io/app:2", repo="reg.io/app", tag="1", digest=None)
+    assert item.platform == "linux/amd64"
+    assert item.workloads == [Workload(namespace="ns", kind="Deployment", name="app", container="c")]
+
+
+def test_replace_result_swaps_a_failure_for_the_new_result_in_place(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    (result_id, item), _ = repo.failed_items(run)
+    repo.replace_result(result_id, _result(item, findings=[_finding("CVE-9")], os_family="debian"))
+    row = repo._conn.execute("SELECT status, error_kind, error, os_family FROM image_result WHERE id = ?", (result_id,))
+    assert tuple(row.fetchone()) == ("ok", None, None, "debian")
+    vulns = repo._conn.execute("SELECT vuln_id FROM finding WHERE image_result_id = ?", (result_id,)).fetchall()
+    assert [v[0] for v in vulns] == ["CVE-9"]
+    assert (
+        repo._conn.execute("SELECT COUNT(*) FROM workload WHERE image_result_id = ?", (result_id,)).fetchone()[0] == 1
+    )
+
+
+def test_replace_result_leaves_a_row_that_is_no_longer_a_failure(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    (result_id, item), _ = repo.failed_items(run)
+    repo.replace_result(result_id, _result(item, findings=[_finding("CVE-9")]))
+    repo.replace_result(result_id, _result(item, findings=[_finding("CVE-8")]))
+    vulns = repo._conn.execute("SELECT vuln_id FROM finding WHERE image_result_id = ?", (result_id,)).fetchall()
+    assert [v[0] for v in vulns] == ["CVE-9"]
+
+
+def test_settle_retry_recounts_keeps_finished_at_and_notes_the_retry(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    finished = repo.get_run(run)["finished_at"]
+    (result_id, item), _ = repo.failed_items(run)
+    repo.replace_result(result_id, _result(item))
+    repo._clock = lambda: datetime(2026, 1, 1, 12, 40, tzinfo=UTC)
+    assert repo.settle_retry(run, retried=2) == "partial"
+    got = repo.get_run(run)
+    assert (got["status"], got["images_error"], got["images_total"], got["finished_at"]) == ("partial", 1, 3, finished)
+    assert [tuple(w) for w in repo.run_warnings(run)] == [
+        ("retried 2 failed images at 12:40 UTC: 1 scanned, 1 still failing", 0)
+    ]
+
+
+def test_settle_retry_marks_the_run_ok_when_nothing_fails(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    for result_id, item in repo.failed_items(run):
+        repo.replace_result(result_id, _result(item))
+    assert repo.settle_retry(run, retried=2) == "ok"
+    assert repo.get_run(run)["status"] == "ok" and repo.get_run(run)["images_error"] == 0
+    assert repo.run_warnings(run)[0]["text"].endswith(": 2 scanned, 0 still failing")
