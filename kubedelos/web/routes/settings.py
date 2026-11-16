@@ -44,6 +44,15 @@ def shown_value(field: str, value: object) -> str:
     return str(value)
 
 
+def log_level(raw: str | None) -> str:
+    """``KUBEDELOS_LOG_LEVEL`` as ``kubedelos ui`` reads it: only ``info`` turns the access log on."""
+    if not raw:
+        return "default (no access log)"
+    if raw.lower() == "info":
+        return "info (an access line per request)"
+    return f"{raw} (no effect: only info is used)"
+
+
 def _rows(settings: Settings, flags: frozenset[str]) -> list[dict]:
     sources = setting_sources(settings, flags=flags, environ=os.environ)
     prefix = settings.model_config.get("env_prefix", "")
@@ -75,7 +84,7 @@ def settings(request: Request) -> HTMLResponse:
             ("Data directory", str(current.data_dir)),
             ("Cache directory", str(current.cache_dir)),
             ("Trivy", trivy),
-            ("Log level", os.environ.get("KUBEDELOS_LOG_LEVEL") or "default (no access log)"),
+            ("Log level", log_level(os.environ.get("KUBEDELOS_LOG_LEVEL"))),
         ],
     }
     return render(request, "settings.html", ctx)

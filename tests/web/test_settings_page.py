@@ -37,7 +37,17 @@ def test_shows_the_files_trivy_and_log_level(client, app, monkeypatch):
     html = unescape(client.get("/settings").text)
     assert str(settings.db_path) in html and str(settings.data_dir) in html and str(settings.cache_dir) in html
     assert f"v{TRIVY_VERSION} (pinned)" in html
-    assert "info" in html.split("Log level", 1)[1].split("</tr>", 1)[0]
+    assert "info (an access line per request)" in html.split("Log level", 1)[1].split("</tr>", 1)[0]
+
+
+def test_log_level_says_what_the_ui_does_with_it(client, monkeypatch):
+    def level():
+        return unescape(client.get("/settings").text).split("Log level", 1)[1].split("</tr>", 1)[0]
+
+    monkeypatch.delenv("KUBEDELOS_LOG_LEVEL", raising=False)
+    assert "default (no access log)" in level()
+    monkeypatch.setenv("KUBEDELOS_LOG_LEVEL", "debug")
+    assert "debug (no effect: only info is used)" in level()
 
 
 def test_names_a_custom_trivy(client, app):
