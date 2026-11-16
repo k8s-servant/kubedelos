@@ -34,6 +34,14 @@
   {%- elif job.state == "starting" %}
     <p>starting…</p>
   {%- endif %}
+  {%- if job.failures %}
+    <ul class="readout-failures">
+      {%- for f in job.failures %}
+      <li class="failure"><code>{{ f.ref }}</code> <span class="chip chip-bad">{{ f.kind }}</span>{% if f.retried %} <span class="chip chip-stale">retried</span>{% endif %} {{ f.cause }}</li>
+      {%- endfor %}
+    </ul>
+    <p class="hint"><a href="{{ job.failures_href }}">see all {{ job.failures_total }} {{ job.failures_total | plural("failure") }}</a></p>
+  {%- endif %}
   {%- if job.image %}
     <p class="hint">last finished: <code>{{ job.image }}</code></p>
   {%- endif %}

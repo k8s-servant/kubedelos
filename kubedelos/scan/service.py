@@ -29,6 +29,7 @@ class Progress:
     current: str | None
     phase: str = "scanning"  # one of PHASES; scanning repeats around trivy-db
     cached: int = 0  # cache hits among ``done``; the freshly scanned count is done - cached - errors
+    run_id: int | None = None  # set once the run row exists, so a reader can list the run's failures while it runs
 
 
 @dataclass
@@ -105,7 +106,7 @@ def _scan(
     use_cache = settings.trivy_path is None  # results from an unpinned Trivy never enter or come from the cache
 
     def emit(phase: str, current: str | None = None) -> None:
-        on_progress(Progress(total, done, errors, current, phase=phase, cached=cached_count))
+        on_progress(Progress(total, done, errors, current, phase=phase, cached=cached_count, run_id=run_id))
 
     emit("scanning")
 

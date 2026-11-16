@@ -421,6 +421,47 @@ def failed_images(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> tup
     return rows, total
 
 
+@dataclass(frozen=True)
+class RunLabel:
+    """What a page needs to name any run, whatever its status."""
+
+    id: int
+    number: int
+    context: str | None
+    status: str
+
+
+def run_label(conn: sqlite3.Connection, context: str, run_id: int) -> RunLabel:
+    """The run ``run_id`` of ``context``, in any status; raises RunNotShown for a missing or another context's run."""
+    row = conn.execute("SELECT id, number, context, status FROM scan_run WHERE id = ?", (run_id,)).fetchone()
+    if row is None:
+        raise RunNotShown(f"no run {run_id}")
+    if row["context"] != context:
+        raise RunNotShown(f"that run belongs to context {row['context']}, not {context}")
+    return RunLabel(row["id"], row["number"], row["context"], row["status"])
+
+
+def run_failures(
+    conn: sqlite3.Connection, run_id: int, *, limit: int, offset: int = 0, newest_first: bool = False
+) -> tuple[list[sqlite3.Row], int]:
+    """The run's failed (image, platform) rows with the namespaces the image runs in (a JSON array), by ref then
+    platform or newest first, and how many there are in all.
+    """
+    order = "r.id DESC" if newest_first else "r.ref, r.platform"
+    rows = conn.execute(
+        "SELECT r.ref, r.platform, r.error_kind, r.error,"  # noqa: S608 - only a constant ORDER BY is interpolated
+        " (SELECT json_group_array(namespace) FROM (SELECT DISTINCT w.namespace FROM image_result o"
+        "   JOIN workload w ON w.image_result_id = o.id WHERE o.run_id = r.run_id AND o.ref = r.ref"
+        "   ORDER BY w.namespace)) AS namespaces"
+        f" FROM image_result r WHERE r.run_id = ? AND r.status = 'error' ORDER BY {order} LIMIT ? OFFSET ?",
+        (run_id, limit, offset),
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status = 'error'", (run_id,)
+    ).fetchone()[0]
+    return rows, total
+
+
 def auth_failed_refs(conn: sqlite3.Connection, run_id: int) -> list[str]:
     """Every distinct ref of a run that failed with an authentication error, uncapped, for the login hints."""
     rows = conn.execute(

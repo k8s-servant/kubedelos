@@ -95,6 +95,8 @@ def test_service_persists_results_and_status_partial(env, monkeypatch):
     assert _finding_count(repo, out.run_id) == 1
     assert [(p.done, p.errors) for p in progress if p.current] == [(1, 0), (2, 1)]
     assert progress[-1].total == 2 and progress[-1].phase == "saving"
+    assert progress[0].run_id is None  # the inventory comes before the run row
+    assert {p.run_id for p in progress[1:]} == {out.run_id}  # from then on, so a reader can list its failures live
     assert repo.get_cached(D1, "linux/amd64", timedelta(hours=1), scan_level="library,os") is not None
     assert repo.get_cached(D2, "linux/amd64", timedelta(hours=1), scan_level="library,os") is None  # errors not cached
 

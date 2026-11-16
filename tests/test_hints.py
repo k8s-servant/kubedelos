@@ -22,3 +22,11 @@ def test_login_hint_per_registry(host, command):
     assert command in hint
     assert hint.startswith(f"log in to {host} first")
     assert hint.endswith("kubedelos uses the same Docker credentials")
+
+
+def test_login_hints_for_refs_name_each_registry_once():
+    from kubedelos.hints import login_hint, login_hints_for
+
+    refs = ["reg.example.com/a:1", "reg.example.com/b@sha256:" + "a" * 64, "myacr.azurecr.io/x:2"]
+    assert login_hints_for(refs) == [login_hint("myacr.azurecr.io"), login_hint("reg.example.com")]
+    assert login_hints_for([]) == []

@@ -3,6 +3,11 @@
 Today that is how to log in to a registry whose images failed with an authentication error.
 """
 
+from collections.abc import Iterable
+
+from kubedelos.kube.inventory import parse_image_id
+from kubedelos.models import registry_host
+
 
 def login_hint(host: str) -> str:
     """How to log in to ``host`` so that Docker, and with it kubedelos, can read it."""
@@ -17,3 +22,8 @@ def login_hint(host: str) -> str:
     else:
         command = f"docker login {host}"
     return f"log in to {host} first, e.g. `{command}`; kubedelos uses the same Docker credentials"
+
+
+def login_hints_for(refs: Iterable[str]) -> list[str]:
+    """One login hint per registry of ``refs`` (image refs that failed auth), sorted by registry."""
+    return [login_hint(host) for host in sorted({registry_host(parse_image_id(ref, "")) for ref in refs})]

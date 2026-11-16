@@ -12,9 +12,7 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 
 from kubedelos.analytics import ago, delta, describe_scope
-from kubedelos.hints import login_hint
-from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import registry_host
+from kubedelos.hints import login_hints_for
 from kubedelos.store.queries import (
     SAMPLE_CAP,
     Kpis,
@@ -32,7 +30,7 @@ from kubedelos.store.queries import (
     worst_images,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.pages import MAX_ID, context_param, open_db, plural, render, shown_context
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, plural, render, shown_context
 
 router = APIRouter()
 
@@ -236,11 +234,11 @@ def dashboard(
         auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
         worst = worst_images(conn, run.id)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before))
-    hosts = sorted({registry_host(parse_image_id(ref, "")) for ref in auth_refs})
     ctx.update(
         failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
         failed_total=failed_total,
-        login_hints=[login_hint(host) for host in hosts],
+        failed_href=link(request, f"/scans/{run.id}/failed"),
+        login_hints=login_hints_for(auth_refs),
     )
     if run_id is None and newest_any is not None and newest_any.id > run.id:
         ctx["newer"] = {
