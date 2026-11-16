@@ -1,0 +1,37 @@
+{#- The Accept… form, prefilled from the findings row that links here. Blank narrowing fields mean anywhere. -#}
+{% extends "base.html" %}
+{% block title %}Accept a finding · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Accept a finding</h1></div>{% endblock %}
+{% block content %}
+  <section class="card accept-form" aria-labelledby="accept-title">
+    <h2 class="card-title" id="accept-title">Accept {{ values.cve or "a CVE" }}</h2>
+    {%- if error %}
+    <div class="callout" role="alert"><p>{{ error }}</p></div>
+    {%- endif %}
+    <form method="post" action="/accepted" class="filters">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="context" value="{{ context }}">
+      <label>CVE <input type="text" name="cve" value="{{ values.cve }}" required></label>
+      <label>Package <input type="text" name="package" value="{{ values.package }}" placeholder="any package"></label>
+      <label>Image <input type="text" name="image" value="{{ values.image }}" placeholder="any image">
+        <span class="hint">the repository: every tag and digest of it</span></label>
+      <label>Namespace <input type="text" name="namespace" value="{{ values.namespace }}" placeholder="any namespace"></label>
+      <fieldset class="accept-scope">
+        <legend>Cluster</legend>
+        <div class="pills">
+          <label class="pill"><input type="radio" name="scope" value="context"{% if values.scope != "all" %} checked{% endif %}>{{ context }}</label>
+          <label class="pill"><input type="radio" name="scope" value="all"{% if values.scope == "all" %} checked{% endif %}>all clusters</label>
+        </div>
+      </fieldset>
+      <label class="accept-reason">Reason
+        <textarea name="reason" rows="3" maxlength="{{ max_reason }}" required>{{ values.reason }}</textarea></label>
+      <label>Owner <input type="text" name="owner" value="{{ values.owner }}" required></label>
+      <label>Expires <input type="date" name="expires" value="{{ values.expires }}" min="{{ min }}" max="{{ max }}" required>
+        <span class="hint">at most a year ahead</span></label>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Accept</button>
+        <a class="clear" href="{{ back }}">cancel</a>
+      </div>
+    </form>
+  </section>
+{% endblock %}

@@ -380,6 +380,12 @@ main {
   color: var(--fg-strong);
 }
 
+.chip-accepted {
+  border-color: color-mix(in srgb, var(--ok) 35%, transparent);
+  color: var(--ok);
+  text-decoration: none;
+}
+
 /* Cards and callouts */
 
 .card {
@@ -778,7 +784,8 @@ tbody tr:hover td {
 }
 
 .fix-overflow,
-.fix-nofix {
+.fix-nofix,
+.fix-accepted {
   margin: 0.5rem 0 0;
 }
 
@@ -1269,4 +1276,66 @@ select {
   margin: 0.5rem 0.5rem 0;
   color: var(--muted);
   font-size: 0.75rem;
+}
+
+/* Accepted risk: the register, the Accept… link on findings rows and the form. */
+
+.accepted th[scope="row"] {
+  border-bottom: 1px solid var(--line-soft);
+  color: var(--fg-strong);
+  font-family: var(--mono);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.accepted .where {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+}
+
+.accepted .reason {
+  max-width: 28rem;
+  overflow-wrap: anywhere;
+}
+
+.accepted .zero,
+.accepted .hint {
+  color: var(--muted);
+}
+
+.accepted .state-revoked td,
+.accepted .state-expired td,
+.accepted .state-revoked th,
+.accepted .state-expired th {
+  color: var(--muted);
+}
+
+.accepted form {
+  margin: 0;
+}
+
+.btn-quiet {
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--fg-strong);
+  font-weight: 500;
+}
+
+.findings .risk {
+  white-space: nowrap;
+}
+
+.findings .accept {
+  font-size: 0.75rem;
+}
+
+.accept-form .accept-reason {
+  grid-column: 1 / -1;
+}
+
+.accept-form textarea {
+  width: 100%;
+  font: inherit;
 }

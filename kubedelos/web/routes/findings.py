@@ -1,7 +1,8 @@
 """The findings page (``GET /findings``): every finding unit of one run, filtered, sorted and paged through the URL.
 
 All state lives in the query string so a filtered view can be bookmarked or linked from the dashboard. Filtering,
-ordering and paging happen in SQL, so a run of 100,000 findings renders one page of 100 rows.
+ordering and paging happen in SQL, so a run of 100,000 findings renders one page of 100 rows. Accepted findings are left
+out by default (``accepted=hide``) and the page says how many; each row links to the Accept… form, prefilled.
 """
 
 import json
@@ -36,12 +37,18 @@ COLUMNS = (
     (None, "Class"),
     ("image", "Image"),
     ("namespace", "Namespaces"),
+    (None, "Risk"),
 )
 
 
-def _row(r) -> dict:
+def _row(request: Request, r, namespace: str | None) -> dict:
     namespaces = json.loads(r["namespaces"])
     return {
+        "accepted": bool(r["accepted"]),
+        "accepted_href": link(request, "/accepted", cve=r["vuln_id"]),
+        "accept_href": link(
+            request, "/accepted/new", cve=r["vuln_id"], package=r["pkg_name"], image=r["repo"], namespace=namespace
+        ),
         "severity": r["severity"],
         "vuln_id": r["vuln_id"],
         "primary_url": r["primary_url"],
@@ -68,6 +75,7 @@ def findings(
     pkg: Literal["all", "os", "library"] = "all",
     q: str | None = None,
     sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] | None = None,
+    accepted: Literal["hide", "only", "all"] = "hide",
     direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
     page: int = Query(1, ge=1, le=10**9),
 ) -> HTMLResponse:
@@ -95,8 +103,10 @@ def findings(
             q=q or None,
             sort=sort_key,
             desc=desc,
+            accepted=accepted,
         )
-        rows, total = findings_page(conn, run.id, flt, page, PER_PAGE)
+        today = request.app.state.clock().date()
+        rows, total, left_out = findings_page(conn, run.id, flt, page, PER_PAGE, today=today)
         all_namespaces = run_namespaces(conn, run.id)
 
     def href(**over: object) -> str:
@@ -113,6 +123,7 @@ def findings(
             "q": flt.q,
             "sort": sort,
             "dir": direction,
+            "accepted": accepted if accepted != "hide" else None,
             "page": page if page > 1 else None,
         }
         state.update(over)
@@ -120,7 +131,10 @@ def findings(
 
     last_page = max(1, ceil(total / PER_PAGE))
     start = (page - 1) * PER_PAGE + 1
-    filtered = bool(severity or flt.namespace or flt.cve or flt.package or flt.q or has_fix != "any" or pkg != "all")
+    filtered = (
+        bool(severity or flt.namespace or flt.cve or flt.package or flt.q or has_fix != "any" or pkg != "all")
+        or accepted != "hide"
+    )
     headers = [
         {
             "label": label,
@@ -133,7 +147,9 @@ def findings(
     ]
     ctx.update(
         run=run,
-        rows=[_row(r) for r in rows],
+        rows=[_row(request, r, flt.namespace) for r in rows],
+        left_out=left_out if accepted == "hide" else 0,
+        accepted_only_href=href(accepted="only", page=None),
         total=total,
         page=page,
         first=start,
@@ -156,6 +172,7 @@ def findings(
             "has_fix": has_fix,
             "pkg": pkg,
             "q": flt.q or "",
+            "accepted": accepted,
         },
         severities=[s.value for s in Severity],
         sort=sort,

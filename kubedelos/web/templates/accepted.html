@@ -1,0 +1,71 @@
+{#- The accepted risk register: the shown context's entries and the all-cluster ones, active first. Each row can be
+    revoked with a CSRF-protected POST. -#}
+{% extends "base.html" %}
+{% block title %}Accepted · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Accepted risk</h1></div>{% endblock %}
+{% block content %}
+  <p class="notice">An acceptance takes a finding off the fix list and the findings page until it expires. Every count stays as it is.
+    Start one from the <strong>Accept…</strong> link on a <a href="{{ link('/findings') }}">findings</a> row.</p>
+  {% if cve %}
+  <p class="notice">Showing {{ cve }} only. <a href="{{ link('/accepted') }}">show all</a></p>
+  {% endif %}
+  {% if not rows %}
+  <section class="notice"><p>Nothing accepted{% if cve %} for {{ cve }}{% endif %} on <strong>{{ context }}</strong> yet.</p></section>
+  {% else %}
+  <div class="card">
+  <div class="table-wrap">
+    <table class="accepted">
+      <thead>
+        <tr>
+          <th scope="col">CVE</th>
+          <th scope="col">Where</th>
+          <th scope="col">Reason</th>
+          <th scope="col">Owner</th>
+          <th scope="col">Expires</th>
+          <th scope="col">Covers</th>
+          <th scope="col"><span class="visually-hidden">Action</span></th>
+        </tr>
+      </thead>
+      <tbody>
+        {%- for row in rows %}
+        {%- set e = row.entry %}
+        <tr class="state-{{ e.state }}">
+          <th scope="row" class="cve">{{ e.vuln_id }}</th>
+          <td class="where">
+            <span class="chip{% if e.context is none %} chip-pinned{% endif %}">{{ "all clusters" if e.context is none else e.context }}</span>
+            {%- if e.namespace %} <span>namespace {{ e.namespace }}</span>{% endif %}
+            {%- if e.repo %} <span>image <code>{{ e.repo }}</code></span>{% endif %}
+            {%- if e.pkg_name %} <span>package {{ e.pkg_name }}</span>{% endif %}
+            {%- if not (e.namespace or e.repo or e.pkg_name) %} <span>anywhere</span>{% endif %}
+          </td>
+          <td class="reason">{{ e.reason }}</td>
+          <td>{{ e.owner }}</td>
+          <td>
+            {%- if e.state == "revoked" %}<span class="chip chip-bad">revoked</span>
+            {%- elif e.state == "expired" %}<span class="chip chip-stale">{{ row.days }}</span>
+            {%- else %}{{ e.expires.isoformat() }} <span class="hint">{{ row.days }}</span>{% endif -%}
+          </td>
+          <td>
+            {%- if e.state != "active" %}<span class="zero">—</span>
+            {%- elif e.covers is none %}<span class="zero">no run yet</span>
+            {%- elif e.covers == 0 %}<span class="chip chip-stale">covers nothing</span>
+            {%- else %}<a href="{{ link('/findings', run_id=run.id, cve=e.vuln_id, package=e.pkg_name, namespace=e.namespace, accepted='only') }}">covers {{ e.covers }} {{ e.covers | plural("finding") }}</a> in run {{ run.id }}{% endif -%}
+          </td>
+          <td>
+            {%- if e.state != "revoked" %}
+            <form method="post" action="/accepted/{{ e.id }}/revoke">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+              <input type="hidden" name="context" value="{{ context }}">
+              <button type="submit" class="btn btn-quiet">Revoke</button>
+            </form>
+            {%- endif %}
+          </td>
+        </tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="table-foot">{{ rows | length }} {{ rows | length | plural("entry", "entries") }}</p>
+  </div>
+  {% endif %}
+{% endblock %}

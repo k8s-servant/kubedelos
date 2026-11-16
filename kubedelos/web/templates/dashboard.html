@@ -157,6 +157,9 @@
     {% if no_fix %}
     <p class="fix-nofix"><a href="{{ no_fix_href }}">{{ no_fix }} Critical/High {{ no_fix | plural("finding has", "findings have") }} no released fix yet, across {{ no_fix_images }} {{ no_fix_images | plural("image") }}</a></p>
     {% endif %}
+    {% if accepted_left_out %}
+    <p class="fix-accepted"><a href="{{ accepted_href }}">{{ accepted_left_out }} accepted Critical/High {{ accepted_left_out | plural("finding") }} not shown</a></p>
+    {% endif %}
   </section>
   {% if worst %}
   <section class="card worst-images" aria-labelledby="worst-images-title">

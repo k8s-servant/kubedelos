@@ -230,7 +230,8 @@ def dashboard(
         current = kpis(conn, run.id)
         previous = previous_comparable(conn, run)
         before = (previous, kpis(conn, previous.id)) if previous else None
-        fixes = fix_by_fix(conn, run.id) if by == "fix" else fix_by_image(conn, run.id)
+        today = now.date()
+        fixes = fix_by_fix(conn, run.id, today=today) if by == "fix" else fix_by_image(conn, run.id, today=today)
         failed_rows, failed_total = failed_images(conn, run.id) if current.images_failed else ([], 0)
         auth_refs = auth_failed_refs(conn, run.id) if failed_total else []
         worst = worst_images(conn, run.id)
@@ -259,6 +260,8 @@ def dashboard(
         no_fix=fixes.no_fix,
         no_fix_images=fixes.no_fix_images,
         no_fix_href=findings_href(c, run_id=run.id, **fix_links, has_fix="no"),
+        accepted_left_out=fixes.accepted,
+        accepted_href=findings_href(c, run_id=run.id, **fix_links, accepted="only"),
         more_href=lambda row: findings_href(c, run_id=run.id, cve=row.vuln_id, package=row.pkg_name),
     )
     ctx.update(shares=_shares(run.id, current.by_severity, c), worst=_worst(run.id, worst, c))

@@ -3,14 +3,17 @@
 Only runs that finished with results (``ok`` or ``partial``) are ever shown as results; the run history lists every run
 but links only those. Kept apart from ``Repo`` because these are
 the reads the UI makes on a read-only connection, and the counting rules (an image is a distinct ref, not a platform
-row) live in one place.
+row) live in one place. The work lists (the fix lists and the findings page) leave accepted units out, matched on
+read by ``kubedelos.store.accepted`` against ``today``; nothing that counts does.
 """
 
 import json
 import sqlite3
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Literal
+
+from kubedelos.store.accepted import ACCEPTED_CTES
 
 RESULT_STATUSES = ("ok", "partial")
 _STATUS_SQL = "(" + ", ".join(f"'{s}'" for s in RESULT_STATUSES) + ")"
@@ -98,6 +101,18 @@ def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
 
 
 _SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN")
+
+
+def _today(today: date | None) -> str:
+    """The ``:today`` parameter of ``ACCEPTED_CTES``: the given day, or today in UTC."""
+    return (today or datetime.now(UTC).date()).isoformat()
+
+
+# Whether the unit ``{u}`` (a row with ref, vuln_id, pkg_name, installed_version) is in ``accepted``.
+_IS_ACCEPTED_SQL = (
+    "EXISTS (SELECT 1 FROM accepted a WHERE a.ref = {u}.ref AND a.vuln_id = {u}.vuln_id"
+    " AND a.pkg_name IS {u}.pkg_name AND a.installed_version IS {u}.installed_version)"
+)
 
 # The severity rank of a finding row; shared so the counts and the units agree.
 _RANK_SQL = (
@@ -240,29 +255,38 @@ class ImageFixRow:
 
 @dataclass(frozen=True)
 class FixList[T]:
-    """One capped fix list, how many rows it has in all, and the Critical/High units that have no fix (and images)."""
+    """One capped fix list, how many rows it has in all, the Critical/High units that have no fix (and images), and
+    how many Critical/High units the list left out as accepted.
+    """
 
     rows: list[T]
     total: int
     no_fix: int
     no_fix_images: int
+    accepted: int
 
 
-def _fix_list(conn: sqlite3.Connection, run_id: int, listing: str, order: str, limit: int) -> list[sqlite3.Row]:
+def _fix_list(
+    conn: sqlite3.Connection, run_id: int, listing: str, order: str, limit: int, today: date | None
+) -> list[sqlite3.Row]:
     """``listing`` (a SELECT over ``units`` and ``ns`` with a ``total`` column) in ``order``, capped at ``limit``, beside
     the no-fix numbers of the same units, so one pass over the run's Critical/High units serves the list and the no-fix
-    line. There is always one row: an empty list leaves the listing's columns NULL.
+    line. ``units`` holds the units that are not accepted; ``accepted`` is how many were left out. There is always one
+    row: an empty list leaves the listing's columns NULL.
     """
     return conn.execute(
-        f"WITH units AS MATERIALIZED ({_FIX_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL})"  # noqa: S608
-        " SELECT s.no_fix, s.no_fix_images, l.* FROM"
-        " (SELECT COUNT(*) AS no_fix, COUNT(DISTINCT ref) AS no_fix_images FROM units WHERE fixed_version = '') s"
+        f"WITH every AS MATERIALIZED ({_FIX_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"  # noqa: S608
+        f" units AS MATERIALIZED (SELECT * FROM every x WHERE NOT {_IS_ACCEPTED_SQL.format(u='x')})"
+        " SELECT s.no_fix, s.no_fix_images, s.accepted, l.* FROM"
+        " (SELECT COUNT(*) AS no_fix, COUNT(DISTINCT ref) AS no_fix_images,"
+        "   (SELECT COUNT(*) FROM every) - (SELECT COUNT(*) FROM units) AS accepted"
+        "  FROM units WHERE fixed_version = '') s"
         f" LEFT JOIN (SELECT * FROM ({listing}) ORDER BY {order} LIMIT :limit) l ON 1 ORDER BY {order}",
-        {"run": run_id, "limit": limit},
+        {"run": run_id, "limit": limit, "today": _today(today)},
     ).fetchall()
 
 
-def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixList[FixRow]:
+def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None) -> FixList[FixRow]:
     """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are."""
     found = _fix_list(
         conn,
@@ -274,9 +298,10 @@ def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixLis
         " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version",
         "sev_rank DESC, images DESC, namespaces DESC, vuln_id, pkg_name, fixed_version",
         limit,
+        today,
     )
     groups = [g for g in found if g["vuln_id"] is not None]
-    samples = _samples(conn, run_id, groups) if groups else {}
+    samples = _samples(conn, run_id, groups, today) if groups else {}
     rows = [
         FixRow(
             vuln_id=g["vuln_id"],
@@ -291,19 +316,26 @@ def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixLis
         )
         for g in groups
     ]
-    return FixList(rows, groups[0]["total"] if groups else 0, found[0]["no_fix"], found[0]["no_fix_images"])
+    return FixList(
+        rows, groups[0]["total"] if groups else 0, found[0]["no_fix"], found[0]["no_fix_images"], found[0]["accepted"]
+    )
 
 
-def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -> dict[tuple, tuple[list, str | None]]:
-    """For each of the page's groups, up to ``SAMPLE_CAP`` (ref, namespaces) pairs and the group's CVE link, in one query."""
-    params: dict[str, object] = {"run": run_id, "cap": SAMPLE_CAP}
+def _samples(
+    conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row], today: date | None
+) -> dict[tuple, tuple[list, str | None]]:
+    """For each of the page's groups, up to ``SAMPLE_CAP`` (ref, namespaces) pairs and the group's CVE link, in one
+    query. Accepted units are left out, as the groups left them out.
+    """
+    params: dict[str, object] = {"run": run_id, "cap": SAMPLE_CAP, "today": _today(today)}
     values = []
     for i, g in enumerate(groups):
         params.update({f"v{i}": g["vuln_id"], f"p{i}": g["pkg_name"], f"f{i}": g["fixed_version"]})
         values.append(f"(:v{i}, :p{i}, :f{i})")
     rows = conn.execute(
         f"WITH wanted(vuln_id, pkg_name, fixed_version) AS (VALUES {', '.join(values)}),"  # noqa: S608
-        f" units AS MATERIALIZED ({_SAMPLE_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}),"
+        f" every AS MATERIALIZED ({_SAMPLE_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"
+        f" units AS MATERIALIZED (SELECT * FROM every x WHERE NOT {_IS_ACCEPTED_SQL.format(u='x')}),"
         " ranked AS (SELECT g.vuln_id, g.pkg_name, g.fixed_version, g.ref,"
         "   MAX(g.primary_url) OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version) AS group_url,"
         "   ROW_NUMBER() OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version ORDER BY g.ref) AS rn"
@@ -326,7 +358,9 @@ def _samples(conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row]) -
     return {key: (list(refs.items()), urls[key]) for key, refs in refs_of.items()}
 
 
-def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixList[ImageFixRow]:
+def fix_by_image(
+    conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None
+) -> FixList[ImageFixRow]:
     """The first ``limit`` images with a fixable Critical/High finding, worst first, and how many there are."""
     found = _fix_list(
         conn,
@@ -335,6 +369,7 @@ def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixL
         " COUNT(*) OVER () AS total FROM units GROUP BY ref HAVING fixable > 0",
         "critical DESC, high DESC, ref",
         limit,
+        today,
     )
     rows = [r for r in found if r["ref"] is not None]
     namespaces: dict[str, list[str]] = {}
@@ -346,7 +381,9 @@ def fix_by_image(conn: sqlite3.Connection, run_id: int, limit: int = 25) -> FixL
         ):
             namespaces.setdefault(row["ref"], []).append(row["namespace"])
     result = [ImageFixRow(r["ref"], namespaces.get(r["ref"], []), r["critical"], r["high"], r["fixable"]) for r in rows]
-    return FixList(result, rows[0]["total"] if rows else 0, found[0]["no_fix"], found[0]["no_fix_images"])
+    return FixList(
+        result, rows[0]["total"] if rows else 0, found[0]["no_fix"], found[0]["no_fix_images"], found[0]["accepted"]
+    )
 
 
 @dataclass(frozen=True)
@@ -405,6 +442,7 @@ class FindingFilter:
     q: str | None = None
     sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] = "severity"
     desc: bool = True
+    accepted: Literal["hide", "only", "all"] = "hide"
 
 
 # The distinct namespaces of each image in the run, as a sorted JSON array plus the smallest one (for sorting). Inner
@@ -470,15 +508,21 @@ GROUP BY p.ref, p.vuln_id, p.pkg_name, p.installed_version
 """
 
 
-def _filtered_cte(f: FindingFilter, run_id: int) -> tuple[str, dict[str, object]]:
-    """``WITH ... filtered AS (...)``: the lean units of the run that pass the filter.
+# Which units of ``kept`` the findings page shows, by ``FindingFilter.accepted``.
+_KEEP_SQL = {"hide": "accepted = 0", "only": "accepted = 1", "all": "1"}
+
+
+def _filtered_cte(f: FindingFilter, run_id: int, today: date | None) -> tuple[str, dict[str, object]]:
+    """``WITH ... filtered AS (...)``: the lean units of the run that pass the filter, each with ``accepted`` (0 or 1).
+
+    ``kept`` holds the units that pass every filter but the accepted one, so the page can say how many it left out.
 
     ``filtered`` stays a plain CTE over the materialized units: the count and the page read it again more cheaply than
     a third copy of 100,000 rows is written. The namespaces are joined in only when the filter or the sort reads them;
     the page fetches them for its own rows.
     """
     where: list[str] = []
-    params: dict[str, object] = {"run": run_id}
+    params: dict[str, object] = {"run": run_id, "today": _today(today)}
     if f.severities:
         ranks = {f"rank{i}": 4 - _SEVERITIES.index(name) for i, name in enumerate(f.severities)}
         where.append("u.sev_rank IN (" + ", ".join(f":{k}" for k in ranks) + ")")
@@ -506,7 +550,9 @@ def _filtered_cte(f: FindingFilter, run_id: int) -> tuple[str, dict[str, object]
     first_ns = ", ns.first_ns" if by_namespace else ""
     cte = (
         f"WITH units AS MATERIALIZED ({_LEAN_UNITS_SQL}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
-        f" filtered AS (SELECT u.*{first_ns} FROM {source}{clause})"
+        f" {ACCEPTED_CTES},"
+        f" kept AS (SELECT u.*{first_ns}, {_IS_ACCEPTED_SQL.format(u='u')} AS accepted FROM {source}{clause}),"
+        f" filtered AS (SELECT * FROM kept WHERE {_KEEP_SQL[f.accepted]})"
     )
     return cte, params
 
@@ -521,14 +567,16 @@ def _page_sql(cte: str, f: FindingFilter) -> str:
     forward, backward = _order_sql(f), _order_sql(f, reverse=True)
     severity = _SEVERITY_OF_RANK_SQL.format(rank="p.sev_rank")
     return (
-        f"{cte}, n AS (SELECT COUNT(*) AS total FROM filtered),"  # noqa: S608 - only module constants are interpolated
+        f"{cte}, n AS (SELECT COALESCE(SUM({_KEEP_SQL[f.accepted]}), 0) AS total,"  # noqa: S608
+        " COALESCE(SUM(accepted), 0) AS left_out FROM kept),"
         f" page AS MATERIALIZED (SELECT * FROM (SELECT * FROM filtered ORDER BY {forward}"
         "   LIMIT (SELECT CASE WHEN :offset <= total / 2 THEN :limit ELSE 0 END FROM n) OFFSET :offset)"
         f" UNION ALL SELECT * FROM (SELECT * FROM filtered ORDER BY {backward}"
         "   LIMIT (SELECT CASE WHEN :offset > total / 2 THEN MAX(0, MIN(:limit, total - :offset)) ELSE 0 END FROM n)"
         "   OFFSET (SELECT MAX(0, total - :offset - :limit) FROM n))),"
         f" detail AS ({_PAGE_DETAIL_SQL})"
-        " SELECT n.total, p.ref, p.vuln_id, p.pkg_name, p.installed_version, p.fixed_version, p.sev_rank, p.pkg_class,"
+        " SELECT n.total, n.left_out, p.ref, p.vuln_id, p.pkg_name, p.installed_version, p.fixed_version, p.sev_rank,"
+        " p.pkg_class, p.accepted,"
         f" {severity} AS severity, COALESCE(ns.namespaces, '[]') AS namespaces,"
         " d.repo, d.tag, d.digest, d.title, d.primary_url, d.targets"
         " FROM n LEFT JOIN page p ON 1 LEFT JOIN ns ON ns.ref = p.ref"
@@ -538,12 +586,20 @@ def _page_sql(cte: str, f: FindingFilter) -> str:
 
 
 def findings_page(
-    conn: sqlite3.Connection, run_id: int, f: FindingFilter, page: int, per_page: int = 100
-) -> tuple[list[sqlite3.Row], int]:
-    """One page of the run's finding units that pass ``f``, and how many pass in all (also for a page past the end)."""
-    cte, params = _filtered_cte(f, run_id)
+    conn: sqlite3.Connection,
+    run_id: int,
+    f: FindingFilter,
+    page: int,
+    per_page: int = 100,
+    *,
+    today: date | None = None,
+) -> tuple[list[sqlite3.Row], int, int]:
+    """One page of the run's finding units that pass ``f``, how many pass in all (also for a page past the end), and how
+    many accepted units pass every filter but the accepted one (those ``accepted="hide"`` leaves out).
+    """
+    cte, params = _filtered_cte(f, run_id, today)
     rows = conn.execute(_page_sql(cte, f), params | {"limit": per_page, "offset": (page - 1) * per_page}).fetchall()
-    return [r for r in rows if r["ref"] is not None], rows[0]["total"]
+    return [r for r in rows if r["ref"] is not None], rows[0]["total"], rows[0]["left_out"]
 
 
 def run_namespaces(conn: sqlite3.Connection, run_id: int) -> list[str]:

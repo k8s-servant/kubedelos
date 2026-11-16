@@ -116,6 +116,24 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE scan_run ADD COLUMN owner TEXT;
     """,
+    # 7: accepted risk (kubedelos.store.accepted). Matched on read, so a revoke or an expiry takes effect at once. A NULL
+    # context means all clusters; a NULL namespace, repo or package means anywhere. Dates are ISO text.
+    """
+    CREATE TABLE acceptance (
+        id INTEGER PRIMARY KEY,
+        vuln_id TEXT NOT NULL,
+        context TEXT,
+        namespace TEXT,
+        repo TEXT,
+        pkg_name TEXT,
+        reason TEXT NOT NULL,
+        owner TEXT NOT NULL,
+        expires_at TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        revoked_at TEXT
+    );
+    CREATE INDEX idx_acceptance_vuln ON acceptance(vuln_id);
+    """,
 ]
 
 

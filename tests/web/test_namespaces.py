@@ -60,7 +60,7 @@ def test_nav_lists_namespaces_between_findings_and_scans(client, seed):
     _seed(seed)
     nav = client.get("/namespaces").text.split('<nav aria-label="Main">', 1)[1].split("</nav>", 1)[0]
     labels = re.findall(r">([A-Z][a-z]+)</a>", nav)
-    assert labels == ["Dashboard", "Findings", "Namespaces", "Scans"]
+    assert labels == ["Dashboard", "Findings", "Namespaces", "Accepted", "Scans"]
     assert 'href="/namespaces" aria-current="page"' in nav
 
 
