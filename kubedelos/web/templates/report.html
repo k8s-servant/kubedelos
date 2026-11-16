@@ -1,0 +1,70 @@
+{#- The print sheet of one run: its header, numbers, the fix-first list and the failed images. The print stylesheet drops
+    the sidebar, so the browser's Print (or Save as PDF) gives this sheet alone. -#}
+{% extends "base.html" %}
+{% block title %}Report · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head report-head"><h1>Vulnerability report</h1></div>{% endblock %}
+{% block content %}
+{% if not shown %}
+  <section class="notice">
+    <p>No scans of <strong>{{ context }}</strong> yet. Start one on the <a href="{{ link('/scans') }}">Scans page</a>.</p>
+  </section>
+{% else %}
+<article class="report-sheet">
+  <p class="report-hint no-print">Use your browser's Print (Ctrl-P or ⌘P) to print this sheet or save it as PDF.</p>
+  <dl class="report-meta">
+    <dt>Cluster</dt><dd>{{ context }}</dd>
+    <dt>Run</dt><dd>Run {{ shown.number }} ({{ shown.status }})</dd>
+    <dt>Finished</dt><dd>{{ shown.finished_at.strftime("%Y-%m-%d %H:%M UTC") if shown.finished_at else "not recorded" }}</dd>
+    <dt>Scope</dt><dd>{{ describe_scope(shown.scope) }}, {{ describe_pkg_types(shown.pkg_types) }}</dd>
+    <dt>Images</dt><dd>{{ kpis.images }} scanned{% if kpis.images_failed %}, {{ kpis.images_failed }} failed{% endif %}</dd>
+  </dl>
+  {%- if shown.gaps %}
+  <p class="callout">This run could not list everything: {{ shown.gaps | join("; ") }}.</p>
+  {%- endif %}
+
+  <section aria-labelledby="counts-title">
+    <h2 id="counts-title">Findings</h2>
+    <dl class="report-counts">
+      {%- for name, count in kpis.by_severity.items() %}
+      <dt>{{ name | title }}</dt>
+      <dd>{{ count }}</dd>
+      {%- endfor %}
+      <dt>Total</dt>
+      <dd>{{ kpis.findings }}</dd>
+    </dl>
+    <p>{{ kpis.images_with_critical }} {{ kpis.images_with_critical | plural("image has", "images have") }} at least one Critical finding.</p>
+  </section>
+
+  <section aria-labelledby="fix-title">
+    <h2 id="fix-title">Fix first</h2>
+    {% if not fixes.rows %}
+    <p>No Critical or High findings have a released fix.</p>
+    {% else %}
+    <table class="report-table">
+      <thead><tr><th scope="col">Severity</th><th scope="col">CVE</th><th scope="col">Package</th><th scope="col">Fixed in</th><th scope="col" class="num">Images</th><th scope="col" class="num">Namespaces</th></tr></thead>
+      <tbody>
+        {%- for row in fixes.rows %}
+        <tr><td>{{ row.severity | title }}</td><td>{{ row.vuln_id }}</td><td>{{ row.pkg_name or "" }}</td><td>{{ row.fixed_version }}</td><td class="num">{{ row.images }}</td><td class="num">{{ row.namespaces }}</td></tr>
+        {%- endfor %}
+      </tbody>
+    </table>
+    {% if fixes.total > fixes.rows | length %}<p>showing {{ fixes.rows | length }} of {{ fixes.total }} fixes</p>{% endif %}
+    {% endif %}
+    {% if fixes.no_fix %}<p>{{ fixes.no_fix }} Critical/High {{ fixes.no_fix | plural("finding has", "findings have") }} no released fix yet, across {{ fixes.no_fix_images }} {{ fixes.no_fix_images | plural("image") }}.</p>{% endif %}
+    {% if fixes.accepted %}<p>{{ fixes.accepted }} accepted Critical/High {{ fixes.accepted | plural("finding") }} not listed.</p>{% endif %}
+  </section>
+
+  {% if failed %}
+  <section aria-labelledby="failed-title">
+    <h2 id="failed-title">Failed images</h2>
+    <ul class="report-failed">
+      {%- for ref, platform, kind, cause in failed %}
+      <li><code>{{ ref }}</code> [{{ platform }}] {{ kind }}: {{ cause }}</li>
+      {%- endfor %}
+    </ul>
+    {% if failed_total > failed | length %}<p>showing {{ failed | length }} of {{ failed_total }}</p>{% endif %}
+  </section>
+  {% endif %}
+</article>
+{% endif %}
+{% endblock %}

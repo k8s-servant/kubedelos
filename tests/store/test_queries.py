@@ -838,3 +838,20 @@ def test_findings_page_hides_accepted_units_by_default(db):
     assert page(accepted="all")[1:] == (4, 2)
     assert page(severities=("LOW",)) == ([], 0, 1)  # left out among the findings the other filters keep
     assert page(severities=("LOW",), accepted="all")[0] == [("a", "CVE-3", True)]
+
+
+def test_findings_export_has_every_row_of_the_view_in_its_order(db):
+    conn, repo = db
+    run_id = _seed_accepting(repo)
+    _accept(conn, "CVE-3")
+    rows = queries.findings_export(conn, run_id, FindingFilter(), today=ACCEPT_TODAY).fetchall()
+    assert [(r["ref"], r["vuln_id"], r["accepted"]) for r in rows] == [
+        ("a", "CVE-1", 0),
+        ("b", "CVE-1", 0),
+        ("a", "CVE-2", 0),
+    ]  # CVE-3 is accepted: hidden as on the page
+    assert json.loads(rows[0]["namespaces"]) == ["web"] and rows[0]["repo"] == "reg.example.com/app"
+    everything = queries.findings_export(conn, run_id, FindingFilter(accepted="all", sort="cve", desc=True))
+    assert [r["vuln_id"] for r in everything.fetchall()] == ["CVE-3", "CVE-2", "CVE-1", "CVE-1"]
+    narrowed = queries.findings_export(conn, run_id, FindingFilter(namespace="api", accepted="all")).fetchall()
+    assert [(r["ref"], r["vuln_id"]) for r in narrowed] == [("b", "CVE-1")]

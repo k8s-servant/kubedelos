@@ -585,11 +585,14 @@ GROUP BY p.ref, p.vuln_id, p.pkg_name, p.installed_version
 _KEEP_SQL = {"hide": "accepted = 0", "only": "accepted = 1", "all": "1"}
 
 
-def _filtered_cte(f: FindingFilter, run_id: int, today: date | None) -> tuple[str, dict[str, object]]:
+def _filtered_cte(
+    f: FindingFilter, run_id: int, today: date | None, units_sql: str = _LEAN_UNITS_SQL
+) -> tuple[str, dict[str, object]]:
     """``WITH ... filtered AS (...)``: the lean units of the run that pass the filter, each with ``accepted`` (0 or 1).
 
     ``kept`` holds the units that pass every filter but the accepted one, so the page can say how many it left out.
 
+    ``units_sql`` is the lean units by default; the export passes ``FINDING_UNITS_SQL`` for the text columns too.
     ``filtered`` stays a plain CTE over the materialized units: the count and the page read it again more cheaply than
     a third copy of 100,000 rows is written. The namespaces are joined in only when the filter or the sort reads them;
     the page fetches them for its own rows.
@@ -622,7 +625,7 @@ def _filtered_cte(f: FindingFilter, run_id: int, today: date | None) -> tuple[st
     source = "units u LEFT JOIN ns ON ns.ref = u.ref" if by_namespace else "units u"
     first_ns = ", ns.first_ns" if by_namespace else ""
     cte = (
-        f"WITH units AS MATERIALIZED ({_LEAN_UNITS_SQL}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
+        f"WITH units AS MATERIALIZED ({units_sql}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
         f" {ACCEPTED_CTES},"
         f" kept AS (SELECT u.*{first_ns}, {_IS_ACCEPTED_SQL.format(u='u')} AS accepted FROM {source}{clause}),"
         f" filtered AS (SELECT * FROM kept WHERE {_KEEP_SQL[f.accepted]})"
@@ -673,6 +676,20 @@ def findings_page(
     cte, params = _filtered_cte(f, run_id, today)
     rows = conn.execute(_page_sql(cte, f), params | {"limit": per_page, "offset": (page - 1) * per_page}).fetchall()
     return [r for r in rows if r["ref"] is not None], rows[0]["total"], rows[0]["left_out"]
+
+
+def findings_export(
+    conn: sqlite3.Connection, run_id: int, f: FindingFilter, *, today: date | None = None
+) -> sqlite3.Cursor:
+    """Every finding unit of the run that passes ``f``, in the page's order, with its text columns and namespaces (a
+    JSON array). A cursor, so a caller can stream a large run in batches; it groups the run's findings once.
+    """
+    cte, params = _filtered_cte(f, run_id, today, FINDING_UNITS_SQL)
+    return conn.execute(
+        f"{cte} SELECT x.*, COALESCE(ns.namespaces, '[]') AS namespaces"  # noqa: S608 - only module constants
+        f" FROM filtered x LEFT JOIN ns ON ns.ref = x.ref ORDER BY {_order_sql(f, 'x.')}",
+        params,
+    )
 
 
 def run_namespaces(conn: sqlite3.Connection, run_id: int) -> list[str]:

@@ -242,6 +242,7 @@ def dashboard(
         failed=[(r["ref"], r["platform"], r["error_kind"], error_cause(r["error"])) for r in failed_rows],
         failed_total=failed_total,
         failed_href=link(request, f"/scans/{run.id}/failed"),
+        report_href=link(request, "/report", run_id=run.id),
         login_hints=login_hints_for(auth_refs),
     )
     if run_id is None and newest_any is not None and newest_any.id > run.id:

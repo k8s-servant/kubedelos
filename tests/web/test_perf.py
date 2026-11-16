@@ -61,6 +61,7 @@ def test_query_plans_use_indexes(tmp_path):
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),
         "result_runs": lambda: queries.result_runs(conn, CONTEXT),
+        "findings_export": lambda: queries.findings_export(conn, run_id, queries.FindingFilter()).fetchmany(10),
     }
     offenders = {}
     for name, call in calls.items():
@@ -100,6 +101,7 @@ def test_pages_under_300ms(settings):
     pages = ["/", "/?by=image", "/findings", "/findings?q=lib&sort=package", f"/findings?page={last}"]
     pages += [f"/findings?sort={s}&dir={d}&page={middle}" for s in SORTS for d in ("asc", "desc")]
     pages += ["/namespaces", "/namespaces?sort=namespace&q=ns-1&has=HIGH"]
+    pages += ["/report"]
     pages += ["/diff", f"/diff?from={run_id - PRIOR_RUNS}&to={run_id}"]
     pages += ["/accepted", "/findings?accepted=only", f"/findings?accepted=all&sort=cve&page={middle}"]
     app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT, list_contexts=lambda: [CONTEXT])

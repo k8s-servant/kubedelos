@@ -63,6 +63,37 @@ def _row(request: Request, r, namespace: str | None) -> dict:
     }
 
 
+Sort = Literal["severity", "cve", "package", "image", "namespace", "fixed"]
+
+
+def view_filter(
+    severity: list[Severity] = Query([]),  # noqa: B008 - FastAPI declares query parameters this way
+    namespace: str | None = None,
+    cve: str | None = None,
+    package: str | None = None,
+    has_fix: Literal["any", "yes", "no"] = "any",
+    pkg: Literal["all", "os", "library"] = "all",
+    q: str | None = None,
+    sort: Sort | None = None,
+    accepted: Literal["hide", "only", "all"] = "hide",
+    direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
+) -> FindingFilter:
+    """The findings view the query string asks for; the findings page and its CSV read it the same way."""
+    sort_key = sort or "severity"
+    return FindingFilter(
+        severities=tuple(s.value for s in severity),
+        namespace=namespace or None,
+        cve=cve or None,
+        package=package or None,
+        has_fix=has_fix,
+        pkg=pkg,
+        q=q or None,
+        sort=sort_key,
+        desc=direction == "desc" if direction else sort_key == "severity",
+        accepted=accepted,
+    )
+
+
 @router.get("/findings", response_class=HTMLResponse)
 def findings(
     request: Request,
@@ -91,20 +122,8 @@ def findings(
             run = newest_run(conn, context, cluster_scope=False)
         if run is None:
             return render(request, "findings.html", ctx)
-        sort_key = sort or "severity"
-        desc = direction == "desc" if direction else sort_key == "severity"
-        flt = FindingFilter(
-            severities=tuple(s.value for s in severity),
-            namespace=namespace or None,
-            cve=cve or None,
-            package=package or None,
-            has_fix=has_fix,
-            pkg=pkg,
-            q=q or None,
-            sort=sort_key,
-            desc=desc,
-            accepted=accepted,
-        )
+        flt = view_filter(severity, namespace, cve, package, has_fix, pkg, q, sort, accepted, direction)
+        sort_key, desc = flt.sort, flt.desc
         today = request.app.state.clock().date()
         rows, total, left_out = findings_page(conn, run.id, flt, page, PER_PAGE, today=today)
         all_namespaces = run_namespaces(conn, run.id)
@@ -150,6 +169,7 @@ def findings(
         rows=[_row(request, r, flt.namespace) for r in rows],
         left_out=left_out if accepted == "hide" else 0,
         accepted_only_href=href(accepted="only", page=None),
+        csv_href=href(page=None).replace("/findings?", "/findings.csv?", 1),
         total=total,
         page=page,
         first=start,

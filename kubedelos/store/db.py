@@ -189,10 +189,14 @@ def connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def connect_readonly(path: Path) -> sqlite3.Connection:
-    """Open an existing database read-only. Never creates, migrates or writes; raises if the file is missing."""
+def connect_readonly(path: Path, *, check_same_thread: bool = True) -> sqlite3.Connection:
+    """Open an existing database read-only. Never creates, migrates or writes; raises if the file is missing.
+
+    ``check_same_thread=False`` is for a connection one consumer uses from several threads in turn, such as a streamed
+    response whose batches are produced on worker threads; it must never be shared by two at once.
+    """
     # as_uri() percent-escapes spaces and '#', which would otherwise end the URI path.
-    conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True)
+    conn = sqlite3.connect(f"{Path(path).resolve().as_uri()}?mode=ro", uri=True, check_same_thread=check_same_thread)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA busy_timeout = 5000")
     return conn
