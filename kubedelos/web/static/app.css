@@ -863,6 +863,26 @@ tbody tr:hover td {
   grid-column: span 2;
 }
 
+/* Settings: the settings in effect, then the files and the Trivy. Long paths break anywhere. */
+
+.settings-card {
+  margin-bottom: 1rem;
+}
+
+.settings-card th[scope="row"] {
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.settings-card .value {
+  overflow-wrap: anywhere;
+}
+
+.settings-card .source {
+  color: var(--muted);
+}
+
 /* Failed images: a card with a red left edge. */
 
 .card-error {

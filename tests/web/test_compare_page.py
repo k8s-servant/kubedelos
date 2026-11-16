@@ -118,7 +118,7 @@ def test_nav_dashboard_and_history_link_to_compare(client, seed):
     old, new = _pair(seed)
     nav = client.get("/diff").text.split('<nav aria-label="Main">', 1)[1].split("</nav>", 1)[0]
     assert re.findall(r">([A-Z][a-z]+)</a>", nav) == [
-        "Dashboard", "Findings", "Namespaces", "Compare", "Reports", "Accepted", "Scans",
+        "Dashboard", "Findings", "Namespaces", "Compare", "Reports", "Accepted", "Scans", "Settings",
     ]  # fmt: skip
     assert f'href="/diff?from={old}&amp;to={new}"' in client.get("/").text  # the change tiles
     assert f'href="/diff?to={new}">compare</a>' in client.get("/scans").text

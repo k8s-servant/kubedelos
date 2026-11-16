@@ -30,6 +30,7 @@ NAV = (
     ("Reports", "/reports"),
     ("Accepted", "/accepted"),
     ("Scans", "/scans"),
+    ("Settings", "/settings"),
 )
 
 

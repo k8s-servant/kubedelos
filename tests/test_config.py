@@ -1,10 +1,11 @@
+import re
 from pathlib import Path
 
 import platformdirs
 import pytest
 from pydantic import ValidationError
 
-from kubedelos.config import Settings
+from kubedelos.config import Settings, setting_sources
 
 
 def test_defaults_use_platformdirs(monkeypatch):
@@ -76,3 +77,21 @@ def test_scope_is_canonical():
         "namespaces": ["a", "b"], "exclude_namespaces": [], "namespace_selector": None, "selector": "app=web",
         "exclude_images": ["x", "y"],
     }  # fmt: skip
+
+
+def test_setting_sources_name_the_flag_the_environment_or_the_default():
+    settings = Settings(context="c", parallelism=2, scan_timeout_s=5)
+    environ = {"KUBEDELOS_PARALLELISM": "2", "kubedelos_scan_timeout_s": "5", "KUBEDELOS_CONTEXT": "x", "HOME": "/h"}
+    sources = setting_sources(settings, flags={"context"}, environ=environ)
+    assert set(sources) == set(Settings.model_fields)
+    assert sources["context"] == "flag"  # a flag wins over the variable, as in Settings(**flags)
+    assert sources["parallelism"] == "environment"
+    assert (
+        sources["scan_timeout_s"] == "environment"
+    )  # variable names are case-insensitive, as pydantic-settings reads them
+    assert sources["namespaces"] == "default"
+
+
+def test_no_setting_is_named_like_a_secret():
+    # The Settings page lists every field; a credential must never become one.
+    assert not [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
