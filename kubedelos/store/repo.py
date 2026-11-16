@@ -80,11 +80,11 @@ class Repo:
         image = result.image
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO image_result (run_id, image_key, ref, repo, tag, digest, platform, status, error_kind, error, os_family)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO image_result (run_id, image_key, ref, repo, tag, digest, platform, status, error_kind, error,"
+                " os_family, duration_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id, image.key, image.ref, image.repo, image.tag, image.digest, result.platform,
-                    result.status, result.error_kind, result.error, result.os_family,
+                    result.status, result.error_kind, result.error, result.os_family, result.duration_s,
                 ),
             )  # fmt: skip
             result_id = cur.lastrowid
@@ -132,9 +132,9 @@ class Repo:
         """Put ``result`` in place of the failure stored as ``result_id``; a row that is no longer a failure is kept."""
         with self._conn:
             cur = self._conn.execute(
-                "UPDATE image_result SET status = ?, error_kind = ?, error = ?, os_family = ?"
+                "UPDATE image_result SET status = ?, error_kind = ?, error = ?, os_family = ?, duration_s = ?"
                 " WHERE id = ? AND status = 'error'",
-                (result.status, result.error_kind, result.error, result.os_family, result_id),
+                (result.status, result.error_kind, result.error, result.os_family, result.duration_s, result_id),
             )
             if cur.rowcount == 1:
                 self._add_findings(result_id, result)

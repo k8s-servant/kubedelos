@@ -146,6 +146,11 @@ MIGRATIONS: list[str] = [
     CREATE UNIQUE INDEX idx_scan_run_number ON scan_run(context, number);
     CREATE UNIQUE INDEX idx_scan_run_number_no_context ON scan_run(number) WHERE context IS NULL;
     """,
+    # 9: how long each image's scan took (seconds, retry included), so the UI can show where a run's time went. NULL
+    # for cached results and for rows scanned before this migration.
+    """
+    ALTER TABLE image_result ADD COLUMN duration_s REAL;
+    """,
 ]
 
 

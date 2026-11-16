@@ -588,6 +588,22 @@ def test_a_passing_network_error_is_retried_once(tmp_path, monkeypatch):
     assert result.status == "ok" and len(calls) == 2
 
 
+def test_each_result_carries_how_long_its_image_took(tmp_path, monkeypatch):
+    clock = iter([100.0, 142.5])
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
+    _scripted(monkeypatch, ("timeout", "context deadline exceeded"))
+    (result,) = _scan_one(tmp_path)
+    assert result.duration_s == 42.5
+
+
+def test_a_retried_image_counts_both_attempts(tmp_path, monkeypatch):
+    clock = iter([10.0, 31.0])
+    monkeypatch.setattr(runner.time, "monotonic", lambda: next(clock))
+    _scripted(monkeypatch, ("trivy", _EOF_ERROR), (None, None))
+    (result,) = _scan_one(tmp_path)
+    assert result.status == "ok" and result.duration_s == 21.0
+
+
 def test_a_second_failure_is_recorded_as_failed_twice(tmp_path, monkeypatch):
     calls = _scripted(monkeypatch, ("trivy", _EOF_ERROR), ("trivy", "dial tcp: connection reset by peer"))
     (result,) = _scan_one(tmp_path)

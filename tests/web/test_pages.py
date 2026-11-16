@@ -6,7 +6,7 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.pages import open_db, open_db_rw, render, short_image
+from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image
 
 
 @pytest.fixture(autouse=True)
@@ -118,3 +118,19 @@ def test_awkward_context_names_are_escaped_and_encoded(client, kube_contexts):
     encoded = "arn%3Aaws%3Aeks%3Aeu-west-1%3A1%3Acluster%2Fa+b%26c%22%3E%3Cscript%3Ex%3C%2Fscript%3E"
     assert f'href="/findings?context={encoded}"' in html  # the nav link keeps it intact
     assert client.get("/findings", params={"context": name}).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "seconds, text",
+    [
+        (None, "—"),
+        (0, "0 s"),
+        (0.4, "0 s"),
+        (42.6, "43 s"),
+        (60, "1 min 0 s"),
+        (630.2, "10 min 30 s"),
+        (3725, "62 min 5 s"),
+    ],
+)
+def test_seconds_text(seconds, text):
+    assert seconds_text(seconds) == text

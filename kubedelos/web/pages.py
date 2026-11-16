@@ -135,6 +135,14 @@ def plural(count: int, singular: str, plural: str | None = None) -> str:
     return singular if count == 1 else plural or singular + "s"
 
 
+def seconds_text(seconds: float | None) -> str:
+    """A span of time as "s s" under a minute and "m min s s" above, rounded to the second; "—" when unknown."""
+    if seconds is None:
+        return "—"
+    minutes, rest = divmod(max(0, round(seconds)), 60)
+    return f"{minutes} min {rest} s" if minutes else f"{rest} s"
+
+
 def short_image(r: Any) -> str:
     """``repo:tag`` plus a short digest: what people recognise, where the full ref is 64 hex characters long."""
     if not r["repo"]:

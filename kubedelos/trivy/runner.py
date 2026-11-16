@@ -15,6 +15,7 @@ import re
 import signal
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
@@ -395,6 +396,11 @@ def scan_many(
             )
 
     def work(item: InventoryItem) -> ImageResult:
+        started = time.monotonic()
+        result = attempts(item)
+        return result.model_copy(update={"duration_s": round(time.monotonic() - started, 1)})
+
+    def attempts(item: InventoryItem) -> ImageResult:
         result = attempt(item)
         # The wait holds this worker's slot, so a burst of 503s briefly narrows the scan; one retry keeps that short.
         if not _passing(result) or cancel.wait(_RETRY_DELAY_S):

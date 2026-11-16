@@ -27,7 +27,7 @@ from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import UnknownContext, open_db, plural, render, shown_context
-from kubedelos.web.routes import accepted, dashboard, diff, failed, findings, namespaces, reports, scans
+from kubedelos.web.routes import accepted, dashboard, diff, failed, findings, namespaces, reports, scans, times
 from kubedelos.web.routes import settings as settings_page
 from kubedelos.web.security import Guard, install
 
@@ -135,6 +135,7 @@ def create_app(
     app.include_router(reports.router)
     app.include_router(accepted.router)
     app.include_router(failed.router)
+    app.include_router(times.router)
     app.include_router(scans.router)
     app.include_router(settings_page.router)
     install(app, guard)

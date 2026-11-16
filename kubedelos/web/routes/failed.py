@@ -39,7 +39,16 @@ from kubedelos.store.queries import (
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import RETRIED_PREFIX, ErrorKind, error_cause, error_text
 from kubedelos.web.jobs import ScanBusy
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_image, shown_context
+from kubedelos.web.pages import (
+    MAX_ID,
+    context_param,
+    link,
+    open_db,
+    render,
+    seconds_text,
+    short_image,
+    shown_context,
+)
 
 router = APIRouter()
 
@@ -92,6 +101,7 @@ def failure(row) -> dict:
         "cause": short_cause(row["error_kind"], error),
         "detail": error_text(error) or None,
         "retried": error.startswith(RETRIED_PREFIX),
+        "time": seconds_text(row["duration_s"]),
         "namespaces": json.loads(row["namespaces"]),
     }
 
@@ -177,6 +187,7 @@ def _page(
         "next_href": failed_href(request, run.id, kind=kind, page=page + 1) if page < last_page else None,
         "login_hints": login_hints_for(auth_refs),
         "scans_href": link(request, "/scans"),
+        "times_href": link(request, f"/scans/{run.id}/times"),
         "notes": notes,
         "retry": {
             "action": f"/scans/{run.id}/retry",
