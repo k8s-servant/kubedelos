@@ -226,4 +226,5 @@ def ui(
     typer.echo("Press Ctrl-C to stop.")
     if not no_browser:
         webbrowser.open(address)
-    server.serve(create_app(settings, context=name, token=token, port=port), sock)
+    flags = frozenset(k for k, v in {"context": context, "kubeconfig": kubeconfig}.items() if v is not None)
+    server.serve(create_app(settings, context=name, token=token, port=port, flags=flags), sock)

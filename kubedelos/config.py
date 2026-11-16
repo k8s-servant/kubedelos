@@ -1,8 +1,12 @@
-"""Runtime settings, loaded from ``KUBEDELOS_*`` environment variables."""
+"""Runtime settings, loaded from ``KUBEDELOS_*`` environment variables and the flags of ``kubedelos ui``.
+
+``setting_sources`` says where each value came from, for the UI's Settings page.
+"""
 
 import json
+from collections.abc import Collection, Mapping
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import platformdirs
 from pydantic import Field, field_validator
@@ -77,3 +81,23 @@ class Settings(BaseSettings):
     @property
     def db_path(self) -> Path:
         return self.data_dir / "kubedelos.db"
+
+
+Source = Literal["flag", "environment", "default"]
+
+
+def setting_sources(settings: Settings, *, flags: Collection[str], environ: Mapping[str, str]) -> dict[str, Source]:
+    """Where each field of ``settings`` came from: a flag (which wins, as in ``Settings(**flags)``), its
+    ``KUBEDELOS_*`` variable (matched case-insensitively, as pydantic-settings reads them), or the default.
+    """
+    prefix = settings.model_config.get("env_prefix", "")
+    names = {name.upper() for name in environ}
+    sources: dict[str, Source] = {}
+    for field in type(settings).model_fields:
+        if field in flags:
+            sources[field] = "flag"
+        elif (prefix + field).upper() in names:
+            sources[field] = "environment"
+        else:
+            sources[field] = "default"
+    return sources

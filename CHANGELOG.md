@@ -6,6 +6,7 @@
 
 - Package skeleton with the `kubedelos` entrypoint.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
+- A Settings page lists every setting the UI started with, its value and where it came from (flag, environment or default), plus the database file, data and cache directories, the Trivy in use and the log level. It is read-only and lists no credentials.
 - A Reports page in the sidebar picks a run and opens its print report, or picks a run and the findings filters and downloads the CSV.
 - Reports: the findings page downloads its view as a formula-safe CSV (every row, streamed), and a print sheet of a run gives its numbers, fix-first list and failed images for printing or saving as PDF.
 - Compare: a Compare page shows what changed between two runs of a cluster (new findings, fixed or gone, images added, gone and changed), matching images by repository so a tag bump does not read as everything fixed and everything new. It names scope differences, failed images and coverage gaps above the numbers.

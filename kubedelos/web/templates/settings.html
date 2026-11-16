@@ -1,0 +1,46 @@
+{#- The Settings page: every setting in effect with its value and where it came from, then the files, the Trivy and the
+    log level. Read-only. -#}
+{% extends "base.html" %}
+{% block title %}Settings · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Settings</h1></div>{% endblock %}
+{% block content %}
+  <p class="notice">The settings this <code>kubedelos ui</code> started with. Change one with its <code>KUBEDELOS_*</code> variable (or flag) and restart the UI. The Scans form can still change the scope, parallel images and package types for one scan.</p>
+  <section class="card settings-card" aria-labelledby="settings-title">
+    <h2 class="card-title" id="settings-title">Settings in effect</h2>
+    <div class="table-wrap">
+      <table class="settings">
+        <thead>
+          <tr>
+            <th scope="col">Setting</th>
+            <th scope="col">Value</th>
+            <th scope="col">Source</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr data-setting="{{ row.field }}">
+            <th scope="row"><code>{{ row.variable }}</code>{% if row.flag %} or <code>{{ row.flag }}</code>{% endif %}</th>
+            <td class="value">{{ row.value }}</td>
+            <td class="source">{{ row.source }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <section class="card settings-card" aria-labelledby="files-title">
+    <h2 class="card-title" id="files-title">Files and Trivy</h2>
+    <div class="table-wrap">
+      <table class="settings-files">
+        <tbody>
+          {%- for label, value in files %}
+          <tr>
+            <th scope="row">{{ label }}</th>
+            <td class="value">{{ value }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

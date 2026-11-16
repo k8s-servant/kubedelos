@@ -144,6 +144,10 @@ follows the system light or dark theme.
   images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,
   images, failures and duration; only `ok` and `partial` runs link to their results. Ctrl-C on `kubedelos ui` cancels
   a running scan, waits up to 10 seconds for the images in flight, then kills any Trivy process still running.
+- **Settings (`/settings`)**: every setting this `kubedelos ui` started with, read-only, with its `KUBEDELOS_*`
+  variable (or flag), its value and where the value came from (flag, environment or default), then the database file,
+  the data and cache directories, the Trivy in use and the log level. No credentials are listed: kubedelos holds none,
+  and registry logins stay in Docker's own config.
 
 Add `?run_id=N` to pin a page to one run.
 

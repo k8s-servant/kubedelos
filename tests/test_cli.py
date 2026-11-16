@@ -252,6 +252,15 @@ def test_ui_prints_url_and_opens_browser(ui_env):
     assert ui_env["served"] == [("the-app", ("sock", "127.0.0.1", 9444))]
 
 
+def test_ui_tells_the_app_which_settings_came_from_flags(ui_env):
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert ui_env["app"]["flags"] == frozenset()
+    r = CliRunner().invoke(app, ["ui", "--no-browser", "--context", "my-cluster"])
+    assert r.exit_code == 0, r.output
+    assert ui_env["app"]["flags"] == frozenset({"context"})
+
+
 def test_ui_no_browser_does_not_open_one(ui_env):
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output

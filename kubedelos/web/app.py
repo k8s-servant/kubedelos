@@ -28,6 +28,7 @@ from kubedelos.kube import client as kube_client
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import UnknownContext, open_db, plural, render, shown_context
 from kubedelos.web.routes import accepted, dashboard, diff, failed, findings, namespaces, reports, scans
+from kubedelos.web.routes import settings as settings_page
 from kubedelos.web.security import Guard, install
 
 _HERE = Path(__file__).parent
@@ -94,13 +95,16 @@ def create_app(
     port: int,
     clock: Callable[[], datetime] = _utcnow,
     list_contexts: Callable[[], list[str]] | None = None,
+    flags: frozenset[str] = frozenset(),
 ) -> FastAPI:
     """Build the UI. ``context`` is the one shown by default, ``token`` the startup secret, ``port`` what the Host
-    check expects, and ``list_contexts`` lists the kubeconfig's contexts (read on each page)."""
+    check expects, ``list_contexts`` lists the kubeconfig's contexts (read on each page), and ``flags`` names the
+    settings given as flags to ``kubedelos ui`` (for the Settings page)."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     guard = Guard(token, port)
     app.state.settings = settings
     app.state.context = context
+    app.state.flags = flags
     app.state.list_contexts = list_contexts or (lambda: kube_client.list_contexts(settings))
     app.state.clock = clock
     app.state.guard = guard
@@ -132,5 +136,6 @@ def create_app(
     app.include_router(accepted.router)
     app.include_router(failed.router)
     app.include_router(scans.router)
+    app.include_router(settings_page.router)
     install(app, guard)
     return app
