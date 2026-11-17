@@ -45,6 +45,7 @@
 
 ### Bug Fixes
 
+- UI polish: the KPI tiles put the change line right under the number instead of at the tile bottom; the findings table names each image short (the full ref is its tooltip), so rows stay one line high; installed versions, with their "+N", never wrap; status chips use the mockup grey.
 - The About and Settings pages give their label column one width on wide screens, so the values line up from card to card.
 - The namespaces filter no longer answers 400 "invalid parameter: has" when "any severity" is selected, and a 400 page keeps the cluster it was shown for.
 - Static files are served under a content-hashed URL, so a browser never pairs a new page with a stylesheet it cached from an older release.

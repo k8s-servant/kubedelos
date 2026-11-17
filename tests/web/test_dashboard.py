@@ -141,11 +141,12 @@ def test_fresh_run_is_not_stale(client, seed):
 def test_sidebar_freshness_dot(client, seed):
     _run(seed)
     finished = datetime.fromisoformat(seed.repo.get_run(1)["finished_at"])
-    seed.clock.now = finished + timedelta(minutes=5) - timedelta(minutes=1)  # the clock ticks a minute per call
+    seed.clock.step = timedelta(0)
+    seed.clock.now = finished + timedelta(minutes=5)
     fresh = client.get("/").text
     sidebar = _sidebar(fresh)
     assert '<span class="fresh">scanned 5 min ago</span>' in sidebar
-    seed.clock.now = finished + timedelta(hours=30) - timedelta(minutes=1)
+    seed.clock.now = finished + timedelta(hours=30)
     stale = client.get("/").text
     assert '<span class="stale">scanned 30 h ago</span>' in _sidebar(stale)
     assert "connected" not in fresh and "connected" not in stale

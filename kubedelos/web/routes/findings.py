@@ -22,7 +22,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_image, shown_context
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_name, shown_context
 
 router = APIRouter()
 
@@ -57,7 +57,7 @@ def _row(request: Request, r, namespace: str | None) -> dict:
         "fixed": r["fixed_version"],
         "pkg_class": r["pkg_class"],
         "ref": r["ref"],
-        "image": short_image({"repo": r["repo"], "tag": r["tag"], "digest": r["digest"], "image": r["ref"]}),
+        "image": short_name(r["ref"]),
         "namespaces": namespaces[:NAMESPACES_SHOWN],
         "more_namespaces": max(0, len(namespaces) - NAMESPACES_SHOWN),
     }

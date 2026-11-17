@@ -30,7 +30,7 @@ from kubedelos.store.queries import (
     run_label,
     worst_images,
 )
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, plural, render, shown_context
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, plural, render, short_name, shown_context
 from kubedelos.web.routes.failed import KIND_HELP, failed_href, retry_problem
 
 router = APIRouter()
@@ -39,7 +39,6 @@ CAUTION = "either run had failed images or skipped namespaces"
 # The narrowest bar segment, in percent of the bar. A KPI tile is about 220 px wide on a laptop, so 2.5 is about 5 px:
 # enough to see a handful of Critical among thousands next to its 2 px separator and the bar's rounded end.
 MIN_SHARE = 2.5
-TAG_SHOWN = 16  # longer tags (a kind build such as v20251212-v0.29.0-alpha-105-g20ccfc88) are cut to their first 10
 
 
 @dataclass(frozen=True)
@@ -128,18 +127,6 @@ def _shares(run_id: int, by_severity: dict[str, int], context: str | None = None
     return shares
 
 
-def _short_ref(ref: str) -> str:
-    """The image's own name (the last path segment) with its tag, or with ``sha256:`` and 8 hex of a digest-only ref.
-
-    A tag over ``TAG_SHOWN`` characters keeps its first 10 and an ellipsis; the page puts the full ref in a tooltip.
-    """
-    name, _, digest = ref.partition("@")
-    image, _, tag = name.rsplit("/", 1)[-1].partition(":")  # a registry port sits before the last slash
-    if tag:
-        return f"{image}:{tag if len(tag) <= TAG_SHOWN else tag[:10] + chr(0x2026)}"
-    return f"{image}@{digest[:15]}" if digest else image
-
-
 def _worst(run_id: int, rows: list[WorstImage], context: str | None = None) -> list[WorstBar]:
     """The worst images as bars scaled to the first (worst) one; empty when the run has no Critical or High."""
     if not rows:
@@ -152,7 +139,7 @@ def _worst(run_id: int, rows: list[WorstImage], context: str | None = None) -> l
         bars.append(
             WorstBar(
                 ref=w.ref,
-                short=_short_ref(w.ref),
+                short=short_name(w.ref),
                 critical=w.critical,
                 high=w.high,
                 critical_width=critical_width,

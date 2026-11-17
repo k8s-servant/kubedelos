@@ -24,6 +24,27 @@ def _put(seed, run_id, ref, findings, namespaces=("ns",)):
     seed.repo.add_result(run_id, item, result)
 
 
+def test_image_cell_shows_the_short_name_with_the_full_ref_on_hover(client, seed):
+    run_id = _run(seed)
+    ref = "reg.example.com/team/app:1@sha256:" + "a" * 64
+    _put(seed, run_id, ref, [_f("CVE-1")])
+    html = client.get("/findings").text
+    assert f'<span class="ref" title="{ref}">app:1</span>' in html
+
+
+def test_image_cell_and_installed_version_stay_on_one_line():
+    """A row stays one line high: the short name and the installed version (a hyphen is no place to break) don't wrap."""
+    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
+    assert "white-space: nowrap" in re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
+    assert re.search(r"\.version\.installed \{[^}]*max-width: none;[^}]*white-space: nowrap;", css)
+
+
+def test_installed_version_never_wraps(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "reg.example.com/app:1", [_f("CVE-1")])
+    assert '<td class="version installed">1.0</td>' in client.get("/findings").text
+
+
 def _f(vuln, sev="HIGH", *, pkg="openssl", url=None, pkg_class="os"):
     return Finding(
         vuln_id=vuln,
@@ -67,7 +88,7 @@ def test_row_columns(client, seed):
     assert '<a href="https://example.com/CVE-1" rel="noopener noreferrer">CVE-1</a>' in html
     assert "javascript:" not in html
     assert ">High<" in html and "1.0" in html and "1.1" in html
-    assert 'title="reg.example.com/app:1"' in html and "reg.example.com/<wbr>app:1@sha256:aaaaaaaa" in html
+    assert '<span class="ref" title="reg.example.com/app:1">app:1</span>' in html
 
 
 def test_filters_round_trip_in_links(client, seed):
@@ -210,15 +231,8 @@ def test_filters_are_one_card_with_severity_pills(client, seed):
     assert re.search(r'aria-current="page">1<', pager)
     assert '<span class="sev sev-high">High</span>' in html
     assert '<td class="version fixed"><span class="v">1.1</span></td>' in html
-    assert re.search(r'<td class="version">1\.0</td>', html)
+    assert '<td class="version installed">1.0</td>' in html
     assert re.search(r'<td class="cve">\s*(<a [^>]*>)?CVE-0', html)
-
-
-def test_image_column_keeps_a_readable_width_instead_of_collapsing():
-    """overflow-wrap: anywhere alone shrinks the column's min-content to one character per line."""
-    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
-    block = re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
-    assert "min-width" in block
 
 
 def test_versions_wrap_between_versions_and_ids_stay_whole(client, seed):
@@ -257,20 +271,6 @@ def test_filters_are_an_even_grid_with_steady_pills(client, seed):
     assert re.search(r"\.pill::before \{[^}]*width: 0\.75rem;", css)
     assert re.search(r"\.pill:has\(input:checked\)::before \{\s*content: \"\\2713\";\s*background: none;\s*\}", css)
     assert ".pill:focus-within" not in css and ".pill:has(input:focus-visible)" in css
-
-
-def test_image_refs_break_at_their_slashes():
-    """A ref breaks after each slash, never mid-name, so the image column stays narrow enough for namespaces."""
-    css = (Path(kubedelos.web.__file__).parent / "static" / "app.css").read_text()
-    block = re.search(r"\.findings \.ref \{([^}]*)\}", css).group(1)
-    assert "overflow-wrap: break-word" in block and "anywhere" not in block
-
-
-def test_image_ref_has_a_break_after_each_slash(client, seed):
-    run_id = _run(seed)
-    _put(seed, run_id, "reg.example.com/team/app:1", [_f("CVE-1")])
-    html = client.get(f"/findings?run_id={run_id}").text
-    assert ">reg.example.com/<wbr>app:1@sha256:aaaaaaaa</span>" in html
 
 
 def test_findings_keep_the_shown_context_in_links_and_the_filter_form(client, seed, kube_contexts):
