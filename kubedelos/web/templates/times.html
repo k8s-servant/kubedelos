@@ -1,0 +1,43 @@
+{#- The scan times page: a summary of where a run's scanning time went, then its slowest images. -#}
+{% extends "base.html" %}
+{% block title %}Scan times · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>Scan times of run {{ shown_run.number }}</h1></div>{% endblock %}
+{% block content %}
+  {%- if not timed %}
+  <section class="notice"><p>No scan times for run {{ shown_run.number }}: it was scanned before kubedelos recorded them, or every image came from the cache. <a href="{{ scans_href }}">Back to Scans</a>.</p></section>
+  {%- else %}
+  <ul class="chips times-summary">
+    {%- for chip in chips %}
+    <li class="chip">{{ chip }}</li>
+    {%- endfor %}
+  </ul>
+  {%- if parallel_note %}
+  <p class="hint">Each time runs from the start of an image's scan to its result, downloads and a retry included. Images scan in parallel, so the times add up to more than the run took.</p>
+  {%- endif %}
+  <div class="card">
+    <h2 class="card-title">Slowest images{% if timed > shown %} (the {{ shown }} slowest of {{ timed }}){% endif %}</h2>
+    <div class="table-wrap">
+      <table class="times">
+        <thead>
+          <tr>
+            <th scope="col">Image</th>
+            <th scope="col">Platform</th>
+            <th scope="col">Result</th>
+            <th scope="col" class="num">Time</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for row in rows %}
+          <tr>
+            <td><code class="ref" title="{{ row.ref }}">{{ row.short }}</code></td>
+            <td>{{ row.platform }}</td>
+            <td>{% if row.failed %}<a class="chip chip-bad" href="{{ failed_href }}">{{ row.status }}</a>{% else %}<span class="chip chip-ok">{{ row.status }}</span>{% endif %}</td>
+            <td class="num">{{ row.time }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+  {%- endif %}
+{% endblock %}

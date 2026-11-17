@@ -58,6 +58,7 @@ def test_query_plans_use_indexes(tmp_path):
         "findings_page q": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(q="lib"), 1),
         "failed_images": lambda: queries.failed_images(conn, run_id),
         "failure_kinds": lambda: queries.failure_kinds(conn, run_id),
+        "scan_times": lambda: queries.scan_times(conn, run_id),
         "run_failures kind": lambda: queries.run_failures(conn, run_id, limit=100, kind="timeout"),
         "run_namespaces": lambda: queries.run_namespaces(conn, run_id),
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
@@ -96,6 +97,8 @@ def test_pages_under_300ms(settings):
         seed_large(conn)
     run_id = seed_large(conn)
     seed_acceptances(conn)
+    with conn:  # every image timed, so the times page sorts the whole run
+        conn.execute("UPDATE image_result SET duration_s = id % 900 + 0.5")
     _, total, _ = queries.findings_page(conn, run_id, queries.FindingFilter(), 1)
     conn.close()
     last = -(-total // 100)
@@ -103,7 +106,7 @@ def test_pages_under_300ms(settings):
     pages = ["/", "/?by=image", "/findings", "/findings?q=lib&sort=package", f"/findings?page={last}"]
     pages += [f"/findings?sort={s}&dir={d}&page={middle}" for s in SORTS for d in ("asc", "desc")]
     pages += ["/namespaces", "/namespaces?sort=namespace&q=ns-1&has=HIGH"]
-    pages += ["/report", "/reports", "/settings"]
+    pages += ["/report", "/reports", "/settings", f"/scans/{run_id}/times"]
     pages += ["/diff", f"/diff?from={run_id - PRIOR_RUNS}&to={run_id}"]
     pages += ["/accepted", "/findings?accepted=only", f"/findings?accepted=all&sort=cve&page={middle}"]
     app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT, list_contexts=lambda: [CONTEXT])

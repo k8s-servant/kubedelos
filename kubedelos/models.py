@@ -118,3 +118,4 @@ class ImageResult(BaseModel):
     findings: list[Finding] = []
     os_family: str | None = None
     scanned_image_id: str | None = None  # Trivy's Metadata.ImageID: the config hash of the image it actually scanned
+    duration_s: float | None = None  # wall time of this image's scan, retry included; None for a cached result

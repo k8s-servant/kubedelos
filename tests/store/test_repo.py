@@ -474,3 +474,18 @@ def test_settle_retry_marks_the_run_ok_when_nothing_fails(tmp_path):
     assert repo.settle_retry(run, retried=2) == "ok"
     assert repo.get_run(run)["status"] == "ok" and repo.get_run(run)["images_error"] == 0
     assert repo.run_warnings(run)[0]["text"].endswith(": 2 scanned, 0 still failing")
+
+
+def test_results_keep_how_long_each_image_took(tmp_path):
+    conn = connect(tmp_path / "k.db")
+    repo = Repo(conn)
+    run_id = repo.start_run("ctx", "ui", "0.76.1", scan_level="library,os")
+    image = ImageRef(ref="reg.example.com/a:1", repo="reg.example.com/a", tag="1")
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
+    failed = ImageResult(image=image, platform="linux/amd64", status="error", error_kind="timeout", duration_s=630.2)
+    repo.add_result(run_id, item, failed)
+    (row_id,) = conn.execute("SELECT id FROM image_result").fetchone()
+    assert conn.execute("SELECT duration_s FROM image_result").fetchone()[0] == 630.2
+    repo.replace_result(row_id, ImageResult(image=image, platform="linux/amd64", status="ok", duration_s=95.0))
+    assert conn.execute("SELECT duration_s FROM image_result").fetchone()[0] == 95.0
+    conn.close()

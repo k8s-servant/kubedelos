@@ -68,7 +68,7 @@ def _fake_scan(calls, fail_ref=None):
             else:
                 f = Finding(vuln_id="CVE-1", pkg_name="p", installed_version="1", severity=Severity.HIGH,
                             target="t", pkg_type="os")  # fmt: skip
-                r = ImageResult(image=item.image, platform=item.platform, status="ok", findings=[f])
+                r = ImageResult(image=item.image, platform=item.platform, status="ok", findings=[f], duration_s=12.5)
             on_result(r)
 
     return scan_many
@@ -167,6 +167,16 @@ def test_cached_result_stores_current_ref(env, monkeypatch):
     out = service.run_scan(settings, api=api, repo=repo)
     row = repo._conn.execute("SELECT ref, tag, status FROM image_result WHERE run_id = ?", (out.run_id,)).fetchone()
     assert (row["ref"], row["tag"], row["status"]) == (f"reg.io/a@{D1}", "2", "cached")
+
+
+def test_a_cached_result_records_no_scan_time(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    first = service.run_scan(settings, api=_api(), repo=repo)
+    second = service.run_scan(settings, api=_api(), repo=repo)
+    sql = "SELECT status, duration_s FROM image_result WHERE run_id = ?"
+    assert {tuple(r) for r in repo._conn.execute(sql, (first.run_id,))} == {("ok", 12.5)}
+    assert {tuple(r) for r in repo._conn.execute(sql, (second.run_id,))} == {("cached", None)}
 
 
 @pytest.mark.parametrize("bad", ["-oyaml", "nginx --help", "reg.io/a:1\nx", "reg.io/" + "a" * 600])

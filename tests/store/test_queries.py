@@ -30,6 +30,7 @@ from kubedelos.store.queries import (
     run_failures,
     run_history,
     run_namespaces,
+    scan_times,
     worst_images,
 )
 from kubedelos.store.repo import Repo
@@ -501,6 +502,42 @@ def test_a_kind_this_version_does_not_know_counts_as_unknown(db):
     conn.execute("UPDATE image_result SET error_kind = 'oom' WHERE ref = 'reg.example.com/o:1'")
     assert failure_kinds(conn, run_id) == [("unknown", 1)]
     assert [r["ref"] for r in run_failures(conn, run_id, limit=10, kind="unknown")[0]] == ["reg.example.com/o:1"]
+
+
+def _timed(repo, run_id, ref, seconds, status="ok", kind=None):
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1")
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
+    repo.add_result(
+        run_id,
+        item,
+        ImageResult(image=image, platform="linux/amd64", status=status, error_kind=kind, duration_s=seconds),
+    )
+
+
+def test_scan_times_slowest_first_with_a_summary(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for i in range(12):
+        _timed(repo, run_id, f"reg.example.com/s{i:02}:1", float(i + 1))
+    _timed(repo, run_id, "reg.example.com/big:1", 630.0, status="error", kind="timeout")
+    _timed(repo, run_id, "reg.example.com/c:1", None, status="cached")
+    rows, summary = scan_times(conn, run_id, limit=3)
+    assert [(r["ref"], r["duration_s"]) for r in rows] == [
+        ("reg.example.com/big:1", 630.0), ("reg.example.com/s11:1", 12.0), ("reg.example.com/s10:1", 11.0),
+    ]  # fmt: skip
+    assert {"repo", "tag", "digest", "platform", "status", "error_kind"} <= set(rows[0].keys())
+    assert summary.timed == 13 and summary.cached == 1
+    assert summary.total_s == 630.0 + sum(range(1, 13)) and summary.longest_s == 630.0
+    slowest_ten = 630.0 + sum(range(4, 13))
+    assert summary.slowest_share == pytest.approx(slowest_ten / summary.total_s)
+
+
+def test_scan_times_of_a_run_without_times(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _timed(repo, run_id, "reg.example.com/a:1", None)
+    rows, summary = scan_times(conn, run_id)
+    assert rows == [] and summary.timed == 0 and summary.total_s == 0 and summary.slowest_share is None
 
 
 def test_auth_failed_refs_ignores_other_failures(db):

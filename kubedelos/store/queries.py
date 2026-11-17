@@ -499,7 +499,7 @@ def run_failures(
     narrow = f" AND {_KIND_SQL.format(col='r.error_kind')} = :kind" if kind else ""
     params = {"run": run_id, "kind": kind, "limit": limit, "offset": offset}
     rows = conn.execute(
-        "SELECT r.ref, r.repo, r.tag, r.digest, r.platform, r.error_kind, r.error,"  # noqa: S608 - only constants
+        "SELECT r.ref, r.repo, r.tag, r.digest, r.platform, r.error_kind, r.error, r.duration_s,"  # noqa: S608 - only constants
         " (SELECT json_group_array(namespace) FROM (SELECT DISTINCT w.namespace FROM image_result o"
         "   JOIN workload w ON w.image_result_id = o.id WHERE o.run_id = r.run_id AND o.ref = r.ref"
         "   ORDER BY w.namespace)) AS namespaces"
@@ -524,6 +524,41 @@ def failure_kinds(conn: sqlite3.Connection, run_id: int) -> list[tuple[str, int]
         (run_id,),
     )
     return [(row["kind"], row["n"]) for row in rows]
+
+
+@dataclass(frozen=True)
+class ScanTimes:
+    """How a run's scanning time was spent. Times overlap when images scan in parallel."""
+
+    timed: int  # images with a recorded time
+    cached: int  # images taken from the cache, which took no scan
+    total_s: float  # the times added up
+    longest_s: float | None
+    slowest_share: float | None  # the part of ``total_s`` the ten slowest images took
+
+
+SLOWEST_SHARE_OF = 10
+
+
+def scan_times(conn: sqlite3.Connection, run_id: int, limit: int = 50) -> tuple[list[sqlite3.Row], ScanTimes]:
+    """The run's ``limit`` slowest images, slowest first, and a summary of its scan times."""
+    rows = conn.execute(
+        "SELECT ref, repo, tag, digest, platform, status, error_kind, duration_s FROM image_result"
+        " WHERE run_id = ? AND duration_s IS NOT NULL ORDER BY duration_s DESC, ref LIMIT ?",
+        (run_id, limit),
+    ).fetchall()
+    timed, cached, total, longest = conn.execute(
+        "SELECT COUNT(duration_s), COALESCE(SUM(status = 'cached'), 0), COALESCE(SUM(duration_s), 0), MAX(duration_s)"
+        " FROM image_result WHERE run_id = ?",
+        (run_id,),
+    ).fetchone()
+    top = conn.execute(
+        "SELECT COALESCE(SUM(duration_s), 0) FROM (SELECT duration_s FROM image_result"
+        " WHERE run_id = ? AND duration_s IS NOT NULL ORDER BY duration_s DESC LIMIT ?)",
+        (run_id, SLOWEST_SHARE_OF),
+    ).fetchone()[0]
+    share = top / total if total else None
+    return rows, ScanTimes(timed=timed, cached=cached, total_s=total, longest_s=longest, slowest_share=share)
 
 
 def retry_notes(conn: sqlite3.Connection, run_id: int) -> list[str]:

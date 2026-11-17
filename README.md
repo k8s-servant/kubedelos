@@ -144,6 +144,12 @@ follows the system light or dark theme.
   images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,
   images, failures and duration; only `ok` and `partial` runs link to their results. Ctrl-C on `kubedelos ui` cancels
   a running scan, waits up to 10 seconds for the images in flight, then kills any Trivy process still running.
+  Each finished run's duration links to its scan times.
+- **Scan times (`/scans/<run>/times`)**: where a run's scanning time went. Each image's scan is timed, from start to
+  result with downloads and a retry included, and stored with its result (schema migration 9). The page lists the 50
+  slowest images with their result, and sums up: images timed, cached, the times added up, the longest, and the part
+  the ten slowest took, which tells a few huge images from many ordinary ones. The failures page shows each failure's
+  time too. Runs scanned before this have no times.
 - **Settings (`/settings`)**: every setting this `kubedelos ui` started with, read-only, with its `KUBEDELOS_*`
   variable (or flag), its value and where the value came from (flag, environment or default), then the database file,
   the data and cache directories, the Trivy in use and the log level. No credentials are listed: kubedelos holds none,

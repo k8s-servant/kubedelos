@@ -37,6 +37,7 @@ from kubedelos.web.pages import (
     open_db_rw,
     render,
     scannable_contexts,
+    seconds_text,
     short_image,
     shown_context,
 )
@@ -76,8 +77,7 @@ def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
     """How long a run took, as "s s" under a minute and "m min s s" above, or "—" while it has no end."""
     if finished_at is None:
         return "—"
-    minutes, seconds = divmod(max(0, int((finished_at - started_at).total_seconds())), 60)
-    return f"{minutes} min {seconds} s" if minutes else f"{seconds} s"
+    return seconds_text(int((finished_at - started_at).total_seconds()))
 
 
 def scans_href(page: int, context: str | None = None) -> str:
@@ -106,6 +106,7 @@ def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> 
         # The newest result run's failures can be retried; the failures page has the form and the last word on it.
         "retry_href": link(request, f"/scans/{run.id}/failed") + "#retry" if run.id == retryable_id else None,
         "duration": duration_text(run.started_at, run.finished_at),
+        "times_href": link(request, f"/scans/{run.id}/times") if run.status != "running" else None,
     }
 
 

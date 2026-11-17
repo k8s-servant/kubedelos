@@ -193,7 +193,8 @@ def _scan(
         if cached is None:
             todo.append(item)
         else:
-            record(item, cached.model_copy(update={"status": "cached", "image": item.image, "platform": item.platform}))
+            update = {"status": "cached", "image": item.image, "platform": item.platform, "duration_s": None}
+            record(item, cached.model_copy(update=update))
 
     by_key = {(i.image.key, i.platform): i for i in todo}
 
