@@ -310,6 +310,22 @@ def test_invalid_selector_is_a_clear_error():
         collect(api, Settings(selector="app in ("))
 
 
+def test_selector_rejected_only_by_the_workload_list_is_a_clear_error():
+    # The pod list accepted the selector, but listing Deployments with it answered 400.
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]}, bad_request={"list_deployments"})
+    with pytest.raises(ValueError, match=r"invalid label selector 'app=web': Bad Request"):
+        collect(api, Settings(selector="app=web"))
+
+
+def test_bad_request_without_a_selector_is_not_blamed_on_one():
+    from kubernetes.client.rest import ApiException
+
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]}, bad_request={"list_pods"})
+    with pytest.raises(ApiException) as raised:
+        collect(api, Settings())
+    assert raised.value.status == 400
+
+
 @pytest.mark.parametrize("pattern", ["nginx:*", "library/nginx:*", "docker.io/library/nginx:*"])
 def test_exclude_image_matches_any_docker_hub_spelling(pattern):
     api = FakeKubeApi(
@@ -333,7 +349,8 @@ def test_exclude_image_keeps_others_and_warns():
 def test_exclude_image_digest_only_ref():
     image = f"registry.example/team/app@{DIGEST}"
     api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a", image=image)]})
-    assert collect(api, Settings(exclude_images=["*:1.19"]))[0] != []
+    # A pattern for every tag of this very repo: a ref with no tag must not match it.
+    assert collect(api, Settings(exclude_images=["registry.example/team/app:*"]))[0] != []
     assert collect(api, Settings(exclude_images=["registry.example/team/*"]))[0] == []
 
 

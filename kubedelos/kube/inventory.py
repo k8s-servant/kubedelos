@@ -180,7 +180,8 @@ def _select_namespaces(api: KubeApi, settings: Settings, warnings: list[Inventor
         found = [V1Namespace(metadata=V1ObjectMeta(name=name)) for name in settings.namespaces]
     unmatched: set[str] = set()
     if selector is not None and wanted - {ns.metadata.name for ns in found}:
-        # A named namespace the selector dropped is not missing: say so instead of reporting it as not found.
+        # A named namespace the selector dropped is not missing: say so instead of reporting it as not found. The
+        # unfiltered list needs no handling of its own: the filtered list above just succeeded with the same rights.
         unmatched = (wanted & {ns.metadata.name for ns in api.list_namespaces()}) - {ns.metadata.name for ns in found}
         for name in sorted(unmatched):
             warnings.append(
