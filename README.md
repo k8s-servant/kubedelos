@@ -206,8 +206,9 @@ page can change the scope, parallelism and package types for one scan.
 | `KUBEDELOS_PARALLELISM` | `4` images at once (1 to 32) |
 | `KUBEDELOS_PKG_TYPES` | `os,library` (comma-separated: `os`, `library` or both) |
 | `KUBEDELOS_SCAN_TIMEOUT_S` | `600` seconds per image |
+| `KUBEDELOS_LAYER_CACHE` | `true`: each parallel scan keeps Trivy's layer cache on disk (`<cache dir>/trivy-layers`, 32 slots of at most 128 MB) so a rescan skips layers it has seen; `false` keeps it in memory |
 | `KUBEDELOS_TRIVY_PATH` | the pinned Trivy |
-| `KUBEDELOS_CACHE_DIR` | the user cache dir (`~/.cache/kubedelos` on Linux, `~/Library/Caches/kubedelos` on macOS): Trivy binary and DB |
+| `KUBEDELOS_CACHE_DIR` | the user cache dir (`~/.cache/kubedelos` on Linux, `~/Library/Caches/kubedelos` on macOS): Trivy binary, DB and layer caches |
 | `KUBEDELOS_DATA_DIR` | the user data dir (`~/.local/share/kubedelos` on Linux, `~/Library/Application Support/kubedelos` on macOS): `kubedelos.db` |
 | `KUBEDELOS_OWNER_ANNOTATION` | `kubedelos.io/owner-email` |
 | `KUBEDELOS_TEAM_LABEL` | `kubedelos.io/team` |
