@@ -1,7 +1,8 @@
 """The shared Trivy cache dir, with its vulnerability and Java DBs guarded by a file lock.
 
-Every scan is a standalone ``trivy image`` that keeps its layer cache in memory, so parallel scans and concurrent scan
-runs (from several ``kubedelos ui`` processes) only share the two DBs, which Trivy opens read-only. A run takes an
+Every scan is a standalone ``trivy image`` with a layer cache of its own (a :mod:`kubedelos.trivy.layers` slot or
+memory), so parallel scans and concurrent scan runs (from several ``kubedelos ui`` processes) only share the two DBs,
+which Trivy opens read-only. A run takes an
 exclusive ``flock`` to download or update them, then holds a shared one while it scans, so no run replaces a DB another
 run is reading. If another run is already scanning, the update is skipped rather than waiting for that run to finish.
 The kernel drops a ``flock`` when its process dies, so a killed run never leaves a stale lock behind; a run whose

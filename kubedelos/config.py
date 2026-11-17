@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     trivy_path: Path | None = None
     parallelism: int = Field(default=4, ge=1, le=32)
     scan_timeout_s: int = 600
+    layer_cache: bool = True  # keep each parallel scan's Trivy layer cache on disk between runs
     owner_annotation: str = "kubedelos.io/owner-email"
     team_label: str = "kubedelos.io/team"
     # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.

@@ -2,14 +2,16 @@
 
 import re
 import sqlite3
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from datetime import UTC, datetime, timedelta
+from typing import get_args
 
 from pydantic import ValidationError
 
 from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.trivy.pins import TRIVY_VERSION
+from kubedelos.trivy.runner import ErrorKind
 
 # Cached reports are scoped by Trivy version and by the shape of kubedelos' own models: bump the "+cN" suffix when
 # ImageResult or Finding change, so old rows are ignored instead of failing validation.
@@ -107,15 +109,19 @@ class Repo:
             ],
         )  # fmt: skip
 
-    def failed_items(self, run_id: int) -> list[tuple[int, InventoryItem]]:
-        """The run's failed images as ``(image_result id, item)``, by ref, rebuilt from the stored refs and workloads."""
+    def failed_items(self, run_id: int, kinds: Collection[str] | None = None) -> list[tuple[int, InventoryItem]]:
+        """The run's failed images as ``(image_result id, item)``, by ref, rebuilt from the stored refs and workloads;
+        only those of ``kinds`` when given (a stored kind kubedelos does not know counts as ``unknown``)."""
         rows = self._conn.execute(
-            "SELECT id, ref, repo, tag, digest, platform FROM image_result"
+            "SELECT id, ref, repo, tag, digest, platform, error_kind FROM image_result"
             " WHERE run_id = ? AND status = 'error' ORDER BY ref, platform",
             (run_id,),
         ).fetchall()
         failed = []
         for row in rows:
+            kind = row["error_kind"] if row["error_kind"] in get_args(ErrorKind) else "unknown"
+            if kinds is not None and kind not in kinds:
+                continue
             workloads = self._conn.execute(
                 "SELECT namespace, kind, name, container, owner, team FROM workload WHERE image_result_id = ?"
                 " ORDER BY id",
@@ -139,8 +145,9 @@ class Repo:
             if cur.rowcount == 1:
                 self._add_findings(result_id, result)
 
-    def settle_retry(self, run_id: int, *, retried: int) -> str:
-        """Recount the run after a retry of its ``retried`` failed images, note the retry and return the run's status.
+    def settle_retry(self, run_id: int, retried: Collection[int], *, kinds: Collection[str] | None = None) -> str:
+        """Recount the run after a retry of the failures stored as ``retried`` (image_result ids), note the retry (with
+        the ``kinds`` retried, when only some were) and return the run's status.
 
         Images a cancel left untried count as still failing.
 
@@ -154,10 +161,16 @@ class Repo:
             self._conn.execute(
                 "UPDATE scan_run SET status = ?, images_error = ? WHERE id = ?", (status, failing, run_id)
             )
+            ids = sorted(set(retried))
+            still = self._conn.execute(
+                f"SELECT COUNT(*) FROM image_result WHERE status = 'error' AND id IN ({','.join('?' * len(ids))})",  # noqa: S608 - placeholders only
+                ids,
+            ).fetchone()[0]
             at = self._clock().astimezone(UTC).strftime("%H:%M UTC")
+            which = f" ({', '.join(sorted(kinds))})" if kinds else ""
             note = (
-                f"{RETRY_NOTE_PREFIX}{retried} failed {'image' if retried == 1 else 'images'} at {at}: "
-                f"{retried - failing} scanned, {failing} still failing"
+                f"{RETRY_NOTE_PREFIX}{len(ids)} failed {'image' if len(ids) == 1 else 'images'}{which} at {at}: "
+                f"{len(ids) - still} scanned, {still} still failing"
             )
             self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, note))
         return status

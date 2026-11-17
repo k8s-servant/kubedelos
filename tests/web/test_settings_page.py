@@ -25,6 +25,7 @@ def test_lists_every_setting_with_its_value_and_source(client, app, monkeypatch)
     assert rows["parallelism"] == ("4", "environment")
     assert rows["context"][1] == "flag"
     assert rows["scan_timeout_s"] == ("600", "default")
+    assert rows["layer_cache"] == ("true", "default")
     assert rows["namespaces"] == ("none (every namespace)", "default")
     assert rows["pkg_types"] == ("library, os", "default")
     assert rows["selector"] == ("not set", "default")

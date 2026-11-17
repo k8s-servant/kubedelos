@@ -15,19 +15,25 @@
     <div class="callout" role="alert"><p>{{ retry.error }}</p></div>
     {%- endif %}
     {%- if total %}
-    <p class="hint">Scans the failed images again, with the run's package types, and puts the results into run {{ shown_run.number }}. The cluster is not read. A longer time limit and fewer parallel images help large images that ran out of time.</p>
-    <form method="post" action="{{ retry.action }}" class="filters" id="retry">
+    <p class="hint">Scans the ticked kinds of failure again, with the run's package types, and puts the results into run {{ shown_run.number }}. The cluster is not read. A longer time limit and fewer parallel images help large images that ran out of time; a missing tag (not_found) stays missing until it is pushed.</p>
+    <form method="post" action="{{ retry.action }}" class="retry-form" id="retry">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       {%- if retry.context %}<input type="hidden" name="context" value="{{ retry.context }}">{% endif %}
-      <label>Time limit per image (seconds)
+      <fieldset class="retry-kinds">
+        <legend>Kinds to retry</legend>
+        <div class="pills">
+          {%- for k in retry.kinds %}
+          <label class="pill"><input type="checkbox" name="kind" value="{{ k.name }}"{% if k.checked %} checked{% endif %}>{{ k.name }} {{ k.count }}</label>
+          {%- endfor %}
+        </div>
+      </fieldset>
+      <label>Seconds per image
         <input type="number" name="timeout" value="{{ retry.timeout }}" min="{{ retry.min_timeout }}" max="{{ retry.max_timeout }}" required>
       </label>
       <label>Parallel images
         <input type="number" name="parallelism" value="{{ retry.parallelism }}" min="1" max="32" required>
       </label>
-      <div class="filter-actions">
-        <button type="submit" class="btn">Retry {{ total }} failed {{ total | plural("image") }}</button>
-      </div>
+      <button type="submit" class="btn">Retry</button>
     </form>
     {%- endif %}
   </section>

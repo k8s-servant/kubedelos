@@ -37,6 +37,8 @@ EMPTY_LISTS = {
 
 def shown_value(field: str, value: object) -> str:
     """A setting's value as the page shows it: lists comma-joined, an unset value named as such."""
+    if isinstance(value, bool):
+        return "true" if value else "false"  # as KUBEDELOS_* takes it
     if isinstance(value, list | tuple):
         return ", ".join(str(v) for v in value) if value else EMPTY_LISTS.get(field, "none")
     if value is None:

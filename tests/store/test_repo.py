@@ -455,10 +455,10 @@ def test_settle_retry_recounts_keeps_finished_at_and_notes_the_retry(tmp_path):
     repo = _repo(tmp_path)
     run = _failed_run(repo)
     finished = repo.get_run(run)["finished_at"]
-    (result_id, item), _ = repo.failed_items(run)
+    (result_id, item), (other_id, _) = repo.failed_items(run)
     repo.replace_result(result_id, _result(item))
     repo._clock = lambda: datetime(2026, 1, 1, 12, 40, tzinfo=UTC)
-    assert repo.settle_retry(run, retried=2) == "partial"
+    assert repo.settle_retry(run, [result_id, other_id]) == "partial"
     got = repo.get_run(run)
     assert (got["status"], got["images_error"], got["images_total"], got["finished_at"]) == ("partial", 1, 3, finished)
     assert [tuple(w) for w in repo.run_warnings(run)] == [
@@ -469,11 +469,36 @@ def test_settle_retry_recounts_keeps_finished_at_and_notes_the_retry(tmp_path):
 def test_settle_retry_marks_the_run_ok_when_nothing_fails(tmp_path):
     repo = _repo(tmp_path)
     run = _failed_run(repo)
+    ids = [result_id for result_id, _ in repo.failed_items(run)]
     for result_id, item in repo.failed_items(run):
         repo.replace_result(result_id, _result(item))
-    assert repo.settle_retry(run, retried=2) == "ok"
+    assert repo.settle_retry(run, ids) == "ok"
     assert repo.get_run(run)["status"] == "ok" and repo.get_run(run)["images_error"] == 0
     assert repo.run_warnings(run)[0]["text"].endswith(": 2 scanned, 0 still failing")
+
+
+def test_failed_items_narrow_to_kinds(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    odd = _item("reg.io/odd:1", digest=None)
+    repo.add_result(run, odd, _result(odd, status="error", error_kind="trivy", error="?"))
+    repo._conn.execute("UPDATE image_result SET error_kind = 'gremlins' WHERE ref = 'reg.io/odd:1'")  # an old row
+    assert [i.image.ref for _, i in repo.failed_items(run, kinds={"timeout"})] == ["reg.io/app:2"]
+    assert [i.image.ref for _, i in repo.failed_items(run, kinds={"unknown"})] == ["reg.io/odd:1"]  # unknown kinds
+    assert len(repo.failed_items(run)) == 3
+
+
+def test_settle_retry_counts_only_the_retried_images(tmp_path):
+    repo = _repo(tmp_path)
+    run = _failed_run(repo)
+    ((result_id, item),) = repo.failed_items(run, kinds={"timeout"})
+    repo.replace_result(result_id, _result(item))
+    repo._clock = lambda: datetime(2026, 1, 1, 12, 40, tzinfo=UTC)
+    assert repo.settle_retry(run, [result_id], kinds={"timeout"}) == "partial"  # the not_found image still fails
+    assert repo.get_run(run)["images_error"] == 1
+    assert (
+        repo.run_warnings(run)[0]["text"] == "retried 1 failed image (timeout) at 12:40 UTC: 1 scanned, 0 still failing"
+    )
 
 
 def test_results_keep_how_long_each_image_took(tmp_path):
