@@ -60,7 +60,11 @@ class LayerSlots:
             return
         index, fd = taken
         try:
-            yield self._prepare(self.root / f"slot-{index}")
+            try:
+                slot: Path | None = self._prepare(self.root / f"slot-{index}")
+            except OSError:  # a full disk or an unwritable slot: this scan keeps its layers in memory instead
+                slot = None
+            yield slot
         finally:
             os.close(fd)  # releases the flock
             with self._guard:

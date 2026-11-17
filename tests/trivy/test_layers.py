@@ -142,3 +142,28 @@ def test_a_busy_own_slot_falls_back_to_another(tmp_path):
 def test_there_is_a_slot_for_every_parallel_scan_allowed():
     (bound,) = [m.le for m in Settings.model_fields["parallelism"].metadata if hasattr(m, "le")]
     assert bound == SLOTS
+
+
+def test_a_slot_that_cannot_be_prepared_falls_back_to_memory(tmp_path, monkeypatch):
+    slots = _slots(tmp_path, count=1)
+
+    def broken(slot):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(slots, "_prepare", broken)
+    with slots.take() as slot:
+        assert slot is None
+    monkeypatch.undo()
+    with slots.take() as slot:
+        assert slot is not None  # the lock was released
+
+
+def test_an_error_inside_the_block_is_not_swallowed(tmp_path):
+    slots = _slots(tmp_path, count=1)
+    try:
+        with slots.take():
+            raise OSError("from the scan")
+    except OSError as exc:
+        assert str(exc) == "from the scan"
+    else:
+        raise AssertionError("the error was swallowed")
