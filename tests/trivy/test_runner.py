@@ -446,11 +446,11 @@ def _wait_until(predicate, timeout=5.0):
 def test_kill_all_running_stops_every_live_trivy_group():
     # Parallel scans: three groups, each a Trivy-like parent with a child of its own, so only a group kill stops all.
     out: dict[int, tuple[int, str, str]] = {}
-    sleeper = [
-        sys.executable, "-c",
-        "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
-        " print('started', flush=True); time.sleep(60)",
-    ]  # fmt: skip
+    script = (
+        "import subprocess, sys, time; "
+        "subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); time.sleep(60)"
+    )
+    sleeper = [sys.executable, "-c", script]
     threads = [
         threading.Thread(target=lambda n=n: out.update({n: runner._run_group(sleeper, dict(os.environ), 120)}))
         for n in range(3)

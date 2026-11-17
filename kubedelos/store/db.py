@@ -158,15 +158,17 @@ MIGRATIONS: list[str] = [
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    if conn.execute("PRAGMA user_version").fetchone()[0] >= len(MIGRATIONS):
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= len(MIGRATIONS):
         return
     # Another kubedelos process may be migrating the same file. Take the write lock first and read the version under
     # it, so a migration the other process just applied is skipped instead of run twice. In the default (legacy)
     # transaction mode, executescript() would commit that transaction before it runs; autocommit=True leaves it open.
-    # user_version is transactional in SQLite, so a failed script leaves the version untouched.
+    # user_version is transactional in SQLite, so a failed script leaves the version untouched. The version only
+    # grows, so the one read above is a safe place to start.
     autocommit, conn.autocommit = conn.autocommit, True
     try:
-        for index in range(len(MIGRATIONS)):
+        for index in range(version, len(MIGRATIONS)):
             conn.execute("BEGIN IMMEDIATE")
             if conn.execute("PRAGMA user_version").fetchone()[0] > index:
                 conn.execute("COMMIT")
@@ -175,7 +177,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
             conn.execute("COMMIT")
     except sqlite3.Error:
         if conn.in_transaction:
-            conn.rollback()
+            conn.execute("ROLLBACK")  # rollback() does nothing while autocommit is True
         raise
     finally:
         conn.autocommit = autocommit
@@ -218,7 +220,11 @@ def connect(path: Path) -> sqlite3.Connection:
         sidecar = path.with_name(path.name + suffix)
         if sidecar.exists():
             sidecar.chmod(0o600)
-    _migrate(conn)
+    try:
+        _migrate(conn)
+    except BaseException:
+        conn.close()
+        raise
     return conn
 
 

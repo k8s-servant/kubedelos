@@ -87,6 +87,22 @@ def test_concurrent_connects_migrate_once(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
 
 
+def test_failed_migration_rolls_back_and_releases_the_write_lock(tmp_path, monkeypatch):
+    from kubedelos.store import db
+
+    path = tmp_path / "k.db"
+    connect(path).close()
+    monkeypatch.setattr(db, "MIGRATIONS", [*MIGRATIONS, "CREATE TABLE half_done (a); NOT SQL;"])
+    with pytest.raises(sqlite3.OperationalError):
+        connect(path)
+    other = sqlite3.connect(path, timeout=0)  # fails at once if the write lock were still held
+    _OPEN.append(other)
+    other.execute("BEGIN IMMEDIATE")
+    other.rollback()
+    assert other.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    assert other.execute("SELECT count(*) FROM sqlite_master WHERE name = 'half_done'").fetchone()[0] == 0
+
+
 def test_run_roundtrip_counts(tmp_path):
     repo = _repo(tmp_path)
     run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
