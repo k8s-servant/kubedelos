@@ -4,6 +4,7 @@
 
 ### Features
 
+- Rescan every image: a box on the Scans form skips the 24-hour result cache for one scan, so every image is matched against the current Trivy DB. Fresh results still go into the cache.
 - A guide, [How a scan works](docs/how-scans-work.md), explains each step of a scan, the result cache, the Trivy DBs and the layer cache (what, where, why and how long), parallelism and time limits, failure kinds and retries, how to speed up a slow scan, and what is kept on disk.
 - Package skeleton with the `kubedelos` entrypoint.
 - An About page (last in the sidebar) says how fresh the data is: when Trivy built the vulnerability and Java DBs in use, whether a newer one is out (the next scan downloads it) and when the shown context was last scanned. It also names the kubedelos, Trivy and Python versions, the license, the project links with the security policy, and what kubedelos never does.

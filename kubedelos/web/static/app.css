@@ -1186,7 +1186,8 @@ select {
   overflow-wrap: normal;
 }
 
-.filter-pkg {
+.filter-pkg,
+.filter-rescan {
   display: flex;
   flex-direction: column;
   gap: 0.3125rem;
@@ -1196,7 +1197,8 @@ select {
   border: 0;
 }
 
-.filter-pkg legend {
+.filter-pkg legend,
+.filter-rescan legend {
   margin-bottom: 0.3125rem;
   padding: 0;
   color: var(--muted);

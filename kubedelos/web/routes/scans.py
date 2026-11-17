@@ -7,9 +7,10 @@ form posts to ``/scans`` with the CSRF token; each field starts at the UI's save
 
 ``POST /scans`` reads the urlencoded body itself (the CSRF guard has already cached it, and python-multipart is not a
 dependency), validates the seven fields against ``Settings`` and passes only the validated values to the app's
-``ScanRunner``. Before it starts the scan it closes the stale ``running`` rows no live process owns, through
-``open_db_rw``, the only writable connection these routes open. ``GET /scans/progress`` serves the progress readout
-alone, for polling; once the scan has ended it tells htmx to reload the page, so the history shows the finished run.
+``ScanRunner``, plus the "Rescan every image" box, which skips the result cache for that one scan. Before it starts
+the scan it closes the stale ``running`` rows no live process owns, through ``open_db_rw``, the only writable
+connection these routes open. ``GET /scans/progress`` serves the progress readout alone, for polling; once the scan
+has ended it tells htmx to reload the page, so the history shows the finished run.
 ``POST /scans/cancel`` asks the running scan to stop.
 """
 
@@ -128,6 +129,7 @@ def _form(request: Request, sent: dict | None = None) -> dict:
         "parallelism_saved": str(s.parallelism),
         "pkg_types": s.pkg_types,
         "pkg_types_saved": describe_pkg_types(s.scan_level),
+        "rescan": False,
     }
     return form if sent is None else {**form, **sent}
 
@@ -276,7 +278,7 @@ def _start(request: Request, body: bytes) -> Response:
     default = request.app.state.context
     target = fields.get("context", [""])[0] or default
     text = {name: fields.get(name, [""])[0] for name in FIELDS if name != "pkg_types"}
-    sent = {**text, "pkg_types": fields.get("pkg_types", [])}
+    sent = {**text, "pkg_types": fields.get("pkg_types", []), "rescan": fields.get("rescan", [""])[0] == "on"}
 
     def page(error: str, status: int) -> HTMLResponse:
         """The posted context's page with ``error`` and what was typed; the startup context's if it is unknown."""
@@ -306,7 +308,9 @@ def _start(request: Request, body: bytes) -> Response:
     except sqlite3.OperationalError:  # locked past the busy timeout, most likely by another scan writing results
         return page("the database is busy; try again", 503)
     try:
-        request.app.state.scans.start({name: getattr(valid, name) for name in FIELDS}, context=target)
+        request.app.state.scans.start(
+            {name: getattr(valid, name) for name in FIELDS}, context=target, rescan=sent["rescan"]
+        )
     except ScanBusy as exc:
         return page(str(exc), 409)
     return RedirectResponse(scans_href(1, target if target != default else None), status_code=303)

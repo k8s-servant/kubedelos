@@ -1,5 +1,8 @@
 """Orchestrates one scan run: inventory, cache lookup, the Trivy DB cache, parallel scans and persistence.
 
+``rescan=True`` scans every image again instead of taking the ones scanned in the last 24 hours from the result
+cache, and stores the fresh results there for the scans after it.
+
 ``retry_failed`` scans a finished run's failed images again through the same steps, minus the inventory: it puts each
 new result in place of its failure and recounts the run.
 """
@@ -53,6 +56,7 @@ def run_scan(
     on_progress: Callable[[Progress], None] = lambda p: None,
     cancel: threading.Event | None = None,
     cache_max_age: timedelta = timedelta(hours=24),
+    rescan: bool = False,
 ) -> ScanOutcome:
     """Scan every image in the cluster and record the run. Interrupts mark the run ``cancelled`` and re-raise."""
     api = api if api is not None else kube_client.load(settings)
@@ -75,7 +79,7 @@ def run_scan(
         try:
             repo.add_warnings(run_id, warnings)
             save = functools.partial(repo.add_result, run_id)
-            errors = _scan(settings, repo, run_id, items, save, on_progress, cancel, cache_max_age)
+            errors = _scan(settings, repo, run_id, items, save, on_progress, cancel, cache_max_age, rescan=rescan)
         except KeyboardInterrupt:
             cancel.set()
             repo.finish_run(run_id, "cancelled")
@@ -155,8 +159,11 @@ def _scan(
     on_progress: Callable[[Progress], None],
     cancel: threading.Event,
     cache_max_age: timedelta,
+    *,
+    rescan: bool = False,
 ) -> int:
-    """Hand cached and fresh results for ``items`` to ``save`` and return how many images errored."""
+    """Hand cached and fresh results for ``items`` to ``save`` and return how many images errored. With ``rescan``
+    nothing comes from the cache, but fresh results still go into it."""
     total = len(items)
     done = errors = cached_count = 0
     use_cache = settings.trivy_path is None  # results from an unpinned Trivy never enter or come from the cache
@@ -190,7 +197,7 @@ def _scan(
             continue
         cached = (
             repo.get_cached(item.image.cache_key, item.platform, cache_max_age, scan_level=settings.scan_level)
-            if use_cache and item.image.cache_key
+            if use_cache and not rescan and item.image.cache_key
             else None
         )
         if cached is None:

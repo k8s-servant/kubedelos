@@ -191,6 +191,7 @@ are kept per level, so a narrower scan never answers for a wider one.
 Results are cached for 24 hours by image digest, so a repeat scan only scans what changed. An image the node reports
 without a registry digest, such as kind's preloaded images, is cached by its local image ID instead, and only when
 Trivy scanned that exact image. An image known only by its tag is scanned every time, since a tag can be pushed again.
+Tick **Rescan every image** on the Scans form to skip the cache for one scan, for example right after a new Trivy DB.
 
 A namespace or resource kubedelos may not list is skipped with a warning, and the run is marked incomplete. A forbidden
 node list only costs detail: the platform falls back to the most common one.
