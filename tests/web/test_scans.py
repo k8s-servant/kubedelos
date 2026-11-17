@@ -276,6 +276,30 @@ def test_start_runs_with_the_form_overrides(client, app, fake):
     assert fake.calls[0]["trigger"] == "ui"
 
 
+def test_start_uses_the_result_cache_unless_rescan_is_ticked(client, app, fake):
+    assert _start(client).status_code == 303
+    assert fake.entered.wait(5)
+    assert fake.calls[0]["rescan"] is False
+    fake.release.set()
+    _wait_for(app, "finished")
+    fake.entered.clear()
+    fake.release.clear()
+    assert _start(client, rescan="on").status_code == 303
+    assert fake.entered.wait(5)
+    assert fake.calls[1]["rescan"] is True
+
+
+def test_form_offers_rescan_unticked(client, fake):
+    page = client.get("/scans").text
+    assert '<input type="checkbox" name="rescan" value="on">' in page
+    assert "Rescan every image" in page
+
+
+def test_a_refused_start_keeps_rescan_ticked(client, fake):
+    page = _start(client, parallelism="0", rescan="on").text
+    assert '<input type="checkbox" name="rescan" value="on" checked>' in page
+
+
 def test_second_start_is_refused(client, fake):
     assert _start(client).status_code == 303
     assert fake.entered.wait(5)

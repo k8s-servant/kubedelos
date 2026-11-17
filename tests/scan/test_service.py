@@ -120,6 +120,20 @@ def test_service_uses_cache_second_run(env, monkeypatch):
     assert [p.done for p in progress if p.current] == [1, 2]
 
 
+def test_rescan_skips_cached_results_and_refreshes_the_cache(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    before = repo._conn.execute("SELECT MAX(scanned_at) FROM image_cache").fetchone()[0]
+    out = service.run_scan(settings, api=_api(), repo=repo, rescan=True)
+    assert len(calls) == 2 and FakeCache.started == 2  # every image went to Trivy again
+    statuses = repo._conn.execute("SELECT status FROM image_result WHERE run_id = ?", (out.run_id,)).fetchall()
+    assert "cached" not in {row[0] for row in statuses}
+    assert repo._conn.execute("SELECT MAX(scanned_at) FROM image_cache").fetchone()[0] > before  # fresh result stored
+    third = service.run_scan(settings, api=_api(), repo=repo)
+    assert len(calls) == 2 and _status(repo, third.run_id) == "ok"  # the next plain scan uses the refreshed cache
+
+
 def test_service_cancel(env, monkeypatch):
     settings, repo, _calls = env
     cancel = threading.Event()

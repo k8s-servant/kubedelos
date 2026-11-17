@@ -52,6 +52,13 @@
         </div>
         <span class="hint">saved: {{ form.pkg_types_saved }}</span>
       </fieldset>
+      <fieldset class="filter-rescan">
+        <legend>Result cache</legend>
+        <div class="pills">
+          <label class="pill"><input type="checkbox" name="rescan" value="on"{% if form.rescan %} checked{% endif %}>Rescan every image</label>
+        </div>
+        <span class="hint">off: images scanned in the last 24 h reuse their results</span>
+      </fieldset>
       <div class="filter-actions">
         <button type="submit" class="btn">Scan {{ context }}</button>
       </div>

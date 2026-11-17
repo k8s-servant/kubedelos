@@ -114,9 +114,9 @@ class ScanRunner:
         self._job: _Job | None = None
         self._closed = False  # set by shutdown: the app is going away, so no new daemon scan may start
 
-    def start(self, overrides: dict, context: str | None = None) -> None:
-        """Start a scan of ``context`` (the UI's startup context by default) with ``overrides`` applied. The caller
-        checks that ``context`` is one the kubeconfig has.
+    def start(self, overrides: dict, context: str | None = None, *, rescan: bool = False) -> None:
+        """Start a scan of ``context`` (the UI's startup context by default) with ``overrides`` applied; ``rescan``
+        skips the result cache. The caller checks that ``context`` is one the kubeconfig has.
 
         Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
         """
@@ -125,7 +125,7 @@ class ScanRunner:
         scan_settings = self._settings.model_copy(update={**overrides, "context": target})
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
-            return self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=cancel)
+            return self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=cancel, rescan=rescan)
 
         self._launch(target, work)
 

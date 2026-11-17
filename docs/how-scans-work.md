@@ -51,6 +51,8 @@ where most images don't change between scans, a rescan only scans what changed.
 - A cached result keeps the findings from when it was scanned. If Trivy published a new vulnerability DB since, a CVE
   added in that DB shows up once the cached result is older than 24 hours and the image is scanned again.
 - Results from your own Trivy binary (`KUBEDELOS_TRIVY_PATH`) are never cached.
+- To match every image against the newest DB now, tick **Rescan every image** on the Scans form. That scan takes
+  nothing from the cache and stores its fresh results there, so the scans after it are fast again.
 - The Scans page counts cached images apart from scanned ones, and the scan times page lists them as cached.
 
 ## 3. Trivy: the pinned binary
@@ -168,6 +170,7 @@ says how much of the time the 10 slowest took.
   retry them with a longer limit and fewer parallel images.
 - **Many ordinary images are slow:** the network is the limit. Fewer parallel images may finish no later, and fail
   less; more parallel images won't help.
+- **A rescan of every image is slow:** expected; it skips the result cache. The layer cache still helps.
 - **The first scan is slow, later ones much faster:** expected. The first scan downloads Trivy and the DBs and fills
   the layer cache; later scans reuse the result cache and the layer cache.
 
