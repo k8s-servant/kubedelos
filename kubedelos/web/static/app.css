@@ -875,6 +875,13 @@ tbody tr:hover td {
   white-space: nowrap;
 }
 
+/* One label width for every card of a page, so the values line up from card to card. */
+@media (min-width: 48rem) {
+  .settings-card th[scope="row"] {
+    width: 22rem;
+  }
+}
+
 .settings-card .value {
   overflow-wrap: anywhere;
 }
