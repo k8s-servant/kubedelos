@@ -70,6 +70,7 @@ def test_about_names_what_runs_and_the_project(client, app, tmp_path):
         "https://github.com/k8s-servant/kubedelos/security/policy",
     ):
         assert f'href="{url}"' in html
+    assert ">Security policy (report a vulnerability privately)</a>" in html
     assert "never changes the cluster" in html and "never reads Secrets" in html
 
 

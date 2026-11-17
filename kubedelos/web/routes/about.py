@@ -23,7 +23,7 @@ from kubedelos.web.pages import open_db, render, shown_context
 
 router = APIRouter()
 
-SECURITY_POLICY = "Security"  # the Project-URL label of the security policy
+LINK_LABELS = {"Security": "Security policy (report a vulnerability privately)"}  # by Project-URL label
 
 
 def db_text(info: DbInfo | None, now: datetime, *, missing: str) -> str:
@@ -35,9 +35,9 @@ def db_text(info: DbInfo | None, now: datetime, *, missing: str) -> str:
 
 
 def project_links() -> list[tuple[str, str]]:
-    """The package's ``Project-URL`` entries, as (label, url)."""
+    """The package's ``Project-URL`` entries, as (label shown, url)."""
     return [
-        (label.strip(), url.strip())
+        (LINK_LABELS.get(label.strip(), label.strip()), url.strip())
         for entry in metadata("kubedelos").get_all("Project-URL") or []
         for label, _, url in [entry.partition(",")]
     ]

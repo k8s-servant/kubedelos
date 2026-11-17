@@ -37,7 +37,7 @@
     </ul>
     <ul class="about-links">
       {%- for label, url in links %}
-      <li><a href="{{ url }}" rel="noopener noreferrer">{{ "Security policy (report a vulnerability privately)" if label == "Security" else label }}</a></li>
+      <li><a href="{{ url }}" rel="noopener noreferrer">{{ label }}</a></li>
       {%- endfor %}
     </ul>
   </section>
