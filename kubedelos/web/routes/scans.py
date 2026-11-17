@@ -7,9 +7,10 @@ form posts to ``/scans`` with the CSRF token; each field starts at the UI's save
 
 ``POST /scans`` reads the urlencoded body itself (the CSRF guard has already cached it, and python-multipart is not a
 dependency), validates the seven fields against ``Settings`` and passes only the validated values to the app's
-``ScanRunner``, plus the "Rescan every image" box, which skips the result cache for that one scan. Before it starts the scan it closes the stale ``running`` rows no live process owns, through
-``open_db_rw``, the only writable connection these routes open. ``GET /scans/progress`` serves the progress readout
-alone, for polling; once the scan has ended it tells htmx to reload the page, so the history shows the finished run.
+``ScanRunner``, plus the "Rescan every image" box, which skips the result cache for that one scan. Before it starts
+the scan it closes the stale ``running`` rows no live process owns, through ``open_db_rw``, the only writable
+connection these routes open. ``GET /scans/progress`` serves the progress readout alone, for polling; once the scan
+has ended it tells htmx to reload the page, so the history shows the finished run.
 ``POST /scans/cancel`` asks the running scan to stop.
 """
 
