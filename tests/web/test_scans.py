@@ -7,6 +7,7 @@ import sqlite3
 import threading
 from datetime import UTC, datetime, timedelta
 from html import unescape
+from pathlib import Path
 
 import pytest
 
@@ -731,3 +732,25 @@ def test_progress_lists_the_newest_failures_while_scanning(client, app, fake, se
     listed = re.findall(r'<li class="failure">(.*?)</li>', html, re.S)
     assert len(listed) == 5 and "app6" in listed[0]  # the newest first
     assert f'href="/scans/{run_id}/failed">see all 7 failures</a>' in html
+
+
+def _css() -> str:
+    return (Path(pages.__file__).parent / "static" / "app.css").read_text()
+
+
+def test_number_inputs_look_like_the_text_inputs():
+    # Parallel images and the retry time limit are number inputs; unstyled they are shorter, light-edged and square.
+    rule = re.search(r'input\[type="text"\],\s*input\[type="search"\],\s*input\[type="number"\],\s*select \{', _css())
+    assert rule
+
+
+def test_start_form_controls_share_one_row_height():
+    css = _css()
+    controls = r'\.scan-start :is\(input:not\(\[type="checkbox"\]\), \.pill, \.btn\) \{'
+    assert re.search(controls + r"[^}]*min-height: 2\.0625rem", css)
+    # The Scan button lines up with the inputs, not with the hints under them.
+    assert re.search(r"\.scan-start \.filter-actions \{[^}]*align-self: start", css)
+
+
+def test_rescan_hint_fits_on_one_line():
+    assert "off: uses the 24 h cache" in Path(pages.__file__).parent.joinpath("templates", "scans.html").read_text()
