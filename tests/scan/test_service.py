@@ -449,6 +449,17 @@ def test_retry_rescans_only_the_failed_images_in_the_same_run(env, monkeypatch):
     assert [(p.total, p.done) for p in progress if p.current] == [(1, 1)]
 
 
+def test_retry_of_some_kinds_rescans_only_those(env, monkeypatch):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)  # reg.io/b failed with auth
+    with pytest.raises(service.RetryRefused, match="run 1 has no failed images of kind not_found, timeout"):
+        service.retry_failed(settings, run_id, repo=repo, kinds={"timeout", "not_found"})
+    assert calls == [] and repo.run_warnings(run_id) == []
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    assert service.retry_failed(settings, run_id, repo=repo, kinds={"auth"}).status == "ok"
+    assert repo.run_warnings(run_id)[-1]["text"].startswith("retried 1 failed image (auth) at ")
+
+
 def test_retry_uses_a_cached_result(env, monkeypatch):
     settings, repo, calls = env
     run_id = _partial_run(env, monkeypatch)
