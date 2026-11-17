@@ -8,14 +8,16 @@ per kind to pick from. Paged in SQL, 100 rows a page.
 
 The newest result run of a context, once it finished ``partial``, also offers a retry of its failed images
 (``POST /scans/{run_id}/retry``, with the CSRF token): the app's ``ScanRunner`` scans them again with the posted time
-limit and parallelism and puts the results into the same run (see ``kubedelos.scan.service.retry_failed``). The page
-lists the notes earlier retries left.
+limit and parallelism and puts the results into the same run (see ``kubedelos.scan.service.retry_failed``). It
+retries only the ticked kinds of failure: all but ``not_found`` at first (a missing tag stays missing until someone
+pushes it), or just the kind the page is narrowed to. The page lists the notes earlier retries left.
 """
 
 import json
 import re
 import sqlite3
 from math import ceil
+from typing import get_args
 from urllib.parse import parse_qs, urlencode
 
 from fastapi import APIRouter, Path, Query, Request
@@ -58,6 +60,8 @@ RETRY_PARALLELISM = 2
 _MAX_FORM_FIELDS = 20
 _MAX_BODY = 4 * 1024
 UNREADABLE = "the form could not be read"
+NOT_TICKED = frozenset({"not_found"})  # kinds a retry rarely fixes, so the form leaves them unticked
+NO_KIND = "Tick at least one kind of failure to retry"
 
 # What each error kind means and what to do about it, as the dashboard's failed-images card says it.
 KIND_HELP: dict[str, str] = {
@@ -144,9 +148,10 @@ def _page(
     status: int = 200,
     context: str | None = None,
     kind: str | None = None,
+    sent_kinds: frozenset[str] | None = None,
 ) -> HTMLResponse:
     """The failures page of ``run_id``, narrowed to ``kind`` if given, with the retry form's ``error`` and what was
-    ``sent`` after a refused POST.
+    ``sent`` (and ``sent_kinds``) after a refused POST.
     """
     with open_db(request) as conn:
         context = shown_context(request, conn, context)
@@ -162,6 +167,13 @@ def _page(
         retryable = retry_problem(request, conn, context, run) is None
         notes = retry_notes(conn, run.id)
     settings = request.app.state.settings
+    present = {k for k, _ in kinds}
+    if sent_kinds is not None:
+        ticked = sent_kinds
+    elif kind is not None:
+        ticked = {kind}
+    else:
+        ticked = (present - NOT_TICKED) or present
     last_page = max(1, ceil(shown / PER_PAGE))
     first = (page - 1) * PER_PAGE + 1
     ctx = {
@@ -196,6 +208,7 @@ def _page(
             "parallelism": str(min(RETRY_PARALLELISM, settings.parallelism)),
             "min_timeout": MIN_TIMEOUT_S,
             "max_timeout": MAX_TIMEOUT_S,
+            "kinds": [{"name": k, "count": n, "checked": k in ticked} for k, n in kinds],
             "error": error,
             **(sent or {}),
         }
@@ -221,9 +234,10 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
         return _page(request, run_id, error=UNREADABLE, status=400)
     wanted = fields.get("context", [""])[0] or None
     sent = {name: fields.get(name, [""])[0] for name in ("timeout", "parallelism")}
+    chosen = frozenset(k for k in fields.get("kind", []) if k in get_args(ErrorKind))
 
     def page(error: str, status: int) -> HTMLResponse:
-        return _page(request, run_id, error=error, sent=sent, status=status, context=wanted)
+        return _page(request, run_id, error=error, sent=sent, status=status, context=wanted, sent_kinds=chosen)
 
     with open_db(request) as conn:
         context = shown_context(request, conn, wanted)
@@ -232,8 +246,13 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         problem = retry_problem(request, conn, context, run)
+        present = {k for k, _ in failure_kinds(conn, run.id)}
     if problem:
         return page(problem, 409)
+    if not chosen:
+        return page(NO_KIND, 400)
+    if missing := sorted(chosen - present):
+        return page(f"Run {run.number} has no {', '.join(missing)} failures to retry", 400)
     try:
         timeout = int(sent["timeout"].strip())
     except ValueError:
@@ -247,7 +266,7 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
         return page(f"Parallel images: {exc.errors()[0]['msg']}", 400)
     try:
         request.app.state.scans.retry(
-            run.id, {"scan_timeout_s": timeout, "parallelism": valid.parallelism}, context=context
+            run.id, {"scan_timeout_s": timeout, "parallelism": valid.parallelism}, context=context, kinds=set(chosen)
         )
     except ScanBusy as exc:
         return page(str(exc), 409)

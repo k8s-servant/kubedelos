@@ -12,7 +12,7 @@ error shows only its status and reason, never the response headers or body it ca
 import dataclasses
 import logging
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Literal
@@ -129,9 +129,12 @@ class ScanRunner:
 
         self._launch(target, work)
 
-    def retry(self, run_id: int, overrides: dict, context: str | None = None) -> None:
-        """Scan the failed images of run ``run_id`` of ``context`` again, with ``overrides`` (the time limit and
-        parallelism) applied. The caller checks that the run is the context's newest; ``retry_failed`` checks the rest.
+    def retry(
+        self, run_id: int, overrides: dict, context: str | None = None, kinds: Collection[str] | None = None
+    ) -> None:
+        """Scan the failed images of run ``run_id`` of ``context`` again (those of ``kinds`` when given), with
+        ``overrides`` (the time limit and parallelism) applied. The caller checks that the run is the context's
+        newest; ``retry_failed`` checks the rest.
 
         Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
         """
@@ -139,7 +142,7 @@ class ScanRunner:
         retry_settings = self._settings.model_copy(update={**overrides, "context": target})
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
-            return self._retry(retry_settings, run_id=run_id, on_progress=on_progress, cancel=cancel)
+            return self._retry(retry_settings, run_id=run_id, on_progress=on_progress, cancel=cancel, kinds=kinds)
 
         self._launch(target, work, retry_of=run_id)
 

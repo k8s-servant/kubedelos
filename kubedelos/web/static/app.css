@@ -977,7 +977,9 @@ a.btn {
 }
 
 .filters > label,
-.filter-severity legend {
+.filter-severity legend,
+.retry-form > label,
+.retry-kinds legend {
   display: flex;
   flex-direction: column;
   gap: 0.3125rem;
@@ -988,7 +990,8 @@ a.btn {
   text-transform: uppercase;
 }
 
-.filters > label :is(input, select) {
+.filters > label :is(input, select),
+.retry-form > label input {
   width: 100%;
   min-width: 0;
   letter-spacing: normal;
@@ -1018,6 +1021,36 @@ a.btn {
   .filter-severity {
     grid-column: span 3;
   }
+}
+
+/* The retry form: the kinds on a row of their own, then the two limits and the button on one baseline. */
+.retry-form {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.875rem 1rem;
+  align-items: flex-end;
+  margin: 0 0 0.75rem;
+}
+
+.retry-kinds {
+  flex-basis: 100%;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.retry-kinds legend {
+  margin-bottom: 0.3125rem;
+  padding: 0;
+}
+
+.retry-form > label {
+  width: 10rem;
+}
+
+.retry-form .btn {
+  white-space: nowrap;
 }
 
 .filter-actions {
