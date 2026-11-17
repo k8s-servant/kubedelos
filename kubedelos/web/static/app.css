@@ -1170,10 +1170,12 @@ select {
 /* Inputs, pills and the button share one row height, and the button starts where the inputs do (under a label row),
    not at the bottom of a cell whose hint wraps. */
 
-.scan-start :is(input, .pill, .btn) {
+.scan-start :is(input:not([type="checkbox"]), .pill, .btn) {
   box-sizing: border-box;
   min-height: 2.0625rem;
 }
+
+/* The label row of .filters > label: font size times line height, plus the gap. Change both together. */
 
 .scan-start .filter-actions {
   align-self: start;
