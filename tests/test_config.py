@@ -95,3 +95,24 @@ def test_setting_sources_name_the_flag_the_environment_or_the_default():
 def test_no_setting_is_named_like_a_secret():
     # The Settings page lists every field; a credential must never become one.
     assert not [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
+
+
+def test_scope_ignores_repeated_values():
+    once = Settings(namespaces=["a", "b"], exclude_namespaces=["c"], exclude_images=["x"])
+    twice = Settings(namespaces=["b", "a", "b"], exclude_namespaces=["c", "c"], exclude_images=["x", "x"])
+    assert once.scope == twice.scope
+
+
+@pytest.mark.parametrize(
+    ("pattern", "expected"),
+    [
+        ("Registry.Example.com/team/*", "registry.example.com/team/*"),
+        ("INDEX.DOCKER.IO/library/nginx:*", "docker.io/library/nginx:*"),
+        ("index.docker.io/*", "docker.io/*"),
+        ("localhost:5000/App/*", "localhost:5000/App/*"),  # only the host is case-insensitive
+        ("Team/App:*", "Team/App:*"),  # no host: left as written
+        ("nginx:1.*", "nginx:1.*"),
+    ],
+)
+def test_exclude_image_hosts_are_normalised_like_image_names(pattern, expected):
+    assert Settings(exclude_images=[pattern]).exclude_images == [expected]

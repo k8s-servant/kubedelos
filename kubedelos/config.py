@@ -52,6 +52,21 @@ class Settings(BaseSettings):
             return value.strip() or None
         return value
 
+    @field_validator("exclude_images")
+    @classmethod
+    def _normalise_pattern_hosts(cls, value: list[str]) -> list[str]:
+        """Lowercase a pattern's registry host and spell Docker Hub ``docker.io``, as image names are (see
+        ``kube.inventory.image_names``), so ``Registry.Example.com/*`` or ``index.docker.io/*`` still match.
+        """
+        patterns = []
+        for pattern in value:
+            first, sep, rest = pattern.partition("/")
+            if sep and ("." in first or ":" in first or first == "localhost"):
+                host = first.lower()
+                pattern = f"{'docker.io' if host == 'index.docker.io' else host}/{rest}"
+            patterns.append(pattern)
+        return patterns
+
     @field_validator("pkg_types", mode="before")
     @classmethod
     def _normalise_pkg_types(cls, value: Any) -> tuple[str, ...]:
@@ -71,11 +86,11 @@ class Settings(BaseSettings):
     def scope(self) -> str:
         """What a run covers, as canonical JSON: equal scopes mean comparable runs (with the same scan level)."""
         scope = {
-            "namespaces": sorted(self.namespaces),
-            "exclude_namespaces": sorted(self.exclude_namespaces),
+            "namespaces": sorted(set(self.namespaces)),
+            "exclude_namespaces": sorted(set(self.exclude_namespaces)),
             "namespace_selector": self.namespace_selector,
             "selector": self.selector,
-            "exclude_images": sorted(self.exclude_images),
+            "exclude_images": sorted(set(self.exclude_images)),
         }
         return json.dumps(scope, sort_keys=True, separators=(",", ":"))
 
