@@ -397,10 +397,12 @@ def test_api_error_without_status_or_reason_shows_its_type():
 def test_retry_runs_in_the_same_slot_with_its_limits_and_the_view_says_so(settings):
     scan, retry = FakeScan(), FakeScan()
     runner = _runner(settings, scan, retry=retry)
-    runner.retry(7, {"scan_timeout_s": 1800, "parallelism": 2, "context": "elsewhere"}, context="prod-eu")
+    runner.retry(
+        7, {"scan_timeout_s": 1800, "parallelism": 2, "context": "elsewhere"}, context="prod-eu", kinds={"timeout"}
+    )
     assert retry.entered.wait(5)
     call = retry.calls[0]
-    assert call["run_id"] == 7 and isinstance(call["cancel"], threading.Event)
+    assert call["run_id"] == 7 and isinstance(call["cancel"], threading.Event) and call["kinds"] == {"timeout"}
     s = call["settings"]
     assert (s.context, s.scan_timeout_s, s.parallelism) == ("prod-eu", 1800, 2)
     view = runner.view()

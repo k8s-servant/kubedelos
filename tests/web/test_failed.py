@@ -221,7 +221,7 @@ def _csrf(client) -> str:
 
 
 def _retry(client, run_id, **fields):
-    data = {"timeout": "1800", "parallelism": "2", "csrf_token": _csrf(client), **fields}
+    data = {"timeout": "1800", "parallelism": "2", "kind": ["timeout"], "csrf_token": _csrf(client), **fields}
     return client.post(f"/scans/{run_id}/retry", data=data, headers=ORIGIN, follow_redirects=False)
 
 
@@ -231,7 +231,7 @@ def test_the_newest_partial_run_offers_a_retry_with_longer_limits(client, seed):
     assert form.startswith(f'{run_id}/retry"')
     assert re.search(r'name="timeout"[^>]*value="1800"', form)  # 3x the 600 s setting
     assert re.search(r'name="parallelism"[^>]*value="2"', form)
-    assert 'name="csrf_token"' in form and "Retry 1 failed image" in form
+    assert 'name="csrf_token"' in form and ">Retry</button>" in form
 
 
 @pytest.mark.parametrize("which", ["older", "ok", "running"])
@@ -261,7 +261,7 @@ def test_retry_starts_with_the_form_limits(client, app, seed, retry):
     call = retry.calls[0]
     assert call["run_id"] == run_id
     assert (call["settings"].scan_timeout_s, call["settings"].parallelism) == (2400, 3)
-    assert call["settings"].context == app.state.context
+    assert call["settings"].context == app.state.context and call["kinds"] == {"timeout"}
     progress = client.get("/scans/progress").text
     assert "Retrying failed images of run 1" in progress
 
@@ -310,9 +310,46 @@ def test_retry_while_a_scan_runs_is_refused(client, seed, retry):
     assert response.status_code == 409 and "a scan is already running" in response.text
 
 
+def _kinds_offered(html):
+    return re.findall(r'name="kind" value="(\w+)"( checked)?>\s*(\w+) (\d+)', _form(html))
+
+
+def test_the_retry_form_offers_each_kind_and_leaves_not_found_unticked(client, seed):
+    run_id = _retryable(seed)
+    _put(seed, run_id, "reg.example.com/b:1", kind="timeout", error="context deadline exceeded")
+    _put(seed, run_id, "reg.example.com/gone:1", kind="not_found", error="MANIFEST_UNKNOWN")
+    offered = _kinds_offered(client.get(f"/scans/{run_id}/failed").text)
+    assert offered == [("timeout", " checked", "timeout", "2"), ("not_found", "", "not_found", "1")]
+    narrowed = _kinds_offered(client.get(f"/scans/{run_id}/failed", params={"kind": "not_found"}).text)
+    assert narrowed == [("timeout", "", "timeout", "2"), ("not_found", " checked", "not_found", "1")]
+
+
+def test_retry_starts_with_the_ticked_kinds_only(client, seed, retry):
+    run_id = _retryable(seed)
+    _put(seed, run_id, "reg.example.com/gone:1", kind="not_found", error="MANIFEST_UNKNOWN")
+    assert _retry(client, run_id, kind=["not_found"]).status_code == 303
+    assert retry.entered.wait(5) and retry.calls[0]["kinds"] == {"not_found"}
+
+
+@pytest.mark.parametrize(
+    ("kinds", "message"),
+    [
+        ([], "Tick at least one kind of failure to retry"),
+        (["gremlins"], "Tick at least one kind of failure to retry"),
+        (["auth"], "Run 1 has no auth failures to retry"),
+    ],
+)
+def test_retry_with_no_usable_kind_rerenders_with_400(client, seed, retry, kinds, message):
+    run_id = _retryable(seed)
+    response = _retry(client, run_id, kind=kinds)
+    assert response.status_code == 400 and message in response.text
+    assert retry.calls == []
+    assert _kinds_offered(response.text) == [("timeout", "", "timeout", "1")]  # as sent
+
+
 def test_failures_page_shows_the_retry_notes(client, seed):
     run_id = _retryable(seed)
-    seed.repo.settle_retry(run_id, retried=1)
+    seed.repo.settle_retry(run_id, [r for r, _ in seed.repo.failed_items(run_id)])
     html = client.get(f"/scans/{run_id}/failed").text
     assert re.search(r"retried 1 failed image at \d\d:\d\d UTC: 0 scanned, 1 still failing", html)
 

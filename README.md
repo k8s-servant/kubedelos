@@ -120,13 +120,14 @@ follows the system light or dark theme.
   counts as failed, and is marked "retried" when the second attempt fails too. Timeouts, auth and not-found errors are
   not retried.
   - **Retry failed images:** the newest run of a cluster, once it finished partial, has a "Retry failed images" form
-    here (and a "retry" link in the Scans history). It scans only that run's failed images again, with the run's
+    here (and a "retry" link in the Scans history). It scans the run's failed images of the ticked kinds again (every
+    kind but `not_found` at first, or just the kind the page is narrowed to), with the run's
     package types, a time limit per image (default 3× `KUBEDELOS_SCAN_TIMEOUT_S`, 60–3,600 s) and 2 parallel images
     by default, and puts the results into the same run: it becomes `ok` once nothing fails. The cluster is not read;
     the refs and workloads come from the run. It takes the one scan slot and shows its progress on the Scans page, and
-    leaves a note on this page ("retried 20 failed images at 12:40 UTC: 15 scanned, 5 still failing"). Large images
-    that ran out of time usually pass with a longer limit and fewer parallel images; a `not_found` image is gone from
-    the registry and fails again.
+    leaves a note on this page ("retried 17 failed images (timeout) at 12:40 UTC: 15 scanned, 2 still failing"). Large
+    images that ran out of time usually pass with a longer limit and fewer parallel images; a `not_found` image is gone
+    from the registry and fails again until its tag is pushed.
 - **Accepted (`/accepted`)**: the accepted risk register. An acceptance names a CVE, a reason, an owner (your OS user
   by default) and an expiry (90 days by default, at most a year), and optionally a namespace, an image repository (any
   tag) and a package. It applies to its cluster, or to all clusters when you choose so. It takes the findings it covers

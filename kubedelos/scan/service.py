@@ -6,7 +6,7 @@ new result in place of its failure and recounts the run.
 
 import functools
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -100,8 +100,10 @@ def retry_failed(
     on_progress: Callable[[Progress], None] = lambda p: None,
     cancel: threading.Event | None = None,
     cache_max_age: timedelta = timedelta(hours=24),
+    kinds: Collection[str] | None = None,
 ) -> ScanOutcome:
-    """Scan the failed images of the finished partial run ``run_id`` again and put the results in that run.
+    """Scan the failed images of the finished partial run ``run_id`` again (only those of ``kinds`` when given) and put
+    the results in that run.
 
     The refs, platforms and workloads come from the database, so the cluster is not read. The run's package types
     apply; ``settings`` gives the time limit and parallelism. Each new result replaces its failure, and the run is
@@ -117,9 +119,10 @@ def retry_failed(
     trivy = CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION
     if run["trivy_version"] != trivy:
         raise RetryRefused(f"run {run['number']} was scanned with Trivy {run['trivy_version']}, not {trivy}")
-    failed = repo.failed_items(run_id) if run["status"] == "partial" else []
+    failed = repo.failed_items(run_id, kinds) if run["status"] == "partial" else []
     if not failed:
-        raise RetryRefused(f"run {run['number']} has no failed images")
+        which = f" of kind {', '.join(sorted(kinds))}" if kinds is not None else ""
+        raise RetryRefused(f"run {run['number']} has no failed images{which}")
 
     ids = {id(item): result_id for result_id, item in failed}
     run_settings = settings.model_copy(update={"pkg_types": tuple(run["pkg_types"].split(","))})
@@ -130,7 +133,7 @@ def retry_failed(
     try:
         _scan(run_settings, repo, run_id, [item for _, item in failed], save, on_progress, cancel, cache_max_age)
     finally:
-        status = repo.settle_retry(run_id, retried=len(failed))
+        status = repo.settle_retry(run_id, [result_id for result_id, _ in failed], kinds=kinds)
     return ScanOutcome(run_id=run_id, warnings=[], status=status)
 
 
