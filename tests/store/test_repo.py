@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import stat
+import threading
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -60,6 +61,46 @@ def test_migrations_idempotent(tmp_path):
     assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
     assert conn.execute("PRAGMA journal_mode").fetchone()[0] == "wal"
+
+
+def test_concurrent_connects_migrate_once(tmp_path):
+    # Two kubedelos processes opening a new database at once: each must see the other's migrations, not run them twice.
+    path = tmp_path / "k.db"
+    start = threading.Barrier(4)
+    errors: list[BaseException] = []
+
+    def open_db():
+        start.wait()
+        try:
+            connect(path).close()
+        except sqlite3.Error as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=open_db) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert errors == []
+    conn = connect_readonly(path)
+    _OPEN.append(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+
+
+def test_failed_migration_rolls_back_and_releases_the_write_lock(tmp_path, monkeypatch):
+    from kubedelos.store import db
+
+    path = tmp_path / "k.db"
+    connect(path).close()
+    monkeypatch.setattr(db, "MIGRATIONS", [*MIGRATIONS, "CREATE TABLE half_done (a); NOT SQL;"])
+    with pytest.raises(sqlite3.OperationalError):
+        connect(path)
+    other = sqlite3.connect(path, timeout=0)  # fails at once if the write lock were still held
+    _OPEN.append(other)
+    other.execute("BEGIN IMMEDIATE")
+    other.rollback()
+    assert other.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
+    assert other.execute("SELECT count(*) FROM sqlite_master WHERE name = 'half_done'").fetchone()[0] == 0
 
 
 def test_run_roundtrip_counts(tmp_path):

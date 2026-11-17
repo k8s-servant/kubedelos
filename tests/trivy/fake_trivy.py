@@ -4,6 +4,7 @@
 ``trivy image --download-db-only`` / ``--download-java-db-only`` exits 0. Env vars:
   FAKE_TRIVY_DOWNLOAD_LOG    append the argv as a JSON line here
   FAKE_TRIVY_DOWNLOAD_FAIL   print this to stderr and exit 1
+  FAKE_TRIVY_DOWNLOAD_PID_FILE  write this process's PID here, then sleep FAKE_TRIVY_DOWNLOAD_SLEEP seconds
 
 ``trivy image ...`` (a scan). Env vars:
   FAKE_TRIVY_PID_FILE        write this process's PID here, before sleeping
@@ -28,6 +29,10 @@ def download(argv):
     if log := os.environ.get("FAKE_TRIVY_DOWNLOAD_LOG"):
         with open(log, "a") as f:
             f.write(json.dumps(argv) + "\n")
+    if pid_file := os.environ.get("FAKE_TRIVY_DOWNLOAD_PID_FILE"):
+        with open(pid_file, "w") as f:
+            f.write(str(os.getpid()))
+        time.sleep(float(os.environ.get("FAKE_TRIVY_DOWNLOAD_SLEEP", "30")))
     if fail := os.environ.get("FAKE_TRIVY_DOWNLOAD_FAIL"):
         sys.stderr.write(fail + "\n")
         return 1

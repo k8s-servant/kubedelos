@@ -115,6 +115,7 @@ class FakeKubeApi:
         namespaces_forbidden: bool = False,
         forbidden_resources: set[tuple[str, str]] | None = None,  # (resource, namespace)
         nodes_forbidden: bool = False,
+        bad_request: set[str] | None = None,  # list methods that answer HTTP 400, as for a selector they reject
     ) -> None:
         self.namespaces = namespaces or []
         self.pods = pods or {}
@@ -126,6 +127,7 @@ class FakeKubeApi:
         self.namespaces_forbidden = namespaces_forbidden
         self.forbidden_resources = forbidden_resources or set()
         self.nodes_forbidden = nodes_forbidden
+        self.bad_request = bad_request or set()
         self.selectors: list[tuple[str, str | None]] = []
 
     def _check(self, ns: str, resource: str) -> None:
@@ -135,6 +137,8 @@ class FakeKubeApi:
     def _match(self, method: str, objs: list, label_selector: str | None) -> list:
         """Record the selector and filter by comma-ANDed ``k=v`` equality; the real API server parses the rest."""
         self.selectors.append((method, label_selector))
+        if method in self.bad_request:
+            raise ApiException(status=400, reason="Bad Request")
         if not label_selector:
             return objs
         if "(" in label_selector and ")" not in label_selector:

@@ -7,6 +7,7 @@ plain Trivy. The CLI serves the UI and keeps two helpers, `trivy install` and `r
 import contextlib
 import logging
 import os
+import re
 import secrets
 import signal
 import sys
@@ -124,6 +125,9 @@ def _signals_as_interrupt() -> Iterator[None]:
             signal.signal(sig, handler)
 
 
+_PLATFORM_RE = re.compile(r"[a-z0-9]+/[a-z0-9_]+(/[a-z0-9]+)?")  # os/arch[/variant], as Trivy's --platform takes it
+
+
 def _one_line(text: str | None, limit: int = _ERROR_LINE_CHARS) -> str:
     """First line of ``text``, cut to ``limit`` characters, with control characters replaced."""
     first = (text or "").strip().splitlines()[:1]
@@ -133,7 +137,7 @@ def _one_line(text: str | None, limit: int = _ERROR_LINE_CHARS) -> str:
 @registry_app.command("test")
 def registry_test(
     image: Annotated[str, typer.Argument(help="Image to check, e.g. registry.example/team/app:1")],
-    platform: Annotated[str, typer.Option(help="Platform to resolve, as os/arch.")] = "linux/amd64",
+    platform: Annotated[str, typer.Option(help="Platform to resolve, as os/arch[/variant].")] = "linux/amd64",
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
 ) -> None:
     """Check that kubedelos can read IMAGE with your current registry login, by scanning it once."""
@@ -141,6 +145,11 @@ def registry_test(
     # parse_image_id falls back to :latest when a digest is malformed; for a user's ref that would scan another image.
     if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
+        raise typer.Exit(2)
+    if not _PLATFORM_RE.fullmatch(platform):
+        typer.echo(
+            f"error: invalid platform {_one_line(platform, 64)!r}: use os/arch[/variant], e.g. linux/amd64", err=True
+        )
         raise typer.Exit(2)
     host = registry_host(ref)
     settings = _load_settings(trivy_path=trivy_path)

@@ -1,6 +1,7 @@
 import fcntl
 import json
 import os
+import signal
 import stat
 import subprocess
 import sys
@@ -48,6 +49,15 @@ def test_downloads_both_dbs_into_trivy_cache(tmp_path, monkeypatch):
         ["image", "--download-db-only", "--cache-dir", cache_dir],
         ["image", "--download-java-db-only", "--cache-dir", cache_dir],
     ]
+
+
+def test_entering_twice_is_refused(tmp_path):
+    cache = TrivyCache(FAKE_TRIVY, tmp_path)
+    with cache:
+        with pytest.raises(RuntimeError, match="already entered"):
+            cache.__enter__()
+        assert not _try_exclusive(tmp_path)  # the first entry still holds its lock
+    assert _try_exclusive(tmp_path)
 
 
 def test_lock_file_is_private(tmp_path):
@@ -157,6 +167,47 @@ def test_sigterm_while_waiting_for_lock_exits(tmp_path):
 
 def _downloads(log: Path) -> list[str]:
     return [json.loads(line)[1] for line in log.read_text().splitlines()] if log.exists() else []
+
+
+_CANCEL_DURING_DOWNLOAD = """
+import sys
+from pathlib import Path
+from kubedelos import cli
+from kubedelos.trivy.cache import TrivyCache
+try:
+    with cli._signals_as_interrupt(), TrivyCache(Path(sys.argv[1]), Path(sys.argv[2])):
+        sys.exit(0)
+except KeyboardInterrupt:
+    sys.exit(130)
+"""
+
+
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM])
+def test_cancel_during_db_download_kills_trivy_and_frees_the_lock(tmp_path, sig):
+    pid_file = tmp_path / "download.pid"
+    proc = subprocess.Popen(
+        [sys.executable, "-c", _CANCEL_DURING_DOWNLOAD, str(FAKE_TRIVY), str(tmp_path)],
+        env={**os.environ, "FAKE_TRIVY_DOWNLOAD_PID_FILE": str(pid_file)},
+    )
+    try:
+        deadline = time.monotonic() + 10
+        while not pid_file.exists() or not pid_file.read_text():
+            assert time.monotonic() < deadline, "the fake DB download never started"
+            time.sleep(0.05)
+        proc.send_signal(sig)
+        assert proc.wait(timeout=10) == 130
+    finally:
+        proc.kill()
+    download = int(pid_file.read_text())
+    deadline = time.monotonic() + 5
+    while True:
+        try:
+            os.kill(download, 0)
+        except ProcessLookupError:
+            break
+        assert time.monotonic() < deadline, "the DB download outlived the cancel"
+        time.sleep(0.05)
+    assert _try_exclusive(tmp_path)
 
 
 def test_os_only_skips_java_db(tmp_path, monkeypatch):

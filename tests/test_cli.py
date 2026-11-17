@@ -73,8 +73,9 @@ def test_registry_test_not_found(fake_env, monkeypatch):
     assert "not found on registry.example" in r.stderr
 
 
-def test_registry_test_rejects_invalid_ref(fake_env):
-    r = _registry_test("--", "-oyaml")
+@pytest.mark.parametrize("image", ["-oyaml", "", "team/app 1", "team/app:1\x07", "team/app:\n1", "a" * 513])
+def test_registry_test_rejects_invalid_ref(fake_env, image):
+    r = _registry_test("--", image)
     assert r.exit_code == 2
     assert "invalid image reference" in r.stderr
     assert not (fake_env / "record.json").exists()
@@ -91,7 +92,8 @@ def _gone(pid: int) -> bool:
     return False
 
 
-def test_registry_test_cancel_exits_130(fake_env):
+@pytest.mark.parametrize("sig", [signal.SIGINT, signal.SIGTERM, signal.SIGHUP])
+def test_registry_test_cancel_exits_130(fake_env, sig):
     pid_file = fake_env / "scan.pid"
     env = {**os.environ, "FAKE_TRIVY_SLEEP": "30", "FAKE_TRIVY_PID_FILE": str(pid_file)}
     proc = subprocess.Popen(
@@ -105,11 +107,30 @@ def test_registry_test_cancel_exits_130(fake_env):
                 break
             time.sleep(0.1)
         assert pid_file.exists(), "the fake Trivy scan never started"
-        proc.send_signal(signal.SIGTERM)
+        proc.send_signal(sig)
         assert proc.wait(timeout=10) == 130
     finally:
         proc.kill()
     assert _gone(int(pid_file.read_text()))
+
+
+@pytest.mark.parametrize(
+    "platform", ["linux", "linux/", "/amd64", "linux/arm/v7/x", "Linux/AMD64", "-oyaml/x", "linux amd64"]
+)
+def test_registry_test_rejects_invalid_platform(fake_env, platform):
+    r = _registry_test("--platform", platform, "nginx:1.19")
+    assert r.exit_code == 2
+    assert "invalid platform" in r.stderr
+    assert not (fake_env / "record.json").exists()
+    assert not (fake_env / "downloads.jsonl").exists()
+
+
+@pytest.mark.parametrize("platform", ["linux/arm/v7", "windows/amd64", "linux/arm64"])
+def test_registry_test_passes_a_valid_platform_to_trivy(fake_env, platform):
+    r = _registry_test("--platform", platform, "nginx:1.19")
+    assert r.exit_code == 0, r.stderr
+    argv = json.loads((fake_env / "record.json").read_text())["FakeArgv"]
+    assert argv[argv.index("--platform") + 1] == platform
 
 
 @pytest.mark.parametrize("image", ["nginx@sha256:dead", "nginx@sha512:" + "a" * 128, "nginx@"])
