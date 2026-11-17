@@ -230,3 +230,34 @@ def test_download_failure_shows_the_trivy_cause(tmp_path, monkeypatch):
     assert str(exc.value) == (
         "trivy image --download-db-only failed with exit code 1: dial tcp: lookup mirror.example: no such host"
     )
+
+
+def test_db_info_reads_what_trivy_wrote(tmp_path):
+    from datetime import UTC, datetime
+
+    from kubedelos.trivy.cache import db_info
+
+    meta = tmp_path / "trivy-cache" / "db" / "metadata.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(
+        '{"Version":2,"NextUpdate":"2026-11-18T06:59:44.233351009Z","UpdatedAt":"2026-11-17T06:59:44.233351399Z",'
+        '"DownloadedAt":"2026-11-17T08:18:20.022679Z"}'
+    )
+    info = db_info(tmp_path, "db")
+    assert info.updated_at == datetime(2026, 11, 17, 6, 59, 44, 233351, tzinfo=UTC)
+    assert info.next_update == datetime(2026, 11, 18, 6, 59, 44, 233351, tzinfo=UTC)
+    assert info.downloaded_at == datetime(2026, 11, 17, 8, 18, 20, 22679, tzinfo=UTC)
+    assert db_info(tmp_path, "java-db") is None  # never downloaded
+
+
+@pytest.mark.parametrize("text", [
+    "not json", "[]", '{"UpdatedAt": 3}', '{"UpdatedAt": "yesterday"}', "{}",
+    '{"UpdatedAt":"2026-11-17T06:59:44","NextUpdate":"2026-11-18T06:59:44","DownloadedAt":"2026-11-17T08:18:20"}',
+])  # fmt: skip
+def test_db_info_of_an_unreadable_file_is_none(tmp_path, text):
+    from kubedelos.trivy.cache import db_info
+
+    meta = tmp_path / "trivy-cache" / "db" / "metadata.json"
+    meta.parent.mkdir(parents=True)
+    meta.write_text(text)
+    assert db_info(tmp_path, "db") is None

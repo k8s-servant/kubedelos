@@ -8,16 +8,22 @@ run is reading. If another run is already scanning, the update is skipped rather
 The kernel drops a ``flock`` when its process dies, so a killed run never leaves a stale lock behind; a run whose
 download failed or was killed leaves no usable DB, so the next run to get the lock downloads it instead of scanning
 without.
+
+:func:`db_info` reads when a DB was built and downloaded, from the ``metadata.json`` Trivy writes next to it, for the
+UI's About page.
 """
 
 import contextlib
 import fcntl
+import json
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Self
+from typing import Literal, Self
 
 from kubedelos.trivy.runner import _run_group, error_cause
 
@@ -25,6 +31,23 @@ _DB_DOWNLOAD_TIMEOUT_S = 1800
 _LOCK_FILE = ".kubedelos.lock"
 _DB_METADATA = "db/metadata.json"  # written by Trivy once a download finished
 _JAVA_DB_METADATA = "java-db/metadata.json"
+
+
+@dataclass(frozen=True)
+class DbInfo:
+    updated_at: datetime  # when Trivy built the DB
+    next_update: datetime  # from then on a download fetches a newer one
+    downloaded_at: datetime
+
+
+def db_info(cache_dir: Path, name: Literal["db", "java-db"]) -> DbInfo | None:
+    """The ``trivy-cache/<name>`` DB's dates, or ``None`` when it was never downloaded or its metadata is unreadable."""
+    try:
+        meta = json.loads((cache_dir / "trivy-cache" / name / "metadata.json").read_text())
+        dates = [datetime.fromisoformat(meta[key]) for key in ("UpdatedAt", "NextUpdate", "DownloadedAt")]
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+    return DbInfo(*dates) if all(d.tzinfo for d in dates) else None  # Trivy writes UTC; a naive date can't compare
 
 
 class TrivyCache:
