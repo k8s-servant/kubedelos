@@ -50,6 +50,15 @@ def test_downloads_both_dbs_into_trivy_cache(tmp_path, monkeypatch):
     ]
 
 
+def test_entering_twice_is_refused(tmp_path):
+    cache = TrivyCache(FAKE_TRIVY, tmp_path)
+    with cache:
+        with pytest.raises(RuntimeError, match="already entered"):
+            cache.__enter__()
+        assert not _try_exclusive(tmp_path)  # the first entry still holds its lock
+    assert _try_exclusive(tmp_path)
+
+
 def test_lock_file_is_private(tmp_path):
     with TrivyCache(FAKE_TRIVY, tmp_path):
         pass

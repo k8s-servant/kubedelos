@@ -61,6 +61,8 @@ class TrivyCache:
         self._fd: int | None = None
 
     def __enter__(self) -> Self:
+        if self._fd is not None:  # a second lock on the same file would wait for this one forever
+            raise RuntimeError("TrivyCache is already entered")
         self.dir.mkdir(parents=True, exist_ok=True)
         self._fd = os.open(self.dir / _LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o600)
         try:
