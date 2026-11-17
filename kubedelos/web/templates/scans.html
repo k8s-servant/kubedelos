@@ -57,7 +57,7 @@
         <div class="pills">
           <label class="pill"><input type="checkbox" name="rescan" value="on"{% if form.rescan %} checked{% endif %}>Rescan every image</label>
         </div>
-        <span class="hint">off: images scanned in the last 24 h reuse their results</span>
+        <span class="hint">off: uses the 24 h cache</span>
       </fieldset>
       <div class="filter-actions">
         <button type="submit" class="btn">Scan {{ context }}</button>

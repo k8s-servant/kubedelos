@@ -46,6 +46,7 @@
 
 ### Bug Fixes
 
+- The Scans form lines up: the parallel images box is styled like the other inputs (as are the retry form's number boxes), inputs, pills and the Scan button share one height and top edge, and the rescan hint fits on one line.
 - Two kubedelos processes opening the same new or older database at once no longer fail with "duplicate column name" or "database is locked": each migration runs under the write lock and is skipped when the other process has already applied it.
 - Image exclusions match images whose registry host is written in uppercase or as `index.docker.io`, the way image names are normalised.
 - A run's scope ignores repeated namespaces and image exclusions, so such runs still compare with the same scope written once.
