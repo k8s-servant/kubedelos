@@ -168,6 +168,9 @@ each UI scan starts. A scan still running in another process holds its lock and 
 
 ## What gets scanned
 
+[How a scan works](docs/how-scans-work.md) explains each step of a scan, the caches and DBs it keeps, parallelism and
+time limits, and how to speed up a slow scan.
+
 A scan covers the images of running pods, including init and ephemeral containers, plus the pod templates of CronJobs
 and of Deployments and StatefulSets scaled to zero. The Scans page narrows it, for one scan, by namespaces, namespace
 exclusions, a namespace label selector, a pod and workload label selector, and image exclusions; the defaults come from

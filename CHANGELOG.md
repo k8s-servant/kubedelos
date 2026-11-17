@@ -4,6 +4,7 @@
 
 ### Features
 
+- A guide, [How a scan works](docs/how-scans-work.md), explains each step of a scan, the result cache, the Trivy DBs and the layer cache (what, where, why and how long), parallelism and time limits, failure kinds and retries, how to speed up a slow scan, and what is kept on disk.
 - Package skeleton with the `kubedelos` entrypoint.
 - An About page (last in the sidebar) says how fresh the data is: when Trivy built the vulnerability and Java DBs in use, whether a newer one is out (the next scan downloads it) and when the shown context was last scanned. It also names the kubedelos, Trivy and Python versions, the license, the project links with the security policy, and what kubedelos never does.
 - Layer cache: each parallel scan keeps Trivy's layer cache on disk between runs, in a slot of its own (Trivy locks the cache for a whole scan), so a rescan only analyses layers it has not seen; a warm rescan of a JDK image took 1.8 s instead of 11 s. A slot another `kubedelos ui` is using is skipped, a scan with no free slot keeps its cache in memory as before, each repository goes back to its own slot (one of 32, at most 128 MB each, emptied when over), and `KUBEDELOS_LAYER_CACHE=false` turns it off.
