@@ -6,7 +6,7 @@ from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image
+from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image, short_name
 
 
 @pytest.fixture(autouse=True)
@@ -63,6 +63,15 @@ def test_short_image_cuts_the_digest():
         "reg.example.com/app"
     )
     assert short_image({"repo": "", "image": "ref"}) == "ref"
+
+
+def test_short_name_keeps_the_last_path_segment_and_a_short_tag():
+    assert short_name("reg.example.com:5000/team/app:1.2") == "app:1.2"
+    assert short_name("reg.example.com/app:1.2@sha256:" + "a" * 64) == "app:1.2"
+    assert short_name("reg.example.com/app@sha256:" + "b" * 64) == "app@sha256:bbbbbbbb"
+    assert short_name("app") == "app"
+    long = "reg.example.com/kindnetd:v20251212-v0.29.0-alpha-105-g20ccfc88"
+    assert short_name(long) == "kindnetd:v20251212-\u2026"
 
 
 def _ok_run(seed, context):

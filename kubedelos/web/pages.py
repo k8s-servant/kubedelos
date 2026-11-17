@@ -144,6 +144,21 @@ def seconds_text(seconds: float | None) -> str:
     return f"{minutes} min {rest} s" if minutes else f"{rest} s"
 
 
+TAG_SHOWN = 16  # longer tags (a kind build such as v20251212-v0.29.0-alpha-105-g20ccfc88) are cut to their first 10
+
+
+def short_name(ref: str) -> str:
+    """The image's own name (the last path segment) with its tag, or with ``sha256:`` and 8 hex of a digest-only ref.
+
+    A tag over ``TAG_SHOWN`` characters keeps its first 10 and an ellipsis; the page puts the full ref in a tooltip.
+    """
+    name, _, digest = ref.partition("@")
+    image, _, tag = name.rsplit("/", 1)[-1].partition(":")  # a registry port sits before the last slash
+    if tag:
+        return f"{image}:{tag if len(tag) <= TAG_SHOWN else tag[:10] + chr(0x2026)}"
+    return f"{image}@{digest[:15]}" if digest else image
+
+
 def short_image(r: Any) -> str:
     """``repo:tag`` plus a short digest: what people recognise, where the full ref is 64 hex characters long."""
     if not r["repo"]:

@@ -103,10 +103,10 @@
               {%- if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif -%}
             </td>
             <td>{{ row.pkg_name }}</td>
-            <td class="version">{{ row.installed }}</td>
+            <td class="version installed">{{ row.installed }}</td>
             <td class="version{% if row.fixed %} fixed{% endif %}">{% if row.fixed %}{{ versions(row.fixed) }}{% endif %}</td>
             <td>{{ row.pkg_class or "unknown" }}</td>
-            <td><span class="ref" title="{{ row.ref }}">{% for part in row.image.split("/") %}{{ part }}{% if not loop.last %}/<wbr>{% endif %}{% endfor %}</span></td>
+            <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
             <td class="risk">
               {%- if row.accepted %}<a class="chip chip-accepted" href="{{ row.accepted_href }}">accepted</a>

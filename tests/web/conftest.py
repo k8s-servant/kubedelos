@@ -22,9 +22,10 @@ class Clock:
 
     def __init__(self) -> None:
         self.now = datetime(2026, 1, 1, tzinfo=UTC)
+        self.step = timedelta(minutes=1)  # a test that sets ``now`` to an exact instant sets this to zero
 
     def __call__(self) -> datetime:
-        self.now += timedelta(minutes=1)
+        self.now += self.step
         return self.now
 
 

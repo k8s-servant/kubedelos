@@ -16,6 +16,7 @@
   --fg-strong: #ffffff;
   --muted: #9097a0;
   --nav: #b5bcc6;
+  --chip: #c4cad6;
   --link: #8fb6ff;
   --accent: #7c5cff;
   --accent-soft: rgb(124 92 255 / 18%);
@@ -47,6 +48,7 @@
     --fg-strong: #0d1013;
     --muted: #545b64;
     --nav: #3a4049;
+    --chip: #3a4049;
     --link: #1f5fbf;
     --accent: #5b3fd9;
     --accent-soft: rgb(91 63 217 / 12%);
@@ -355,7 +357,7 @@ main {
   border: 1px solid var(--line);
   border-radius: 999px;
   background: var(--tint);
-  color: var(--nav);
+  color: var(--chip);
   font-size: 0.71875rem;
   overflow-wrap: anywhere;
 }
@@ -500,7 +502,8 @@ main {
 }
 
 /* Versions wrap only where they must (a long Go pseudo-version); a fixed-in list breaks only at its commas, because
-   each version in it is a no-wrap .v. Vulnerability ids never wrap. */
+   each version in it is a no-wrap .v. An installed version, with its "+N", never wraps: a break at its hyphen reads
+   as two versions. Vulnerability ids never wrap. */
 
 .version {
   max-width: 14rem;
@@ -509,6 +512,11 @@ main {
 }
 
 .v {
+  white-space: nowrap;
+}
+
+.version.installed {
+  max-width: none;
   white-space: nowrap;
 }
 
@@ -612,18 +620,13 @@ tbody tr:hover td {
   font-size: 0.9375rem;
 }
 
-/* Tiles stretch to the height of the all findings tile; the change line sits at the bottom of each, level with the
-   legend, so the tiles read as one row instead of four half-empty boxes. */
+/* Tiles stretch to the height of the all findings tile; the change line sits right under the number in each, so
+   the label, number and change read as one block and any spare height falls below it. */
 
 .tile-change {
-  margin-top: auto;
-  padding-top: 0.125rem;
+  margin-top: 0.125rem;
   color: var(--muted);
   font-size: 0.71875rem;
-}
-
-.tile[data-tile="findings"] .tile-change {
-  margin-top: 0.125rem;
 }
 
 /* The stacked severity bar: SVG rects sized in attributes, and a line of card colour only between segments, so the
@@ -1220,15 +1223,12 @@ select {
   white-space: nowrap;
 }
 
-/* An image ref breaks after its slashes (the page puts a <wbr> there) and at hyphens; break-word only splits a name
-   that still cannot fit, so the column keeps whole names instead of "kindn / etd". */
+/* The image column shows the short name (the full ref is its tooltip), so a row stays one line high; break-word only
+   splits a name that still cannot fit. */
 
 .findings .ref {
-  display: inline-block;
-  min-width: 11rem;
-  max-width: 20rem;
   font-family: var(--mono);
-  overflow-wrap: break-word;
+  white-space: nowrap;
 }
 
 .pager {
