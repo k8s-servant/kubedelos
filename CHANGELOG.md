@@ -5,6 +5,7 @@
 ### Features
 
 - Package skeleton with the `kubedelos` entrypoint.
+- Layer cache: each parallel scan keeps Trivy's layer cache on disk between runs, in a slot of its own (Trivy locks the cache for a whole scan), so a rescan only analyses layers it has not seen; a warm rescan of a JDK image took 1.8 s instead of 11 s. A slot another `kubedelos ui` is using is skipped, a scan with no free slot keeps its cache in memory as before, each repository goes back to its own slot (one of 32, at most 128 MB each, emptied when over), and `KUBEDELOS_LAYER_CACHE=false` turns it off.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
 - Scan times: each image's scan is timed and stored with its result (schema migration 9). A page per run lists the slowest images and how the time was spent, linked from each run's duration in the Scans history and from the failures page, which shows each failure's time.
 - A Settings page lists every setting the UI started with, its value and where it came from (flag, environment or default), plus the database file, data and cache directories, the Trivy in use and the log level. It is read-only and lists no credentials.

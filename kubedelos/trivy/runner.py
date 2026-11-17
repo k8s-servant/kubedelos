@@ -1,8 +1,10 @@
 """Scan images in parallel, each with its own standalone ``trivy image`` process.
 
-Parallel Trivy processes fight over the BoltDB lock of the on-disk layer cache, so every scan keeps that cache in
-memory (``--cache-backend memory``) and only reads the shared vulnerability and Java DBs, which
-:class:`kubedelos.trivy.cache.TrivyCache` keeps up to date under a file lock. Every Trivy process runs in its own
+Parallel Trivy processes fight over the BoltDB lock of an on-disk layer cache, so each scan takes its own slot from
+:class:`kubedelos.trivy.layers.LayerSlots` (``--cache-backend fs``), kept between runs, or keeps its layer cache in
+memory (``--cache-backend memory``) when no slot is free or ``layer_cache`` is off. Either way every scan only reads
+the shared vulnerability and Java DBs, which :class:`kubedelos.trivy.cache.TrivyCache` keeps up to date under a file
+lock. Every Trivy process runs in its own
 process group so that a stop or a timeout also reaches its children. Being in its own session, a Trivy process never
 gets the terminal's Ctrl-C, so every group this process starts is also kept in a process-wide registry, and
 :func:`kill_all_running` stops them all when the UI shuts down mid-scan.
@@ -23,6 +25,8 @@ from typing import Literal
 
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_digest
+from kubedelos.trivy import layers
+from kubedelos.trivy.layers import LayerSlots
 from kubedelos.trivy.parse import parse_report
 
 ErrorKind = Literal["auth", "not_found", "timeout", "trivy", "unknown"]
@@ -291,10 +295,15 @@ def scan_image(
     docker_config: Path | None = None,
     *,
     cache_dir: Path | None = None,
+    layer_dir: Path | None = None,
     pkg_types: tuple[str, ...] = ("library", "os"),
     _groups: _ClientGroups | None = None,
 ) -> ImageResult:
-    """Scan one image with a standalone Trivy. Failures come back as ``status="error"``; this never raises."""
+    """Scan one image with a standalone Trivy. Failures come back as ``status="error"``; this never raises.
+
+    With ``layer_dir`` (a :class:`~kubedelos.trivy.layers.LayerSlots` slot, which links the DBs) Trivy keeps its layer
+    cache there; otherwise it keeps it in memory and reads the DBs from ``cache_dir``.
+    """
     argv = [
         str(trivy),
         "image",
@@ -312,10 +321,10 @@ def scan_image(
         "--timeout",
         f"{timeout_s}s",
         "--cache-backend",
-        "memory",  # the on-disk layer cache is a BoltDB file that parallel scans would lock each other out of
+        "memory" if layer_dir is None else "fs",
     ]
-    if cache_dir is not None:
-        argv += ["--cache-dir", str(cache_dir)]
+    if (dir_ := layer_dir or cache_dir) is not None:
+        argv += ["--cache-dir", str(dir_)]
     # "--" ends flag parsing, so a ref from a pod spec can never be read as a flag.
     argv += ["--skip-db-update", "--skip-java-db-update", "--", item_ref.ref]
 
@@ -374,8 +383,9 @@ def scan_many(
         return
     workers = settings.parallelism
     groups = _ClientGroups()
+    slots = LayerSlots(cache_dir, settings.cache_dir / "trivy-layers", layers.SLOTS) if settings.layer_cache else None
 
-    def attempt(item: InventoryItem) -> ImageResult:
+    def attempt(item: InventoryItem, layer_dir: Path | None) -> ImageResult:
         try:
             return scan_image(
                 trivy,
@@ -383,6 +393,7 @@ def scan_many(
                 item.platform,
                 settings.scan_timeout_s,
                 cache_dir=cache_dir,
+                layer_dir=layer_dir,
                 pkg_types=settings.pkg_types,
                 _groups=groups,
             )
@@ -397,15 +408,16 @@ def scan_many(
 
     def work(item: InventoryItem) -> ImageResult:
         started = time.monotonic()
-        result = attempts(item)
+        with slots.take(item.image.repo) if slots else contextlib.nullcontext() as layer_dir:
+            result = attempts(item, layer_dir)
         return result.model_copy(update={"duration_s": round(time.monotonic() - started, 1)})
 
-    def attempts(item: InventoryItem) -> ImageResult:
-        result = attempt(item)
+    def attempts(item: InventoryItem, layer_dir: Path | None) -> ImageResult:
+        result = attempt(item, layer_dir)
         # The wait holds this worker's slot, so a burst of 503s briefly narrows the scan; one retry keeps that short.
         if not _passing(result) or cancel.wait(_RETRY_DELAY_S):
             return result
-        again = attempt(item)
+        again = attempt(item, layer_dir)
         if again.status != "error":
             return again
         kept = (again.error or "")[-(_MAX_ERROR_CHARS - len(RETRIED_PREFIX)) :]  # the prefix stays within the cap

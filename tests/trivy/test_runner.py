@@ -1,3 +1,4 @@
+import fcntl
 import json
 import os
 import signal
@@ -10,7 +11,7 @@ import pytest
 
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem
-from kubedelos.trivy import runner
+from kubedelos.trivy import layers, runner
 from kubedelos.trivy.parse import parse_report
 from kubedelos.trivy.runner import error_cause, scan_image, scan_many
 
@@ -149,7 +150,7 @@ def _items(n: int) -> list[InventoryItem]:
 def test_scan_many_reports_every_item(tmp_path, monkeypatch):
     record = tmp_path / "record.json"
     monkeypatch.setenv("FAKE_TRIVY_RECORD", str(record))
-    settings = Settings(cache_dir=tmp_path, parallelism=3, scan_timeout_s=30)
+    settings = Settings(cache_dir=tmp_path, parallelism=3, scan_timeout_s=30, layer_cache=False)
     results: list[ImageResult] = []
     scan_many(
         _items(5),
@@ -165,6 +166,39 @@ def test_scan_many_reports_every_item(tmp_path, monkeypatch):
     assert "--server" not in argv
     assert argv[argv.index("--cache-backend") + 1] == "memory"
     assert argv[argv.index("--cache-dir") + 1] == str(tmp_path / "trivy-cache")
+
+
+def _scan_recorded(tmp_path, monkeypatch, **settings):
+    record = tmp_path / "record.json"
+    monkeypatch.setenv("FAKE_TRIVY_RECORD", str(record))
+    scan_many(
+        _items(1), cache_dir=tmp_path / "trivy-cache", trivy=FAKE_TRIVY,
+        settings=Settings(cache_dir=tmp_path, parallelism=1, **settings), on_result=lambda r: None,
+        cancel=threading.Event(),
+    )  # fmt: skip
+    argv = json.loads(record.read_text())["FakeArgv"]
+    return argv[argv.index("--cache-backend") + 1], argv[argv.index("--cache-dir") + 1]
+
+
+def test_scan_many_keeps_layers_on_disk_in_a_slot(tmp_path, monkeypatch):
+    backend, cache_dir = _scan_recorded(tmp_path, monkeypatch)
+    slot = Path(cache_dir)
+    assert backend == "fs" and slot.parent == tmp_path / "trivy-layers" and slot.name.startswith("slot-")
+    assert (slot / "db").readlink() == tmp_path / "trivy-cache" / "db"
+
+
+def test_scan_many_keeps_layers_in_memory_when_no_slot_is_free(tmp_path, monkeypatch):
+    monkeypatch.setattr(layers, "SLOTS", 1)
+    lock = tmp_path / "trivy-layers" / "slot-0" / ".kubedelos.lock"
+    lock.parent.mkdir(parents=True)
+    with open(lock, "a") as held:
+        fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)  # another kubedelos process scans with the only slot
+        assert _scan_recorded(tmp_path, monkeypatch) == ("memory", str(tmp_path / "trivy-cache"))
+
+
+def test_scan_many_keeps_layers_in_memory_when_the_layer_cache_is_off(tmp_path, monkeypatch):
+    assert _scan_recorded(tmp_path, monkeypatch, layer_cache=False) == ("memory", str(tmp_path / "trivy-cache"))
+    assert not (tmp_path / "trivy-layers").exists()
 
 
 def test_scan_many_respects_cancel(tmp_path, monkeypatch):
