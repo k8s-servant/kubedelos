@@ -34,7 +34,7 @@ ErrorKind = Literal["auth", "not_found", "timeout", "trivy", "unknown"]
 _TIMEOUT_GRACE_S = 30  # Trivy's own --timeout should fire first; the subprocess limit is the backstop
 _MAX_ERROR_CHARS = 2000
 
-# Checked in order, case-insensitively, against a failed client's stderr.
+# Checked in order, case-insensitively, against a failed scan's stderr.
 _ERROR_PATTERNS: tuple[tuple[ErrorKind, tuple[str, ...]], ...] = (
     # A missing or failing credential helper: "error getting credentials - err: exec: ...: executable file not found".
     ("auth", ("unauthorized", "denied", "authentication required", "error getting credentials")),

@@ -93,6 +93,11 @@ def test_runner_sets_docker_config_only_when_given(tmp_path, monkeypatch):
         ("NAME_UNKNOWN: repository name not known to registry; name unknown", "not_found"),
         ("FATAL scan error: rpc error: context deadline exceeded", "timeout"),
         (
+            "2026-11-14T08:37:10+02:00\tFATAL\tFatal error\timage scan error: scan error: unable to initialize a scan"
+            " service: context deadline exceeded",
+            "timeout",
+        ),
+        (
             'error getting credentials - err: exec: "docker-credential-desktop": executable file not found in $PATH',
             "auth",
         ),
@@ -439,22 +444,41 @@ def _wait_until(predicate, timeout=5.0):
 
 
 def test_kill_all_running_stops_every_live_trivy_group():
-    out = {}
-    sleeper = [sys.executable, "-c", "import time; time.sleep(60)"]
-    thread = threading.Thread(target=lambda: out.update(result=runner._run_group(sleeper, dict(os.environ), 120)))
+    # Parallel scans: three groups, each a Trivy-like parent with a child of its own, so only a group kill stops all.
+    out: dict[int, tuple[int, str, str]] = {}
+    sleeper = [
+        sys.executable, "-c",
+        "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']);"
+        " print('started', flush=True); time.sleep(60)",
+    ]  # fmt: skip
+    threads = [
+        threading.Thread(target=lambda n=n: out.update({n: runner._run_group(sleeper, dict(os.environ), 120)}))
+        for n in range(3)
+    ]
     started = time.monotonic()
-    thread.start()
-    _wait_until(runner.running_groups)
-    pgid = runner.running_groups()[0]
+    for thread in threads:
+        thread.start()
+    _wait_until(lambda: len(runner.running_groups()) == 3)
+    pgids = runner.running_groups()
+    time.sleep(0.5)  # let each parent start its child
     runner.kill_all_running()
-    thread.join(5)
-    assert not thread.is_alive() and time.monotonic() - started < 5
-    assert out["result"][0] == -signal.SIGKILL
-    assert pgid not in runner.running_groups()
-    with pytest.raises(ProcessLookupError):
-        os.killpg(pgid, 0)
+    for thread in threads:
+        thread.join(5)
+    assert not any(thread.is_alive() for thread in threads) and time.monotonic() - started < 6
+    assert [out[n][0] for n in range(3)] == [-signal.SIGKILL] * 3
+    assert runner.running_groups() == []
+    for pgid in pgids:
+        _wait_until(lambda pgid=pgid: _group_gone(pgid))
     # The registry stays open: a later Trivy still runs.
     assert runner._run_group([sys.executable, "-c", "pass"], dict(os.environ), 30)[0] == 0
+
+
+def _group_gone(pgid: int) -> bool:
+    try:
+        os.killpg(pgid, 0)
+    except (ProcessLookupError, PermissionError):  # macOS answers EPERM when only zombies are left
+        return True
+    return False
 
 
 @pytest.mark.parametrize("unit", ["http://a", "eyJ-", "eyJa", "http://a@", "token: ", "Authorization: Bearer "])
