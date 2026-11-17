@@ -156,7 +156,7 @@ The failures page of a run lists each failed image with its kind:
 
 **Retry failed images** (on the newest partial run of a cluster) scans the ticked kinds of failure again, without
 reading the cluster, and puts the results into the same run. It starts with a longer time limit (three times the
-setting, at most 3,600 s) and 2 parallel images, which helps large images most. Every kind but `not_found` is ticked at
+setting, at most 3,600 s) and at most 2 parallel images, which helps large images most. Every kind but `not_found` is ticked at
 first.
 
 ## Tuning a slow scan
