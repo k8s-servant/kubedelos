@@ -82,6 +82,7 @@ def test_nav_lists_accepted_after_namespaces(client, seed):
         "Accepted",
         "Scans",
         "Settings",
+        "About",
     ]
     assert 'href="/accepted" aria-current="page"' in nav
 

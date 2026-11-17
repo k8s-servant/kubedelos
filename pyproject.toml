@@ -42,6 +42,7 @@ dev = ["pytest>=9,<10", "pytest-cov>=7,<8", "ruff>=0.17,<1", "pre-commit>=4,<5"]
 Homepage = "https://github.com/k8s-servant/kubedelos"
 Issues = "https://github.com/k8s-servant/kubedelos/issues"
 Changelog = "https://github.com/k8s-servant/kubedelos/blob/main/CHANGELOG.md"
+Security = "https://github.com/k8s-servant/kubedelos/security/policy"
 
 [project.scripts]
 kubedelos = "kubedelos.cli:app"

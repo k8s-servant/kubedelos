@@ -154,6 +154,9 @@ follows the system light or dark theme.
   variable (or flag), its value and where the value came from (flag, environment or default), then the database file,
   the data and cache directories, the Trivy in use and the log level. No credentials are listed: kubedelos holds none,
   and registry logins stay in Docker's own config.
+- **About (`/about`)**: how fresh the data is (when Trivy built the vulnerability and Java DBs in use, whether a
+  newer one is out, and the shown context's newest scan), the kubedelos, Trivy and Python versions, the license, the
+  project links including the security policy, and what kubedelos never does.
 
 Add `?run_id=N` to pin a page to one run.
 

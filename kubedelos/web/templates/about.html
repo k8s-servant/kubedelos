@@ -1,0 +1,44 @@
+{#- The About page: how fresh the DBs and the newest scan are, what is running, the project links and what kubedelos
+    never does. Read-only. -#}
+{% extends "base.html" %}
+{% block title %}About · kubedelos{% endblock %}
+{% block run_line %}<div class="page-head"><h1>About</h1></div>{% endblock %}
+{% macro facts(rows) -%}
+    <div class="table-wrap">
+      <table class="settings-files">
+        <tbody>
+          {%- for label, value in rows %}
+          <tr>
+            <th scope="row">{{ label }}</th>
+            <td class="value">{{ value }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+{%- endmacro %}
+{% block content %}
+  <section class="card settings-card" aria-labelledby="freshness-title">
+    <h2 class="card-title" id="freshness-title">How fresh the data is</h2>
+    <p class="hint">Trivy publishes a new vulnerability DB a few times a day. kubedelos updates it at the start of each scan, so findings are as fresh as the newest scan.</p>
+    {{ facts(freshness) }}
+  </section>
+  <section class="card settings-card" aria-labelledby="running-title">
+    <h2 class="card-title" id="running-title">What is running</h2>
+    {{ facts(running) }}
+  </section>
+  <section class="card settings-card" aria-labelledby="project-title">
+    <h2 class="card-title" id="project-title">The project</h2>
+    <ul class="about-never">
+      <li>kubedelos reads the cluster and never changes the cluster: it lists namespaces and pods, and never reads Secrets.</li>
+      <li>Registry logins stay in your Docker config. kubedelos never stores credentials or writes them to a log.</li>
+      <li>This UI listens on loopback only, and its startup URL carries a token that is new on every start.</li>
+      <li>Images are scanned with a pinned Trivy, checked against its SHA-256, for vulnerabilities only.</li>
+    </ul>
+    <ul class="about-links">
+      {%- for label, url in links %}
+      <li><a href="{{ url }}" rel="noopener noreferrer">{{ "Security policy (report a vulnerability privately)" if label == "Security" else label }}</a></li>
+      {%- endfor %}
+    </ul>
+  </section>
+{% endblock %}

@@ -63,10 +63,10 @@ def test_values_are_escaped_and_no_secret_is_shown(client, app):
     assert TOKEN not in html
 
 
-def test_nav_ends_with_settings(client):
+def test_nav_has_settings_before_about(client):
     nav = client.get("/settings").text.split('<nav aria-label="Main">', 1)[1].split("</nav>", 1)[0]
     labels = re.findall(r">([A-Z][a-z]+)</a>", nav)
-    assert labels[-1] == "Settings"
+    assert labels[-2:] == ["Settings", "About"]
     assert '<a href="/settings" aria-current="page">Settings</a>' in nav
 
 

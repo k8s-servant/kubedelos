@@ -5,6 +5,7 @@
 ### Features
 
 - Package skeleton with the `kubedelos` entrypoint.
+- An About page (last in the sidebar) says how fresh the data is: when Trivy built the vulnerability and Java DBs in use, whether a newer one is out (the next scan downloads it) and when the shown context was last scanned. It also names the kubedelos, Trivy and Python versions, the license, the project links with the security policy, and what kubedelos never does.
 - Scans start from the web UI; there is no `kubedelos scan` command, since CI gating is left to plain Trivy.
 - Scan times: each image's scan is timed and stored with its result (schema migration 9). A page per run lists the slowest images and how the time was spent, linked from each run's duration in the Scans history and from the failures page, which shows each failure's time.
 - A Settings page lists every setting the UI started with, its value and where it came from (flag, environment or default), plus the database file, data and cache directories, the Trivy in use and the log level. It is read-only and lists no credentials.
