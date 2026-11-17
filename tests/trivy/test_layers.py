@@ -4,6 +4,8 @@ import threading
 import time
 from pathlib import Path
 
+import pytest
+
 from kubedelos.config import Settings
 from kubedelos.trivy.layers import SLOTS, LayerSlots
 
@@ -160,10 +162,5 @@ def test_a_slot_that_cannot_be_prepared_falls_back_to_memory(tmp_path, monkeypat
 
 def test_an_error_inside_the_block_is_not_swallowed(tmp_path):
     slots = _slots(tmp_path, count=1)
-    try:
-        with slots.take():
-            raise OSError("from the scan")
-    except OSError as exc:
-        assert str(exc) == "from the scan"
-    else:
-        raise AssertionError("the error was swallowed")
+    with pytest.raises(OSError, match="from the scan"), slots.take():
+        raise OSError("from the scan")
