@@ -42,9 +42,14 @@
 ### Documentation
 
 - The README leads with the web UI, explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
+- The README names the oldest Trivy a custom `KUBEDELOS_TRIVY_PATH` can be: v0.54.0, the first with `--pkg-types`.
 
 ### Bug Fixes
 
+- Two kubedelos processes opening the same new or older database at once no longer fail with "duplicate column name" or "database is locked": each migration runs under the write lock and is skipped when the other process has already applied it.
+- Image exclusions match images whose registry host is written in uppercase or as `index.docker.io`, the way image names are normalised.
+- A run's scope ignores repeated namespaces and image exclusions, so such runs still compare with the same scope written once.
+- `kubedelos registry test --platform` must be `os/arch[/variant]`; anything else is refused before Trivy runs.
 - UI polish: the KPI tiles put the change line right under the number instead of at the tile bottom; the findings table names each image short (the full ref is its tooltip), so rows stay one line high; installed versions, with their "+N", never wrap; status chips use the mockup grey.
 - The About and Settings pages give their label column one width on wide screens, so the values line up from card to card.
 - The namespaces filter no longer answers 400 "invalid parameter: has" when "any severity" is selected, and a 400 page keeps the cluster it was shown for.

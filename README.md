@@ -245,8 +245,8 @@ Managed clusters (AKS, EKS, GKE) are not yet verified; they come with the in-clu
 ## Trivy
 
 kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64); Windows is not supported. `kubedelos trivy install` downloads it
-and checks it against an embedded SHA-256. It never resolves "latest". Set `KUBEDELOS_TRIVY_PATH` to bring your own binary. Results from your own binary are
-not cached and the run records its Trivy version as `custom`.
+and checks it against an embedded SHA-256. It never resolves "latest". Set `KUBEDELOS_TRIVY_PATH` to bring your own binary; it must be Trivy v0.54.0 or later, the first with
+`--pkg-types`, or every image fails. Results from your own binary are not cached and the run records its Trivy version as `custom`.
 
 kubedelos is built on [Trivy](https://github.com/aquasecurity/trivy), an open source scanner by Aqua Security,
 licensed under Apache-2.0. kubedelos is an independent project, not affiliated with or endorsed by Aqua Security.
