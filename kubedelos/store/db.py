@@ -2,7 +2,10 @@
 
 import os
 import sqlite3
+import time
 from pathlib import Path
+
+_BUSY_TIMEOUT_MS = 5000
 
 # Each script moves the schema one version forward; PRAGMA user_version is the count applied.
 MIGRATIONS: list[str] = [
@@ -155,16 +158,41 @@ MIGRATIONS: list[str] = [
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    version = conn.execute("PRAGMA user_version").fetchone()[0]
-    for index in range(version, len(MIGRATIONS)):
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= len(MIGRATIONS):
+        return
+    # Another kubedelos process may be migrating the same file. Take the write lock first and read the version under
+    # it, so a migration the other process just applied is skipped instead of run twice. In the default (legacy)
+    # transaction mode, executescript() would commit that transaction before it runs; autocommit=True leaves it open.
+    # user_version is transactional in SQLite, so a failed script leaves the version untouched.
+    autocommit, conn.autocommit = conn.autocommit, True
+    try:
+        for index in range(len(MIGRATIONS)):
+            conn.execute("BEGIN IMMEDIATE")
+            if conn.execute("PRAGMA user_version").fetchone()[0] > index:
+                conn.execute("COMMIT")
+                continue
+            conn.executescript(f"{MIGRATIONS[index]}\nPRAGMA user_version = {index + 1};")
+            conn.execute("COMMIT")
+    except sqlite3.Error:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.autocommit = autocommit
+
+
+def _use_wal(conn: sqlite3.Connection) -> None:
+    # Switching a new file to WAL needs an exclusive lock, and SQLite fails at once instead of waiting busy_timeout for
+    # it. Another kubedelos process opening the same new file at the same moment holds it briefly, so retry.
+    deadline = time.monotonic() + _BUSY_TIMEOUT_MS / 1000
+    while True:
         try:
-            # executescript() commits implicitly, so drive the transaction by hand. user_version is
-            # transactional in SQLite, so a failed script leaves the version untouched.
-            conn.executescript(f"BEGIN;\n{MIGRATIONS[index]}\nPRAGMA user_version = {index + 1};\nCOMMIT;")
-        except sqlite3.Error:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
+            conn.execute("PRAGMA journal_mode = WAL")
+            return
+        except sqlite3.OperationalError:
+            if time.monotonic() > deadline:
+                raise
+            time.sleep(0.05)
 
 
 def connect(path: Path) -> sqlite3.Connection:
@@ -183,8 +211,8 @@ def connect(path: Path) -> sqlite3.Connection:
     path.chmod(0o600)
     conn = sqlite3.connect(path)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA busy_timeout = 5000")
-    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute(f"PRAGMA busy_timeout = {_BUSY_TIMEOUT_MS}")
+    _use_wal(conn)
     conn.execute("PRAGMA foreign_keys = ON")
     for suffix in ("-wal", "-shm"):
         sidecar = path.with_name(path.name + suffix)
