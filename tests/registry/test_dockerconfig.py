@@ -95,12 +95,16 @@ def test_temp_config_modes_and_removal(tmp_path):
 
 
 def test_temp_config_removed_on_exception(tmp_path):
-    with (
-        pytest.raises(RuntimeError),
-        dockerconfig.temp_config(tmp_path, {"registry.example.com": {"auth": "a"}}) as directory,
-    ):
-        raise RuntimeError("boom")
-    assert not directory.exists()
+    made = []
+
+    def fail_inside() -> None:
+        with dockerconfig.temp_config(tmp_path, {"registry.example.com": {"auth": "a"}}) as directory:
+            made.append(directory)
+            raise RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        fail_inside()
+    assert made and not made[0].exists()
 
 
 def test_clear_empties_dir_keeps_it(tmp_path):

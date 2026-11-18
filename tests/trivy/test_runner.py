@@ -723,6 +723,7 @@ class _RecordingAccess(RegistryAccess):
     """Hands each image a fresh directory under ``root`` and remembers it."""
 
     def __init__(self, root):
+        super().__init__(Settings.model_construct(secrets_dir=None, docker_configs=[], pod_pull_secret_namespaces=[]))
         self.root, self.made = root, {}
 
     def for_item(self, item):
