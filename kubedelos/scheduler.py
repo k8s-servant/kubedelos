@@ -3,8 +3,8 @@
 A sweep does not scan by itself: ``on_fire`` only adds a ``schedule`` request to the scan queue, and the queue worker
 runs it in the one scan slot. The job coalesces missed fires into one, never overlaps itself and still fires up to an
 hour late when the process was busy or briefly stalled, so such a sweep is neither lost nor doubled. The job store is
-in memory, so a restarted process schedules from now: a pod that was down at the sweep time skips that day's sweep. ``cron_error`` checks the
-schedule up front, so ``serve`` can refuse a bad one with a message naming the setting to fix.
+in memory, so a restarted process schedules from now: a pod that was down at the sweep time skips that day's sweep.
+``cron_error`` checks the schedule up front, so ``serve`` can refuse a bad one with a message naming the setting to fix.
 """
 
 from collections.abc import Callable

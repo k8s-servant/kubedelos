@@ -50,16 +50,21 @@ class QueueWorker:
     def enqueue_sweep(self) -> None:
         """Queue a sweep of the configured scope (skipping the result cache) and wake the worker.
 
-        Called from the scheduler's thread. A full queue drops this sweep with a warning: the next one comes on schedule.
+        Called from the scheduler's thread. A full queue or a database error (locked past the busy timeout, say) drops
+        this sweep with a warning: the next one comes on schedule.
         """
-        conn = db.connect(self._settings.db_path)
         try:
-            queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=self._clock())
+            conn = db.connect(self._settings.db_path)
+            try:
+                queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=self._clock())
+            finally:
+                conn.close()
         except queue.QueueFull:
             logger.warning("scheduled sweep skipped: the scan queue is full")
             return
-        finally:
-            conn.close()
+        except sqlite3.Error as exc:  # the type only: the message may name paths
+            logger.warning("scheduled sweep skipped (%s)", type(exc).__name__)
+            return
         self.wake()
 
     def wake(self) -> None:

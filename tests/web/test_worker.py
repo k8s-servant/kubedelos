@@ -1,5 +1,6 @@
 """Tests for the queue worker: sweeps and UI requests run one at a time, in order, and a finished sweep prunes."""
 
+import sqlite3
 import threading
 import time
 from datetime import UTC, datetime
@@ -213,6 +214,17 @@ def test_a_full_queue_drops_the_sweep(make, conn, caplog):
     worker.enqueue_sweep()  # not started, so nothing drains the queue: the sweep is dropped with a warning
     assert all(r.trigger == "ui" for r in queue.queued(conn))
     assert "queue is full" in caplog.text
+
+
+def test_a_locked_database_drops_the_sweep_with_a_warning(make, monkeypatch, caplog):
+    worker = make(FakeScan())
+
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue, "enqueue", locked)
+    worker.enqueue_sweep()  # must not raise on the scheduler's thread
+    assert "scheduled sweep skipped (OperationalError)" in caplog.text
 
 
 def test_stop_ends_the_thread(make):

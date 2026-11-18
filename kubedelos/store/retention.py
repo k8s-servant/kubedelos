@@ -8,7 +8,7 @@ survives however old it is, and a run a queued retry still names stays too. Acce
 import sqlite3
 from datetime import datetime, timedelta
 
-from kubedelos.store.queue import _write_lock
+from kubedelos.store.queue import write_lock
 
 
 def prune(
@@ -18,7 +18,7 @@ def prune(
 
     ``retention_days == 0`` keeps every run and request but still prunes the cache.
     """
-    with _write_lock(conn):
+    with write_lock(conn):
         conn.execute("DELETE FROM image_cache WHERE scanned_at < ?", ((now - cache_max_age).isoformat(),))
         if retention_days == 0:
             return []

@@ -45,7 +45,7 @@ def canonical(overrides: dict) -> str:
 
 
 @contextmanager
-def _write_lock(conn: sqlite3.Connection) -> Iterator[None]:
+def write_lock(conn: sqlite3.Connection) -> Iterator[None]:
     """Hold SQLite's write lock for the block; commit on success, roll back on any exception."""
     conn.commit()  # legacy transaction mode: end any open transaction so BEGIN IMMEDIATE starts a fresh one
     conn.execute("BEGIN IMMEDIATE")
@@ -105,7 +105,7 @@ def enqueue(
 ) -> Enqueued:
     """Queue a request, or return the id of an equal queued one. Raises QueueFull past MAX_QUEUED."""
     text = canonical(overrides)
-    with _write_lock(conn):
+    with write_lock(conn):
         existing = _find_equal(conn, kind, trigger, text, target_run_id)
         if existing is not None:
             return Enqueued(id=existing, added=False)
@@ -122,7 +122,7 @@ def enqueue(
 
 def claim_next(conn: sqlite3.Connection) -> Request | None:
     """Mark the oldest queued request started and return it, or None when nothing waits."""
-    with _write_lock(conn):
+    with write_lock(conn):
         row = conn.execute("SELECT * FROM scan_request WHERE state = 'queued' ORDER BY id LIMIT 1").fetchone()
         if row is None:
             return None
