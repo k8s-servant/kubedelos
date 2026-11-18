@@ -156,6 +156,8 @@ def test_serve_lock_is_released_on_exit(tmp_path):
     with runlock.hold_serve(tmp_path):
         pass
     assert (tmp_path / "serve.lock").exists()  # never deleted
+    if sys.platform != "win32":
+        assert (tmp_path / "serve.lock").stat().st_mode & 0o777 == 0o600
 
 
 _SERVE_HOLDER = """

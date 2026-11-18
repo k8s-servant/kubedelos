@@ -4,7 +4,8 @@ A scan that is killed (SIGKILL, a crash, a closed laptop) leaves its ``scan_run`
 must close such rows, but must never close a scan still going on in another terminal. So every run is owned by a
 lock file, ``<data_dir>/runs/<owner>.lock``, holding an exclusive OS lock for the whole run, and its token is stored on
 the row. The OS drops the lock when the process dies, however it dies, so "nobody holds the lock" means "no live
-process owns this run".
+process owns this run". A separate ``<data_dir>/serve.lock`` keeps a second ``kubedelos serve`` from sharing one
+data directory.
 """
 
 import contextlib
