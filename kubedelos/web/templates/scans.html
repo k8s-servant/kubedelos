@@ -1,6 +1,6 @@
 {#- The scans page: the start form (prefilled with the saved settings), the progress of the UI's scan and the paged run
-    history. htmx, loaded here only, polls the progress readout. In serve, which is view-only, the queue card takes the
-    start form's place and the history says who asked for each run. -#}
+    history. htmx, loaded here only, polls the progress readout. In serve the queue card comes first and the history
+    says who asked for each run; read-only serve drops the start form. -#}
 {% extends "base.html" %}
 {% block title %}Scans · kubedelos{% endblock %}
 {% block head %}
@@ -11,7 +11,8 @@
 {% block content %}
   {%- if serve %}
   {% include "partials/scan_queue.html" %}
-  {%- else %}
+  {%- endif %}
+  {%- if can_write(request) %}
   <section class="card scan-start" aria-labelledby="start-title">
     <h2 class="card-title" id="start-title">Start a scan of <code class="ctx">{{ context }}</code></h2>
     {%- if form_error %}

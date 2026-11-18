@@ -1,6 +1,7 @@
-"""Shared fixtures for the web UI tests: a migrated database, a seeding Repo, a logged-in TestClient and a client of
-the view-only ``kubedelos serve`` app (with fakes for its queue worker and sweeper)."""
+"""Shared fixtures for the web UI tests: a migrated database, a seeding Repo, a logged-in TestClient and clients of
+the ``kubedelos serve`` app (with fakes for its queue worker and sweeper), writable or read-only."""
 
+import contextlib
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 
@@ -127,10 +128,16 @@ def sweeper():
     return FakeSweeper()
 
 
-def build_serve_app(seed, worker, sweeper, allowed_hosts=(SERVE_HOST,)):
+def build_serve_app(seed, worker, sweeper, allowed_hosts=(SERVE_HOST,), *, read_only=False, trust_proxy_headers=False):
     """The serve app over the seed's database, storing runs under ``my-cluster`` and answering ``allowed_hosts``."""
     connect(seed.settings.db_path).close()  # create and migrate first, as `kubedelos serve` does at startup
-    settings = Settings(data_dir=seed.settings.data_dir, cluster_name=CONTEXT, allowed_hosts=list(allowed_hosts))
+    settings = Settings(
+        data_dir=seed.settings.data_dir,
+        cluster_name=CONTEXT,
+        allowed_hosts=list(allowed_hosts),
+        read_only=read_only,
+        trust_proxy_headers=trust_proxy_headers,
+    )
     runner = ScanRunner(settings, CONTEXT, clock=seed.clock, fixed_cluster=True)
     return create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=seed.clock)
 
@@ -142,6 +149,21 @@ def serve_app(seed, worker, sweeper):
 
 @pytest.fixture
 def serve_client(serve_app):
-    """A client of the view-only serve app; it needs no session, only an allowed Host."""
+    """A client of the writable serve app with default settings; it needs no session, only an allowed Host."""
     with TestClient(serve_app, base_url=f"http://{SERVE_HOST}") as client:
         yield client
+
+
+@pytest.fixture
+def make_serve_client(seed, worker, sweeper):
+    """A factory of serve clients, each over its own app: ``make_serve_client(read_only=True)`` and so on. The client's
+    base URL is the first allowed host, and every client is closed when the test ends."""
+    with contextlib.ExitStack() as stack:
+
+        def make(*, read_only=False, trust_proxy_headers=False, allowed_hosts=(SERVE_HOST,)):
+            app = build_serve_app(
+                seed, worker, sweeper, allowed_hosts, read_only=read_only, trust_proxy_headers=trust_proxy_headers
+            )
+            return stack.enter_context(TestClient(app, base_url=f"http://{allowed_hosts[0]}"))
+
+        yield make

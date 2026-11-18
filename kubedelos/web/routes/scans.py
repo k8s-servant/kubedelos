@@ -13,10 +13,9 @@ connection these routes open. ``GET /scans/progress`` serves the progress readou
 has ended it tells htmx to reload the page, so the history shows the finished run.
 ``POST /scans/cancel`` asks the running scan to stop.
 
-In ``kubedelos serve`` the page is view-only: the serve middleware refuses every POST before it reaches these routes,
-so the queue worker is the only thing that starts a scan. The page drops the start form and instead shows the queue
-(the requests waiting for the worker) and when the next scheduled sweep fires, and the history says who asked for
-each run.
+In ``kubedelos serve`` the page also shows the queue (the requests waiting for the worker) and when the next scheduled
+sweep fires, and the history says who asked for each run. The serve middleware checks every POST's CSRF token, and in
+read-only mode refuses it before it reaches these routes; the page then drops the start form and Cancel.
 """
 
 import re

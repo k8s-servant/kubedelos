@@ -784,9 +784,15 @@ def test_serve_scans_page_with_an_empty_queue_and_sweeps_off(serve_client, sweep
     assert "sweeps are off" in html
 
 
-def test_serve_scans_page_offers_no_start_form(serve_client):
-    html = serve_client.get("/scans").text
+def test_read_only_serve_scans_page_offers_no_start_form(make_serve_client):
+    html = make_serve_client(read_only=True).get("/scans").text
+    assert 'id="queue-title"' in html
     assert 'action="/scans"' not in html and 'name="csrf_token"' not in html
+
+
+def test_serve_scans_page_offers_the_start_form_and_the_queue(serve_client):
+    html = serve_client.get("/scans").text
+    assert 'id="queue-title"' in html and 'action="/scans"' in html
 
 
 def test_serve_history_shows_requester(serve_client, seed):
@@ -813,7 +819,9 @@ def test_laptop_scans_page_has_no_queue(client, seed):
     assert 'action="/scans"' in html
 
 
-def test_serve_progress_offers_no_cancel(serve_client, serve_app):
+def test_read_only_serve_progress_offers_no_cancel(make_serve_client):
+    serve_client = make_serve_client(read_only=True)
+    serve_app = serve_client.app
     scan = FakeScan()
     runner = ScanRunner(serve_app.state.settings, "my-cluster", scan=scan, fixed_cluster=True)
     serve_app.state.scans = runner
