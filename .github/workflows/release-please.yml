@@ -133,6 +133,7 @@ jobs:
     env:
       CHART_REPO: ghcr.io/k8s-servant/charts
       HELM_VERSION: 4.3.2 # keep in step with ci.yml
+      HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 # linux-amd64 tarball; bump with the version
     outputs:
       digest: ${{ steps.push.outputs.digest }}
     steps:
@@ -140,12 +141,11 @@ jobs:
         with:
           ref: ${{ needs.release-please.outputs.tag_name }}
           persist-credentials: false
-      - name: Install helm (checksum verified)
+      - name: Install helm (pinned SHA-256)
         run: |
           tarball="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
           curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}"
-          curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}.sha256sum"
-          sha256sum -c "${tarball}.sha256sum"
+          echo "${HELM_SHA256}  ${tarball}" | sha256sum -c -
           mkdir "${RUNNER_TEMP}/helm"
           tar -xzf "${tarball}" --strip-components=1 -C "${RUNNER_TEMP}/helm" linux-amd64/helm
           echo "${RUNNER_TEMP}/helm" >> "${GITHUB_PATH}"

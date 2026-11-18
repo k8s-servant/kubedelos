@@ -90,8 +90,11 @@ jobs:
     permissions:
       contents: read
     env:
+      # Each download is checked against a SHA-256 pinned here, so a bump of a version must bump its digest.
       HELM_VERSION: 4.3.2 # v4: the NOTES tests rely on its --dry-run=client
+      HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 # linux-amd64 tarball
       KUBECONFORM_VERSION: 0.8.0
+      KUBECONFORM_SHA256: 9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883 # linux-amd64 tarball
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -100,21 +103,19 @@ jobs:
         with:
           python-version: "3.14"
           cache: pip
-      - name: Install helm (checksum verified)
+      - name: Install helm (pinned SHA-256)
         run: |
           tarball="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
           curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}"
-          curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}.sha256sum"
-          sha256sum -c "${tarball}.sha256sum"
+          echo "${HELM_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" --strip-components=1 -C "${RUNNER_TEMP}" linux-amd64/helm
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
-      - name: Install kubeconform (checksum verified)
+      - name: Install kubeconform (pinned SHA-256)
         run: |
           base="https://github.com/yannh/kubeconform/releases/download/v${KUBECONFORM_VERSION}"
           tarball="kubeconform-linux-amd64.tar.gz"
           curl -fsSLO --retry 5 --retry-all-errors "${base}/${tarball}"
-          curl -fsSLO --retry 5 --retry-all-errors "${base}/CHECKSUMS"
-          grep " ${tarball}$" CHECKSUMS | sha256sum -c -
+          echo "${KUBECONFORM_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" -C "${RUNNER_TEMP}" kubeconform
       - run: helm lint charts/kubedelos --set clusterName=my-cluster
       - run: pip install -e '.[dev]'
@@ -173,27 +174,29 @@ jobs:
     permissions:
       contents: read
     env:
+      # Each download is checked against a SHA-256 pinned here, so a bump of a version must bump its digest.
       HELM_VERSION: 4.3.2
+      HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 # linux-amd64 tarball
       KIND_VERSION: 0.33.0
+      KIND_SHA256: aee6151561422756b764a4ae28e7f44cda5af5a9eead3cc9985112b1de8d8e0d # linux-amd64 binary
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install helm (checksum verified)
+      - name: Install helm (pinned SHA-256)
         run: |
           tarball="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
           curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}"
-          curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}.sha256sum"
-          sha256sum -c "${tarball}.sha256sum"
+          echo "${HELM_SHA256}  ${tarball}" | sha256sum -c -
           tar -xzf "${tarball}" --strip-components=1 -C "${RUNNER_TEMP}" linux-amd64/helm
           echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
-      - name: Install kind (checksum verified)
+      - name: Install kind (pinned SHA-256)
         run: |
           base="https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}"
           curl -fsSLO --retry 5 --retry-all-errors "${base}/kind-linux-amd64"
-          curl -fsSLO --retry 5 --retry-all-errors "${base}/kind-linux-amd64.sha256sum"
-          sha256sum -c kind-linux-amd64.sha256sum
+          echo "${KIND_SHA256}  kind-linux-amd64" | sha256sum -c -
           install -m 0755 kind-linux-amd64 "${RUNNER_TEMP}/kind"
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
       - name: Install the chart on kind and wait for a sweep
         run: scripts/e2e-chart.sh
 
