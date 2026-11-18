@@ -7,7 +7,8 @@ the data and cache directories, the Trivy in use and the log level.
 
 The Registries card says which cloud identity and which mounted Docker config Secrets (by name) the scans use, and
 which namespaces' pull secrets are read. In ``kubedelos serve`` it has a form, ``POST /settings/registry-test``, that
-scans one image with the same access a scan would get, one test at a time. No token is shown or read for display:
+scans one image with the cloud identity and the mounted Docker configs, one test at a time. There is no pod, so
+pod pull secrets are not used: an image only a pod pull secret can open fails here and works in a scan. No token is shown or read for display:
 ``Settings`` holds none (a test keeps it that way), and a failed test shows Trivy's redacted cause only.
 """
 
@@ -94,18 +95,21 @@ def docs_page(host: str) -> str:
     return f"{DOCS}{page}.md"
 
 
-def _host_allowed(request: Request, host: str) -> bool:
-    """Whether the Test box may contact ``host``: one a mounted config names, one of the cloud provider's, or one the
-    cluster's newest run has images from. Anything else could point Trivy at an internal address."""
+def _host_source(request: Request, host: str) -> str | None:
+    """Why the Test box may contact ``host``: ``mounted`` (a mounted config names it), ``cloud`` (the provider's) or
+    ``run`` (the cluster's newest run has images from it); ``None`` refuses. Anything else could point Trivy at an
+    internal address."""
     settings: Settings = request.app.state.settings
     host = host.lower().rstrip(".")
     if host in dockerconfig.load_mounted(settings.docker_configs):
-        return True
+        return "mounted"
     if any(re.fullmatch(pattern, host) for _, pattern in CLOUD_HOSTS.get(settings.cloud_provider, [])):
-        return True
+        return "cloud"
     with open_db(request) as conn:
         run = newest_run(conn, request.app.state.context, cluster_scope=False)
-        return run is not None and host in {h.lower().rstrip(".") for h in run_registry_hosts(conn, run.id)}
+        if run is not None and host in {h.lower().rstrip(".") for h in run_registry_hosts(conn, run.id)}:
+            return "run"
+    return None
 
 
 def _registries(settings: Settings, *, serve: bool) -> dict:
@@ -205,7 +209,8 @@ def _registry_test(request: Request, body: bytes) -> Response:
         shown = "".join(ch if ch.isprintable() else "?" for ch in image)[:200]
         return _result(request, f"error: invalid image reference: {shown}", failed=True)
     host = registry_host(ref)
-    if not _host_allowed(request, host):
+    source = _host_source(request, host)
+    if source is None:
         return _result(
             request,
             f"error: {host} is not a registry this instance uses: test an image from a configured registry or one the"
@@ -247,6 +252,7 @@ def _registry_test(request: Request, body: bytes) -> Response:
             f"error: {ref.ref}: auth: {cause}",
             failed=True,
             hint=login_hint(host),
+            note="pod pull secrets are not tried here" if source == "run" else None,
             docs=docs_page(host),
         )
     return _result(request, f"error: {ref.ref}: {result.error_kind}: {cause}", failed=True)

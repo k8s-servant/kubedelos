@@ -5,6 +5,9 @@
   {%- if hint %}
   <p class="hint">{{ hint }}</p>
   {%- endif %}
+  {%- if note %}
+  <p class="hint">{{ note }}</p>
+  {%- endif %}
   {%- if docs %}
   <p class="hint">See <a href="{{ docs }}" rel="noopener noreferrer">{{ docs }}</a></p>
   {%- endif %}

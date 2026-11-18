@@ -66,7 +66,7 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <label>Image
         <input type="text" name="image" placeholder="registry.example.com/team/app:1" required>
-        <span class="hint">scans it once with the access a scan would use</span>
+        <span class="hint">scans it once with the cloud identity and the mounted Docker configs (pod pull secrets are not used: there is no pod)</span>
       </label>
       <div class="filter-actions">
         <button type="submit" class="btn">Test</button>

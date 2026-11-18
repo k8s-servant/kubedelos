@@ -122,7 +122,7 @@ def scanned(monkeypatch, request):
         return box.result or ImageResult(image=ref, platform=platform, status="ok")
 
     if "strict_hosts" not in request.fixturenames:
-        monkeypatch.setattr(settings_routes, "_host_allowed", lambda *args: True)
+        monkeypatch.setattr(settings_routes, "_host_source", lambda *args: "mounted")
     monkeypatch.setattr(settings_routes, "ensure_trivy", lambda settings: "trivy")
     monkeypatch.setattr(settings_routes, "TrivyCache", FakeCache)
     monkeypatch.setattr(settings_routes, "scan_image", fake_scan)
@@ -377,3 +377,45 @@ def test_registry_test_allows_a_host_the_cluster_runs(strict_hosts, make_serve_c
     seed.repo.finish_run(run_id, "ok")
     client = make_serve_client()
     assert "is readable" in signed_post(client, "/settings/registry-test", {"image": "cluster.example.com/y:2"}).text
+
+
+def _seed_cluster_host(seed):
+    run_id = seed.repo.start_run("my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
+    ref = ImageRef(ref="cluster.example.com/team/app:1", repo="cluster.example.com/team/app", tag="1", digest=None)
+    seed.repo.add_result(
+        run_id,
+        InventoryItem(image=ref, platform="linux/amd64"),
+        ImageResult(image=ref, platform="linux/amd64", status="ok"),
+    )
+    seed.repo.finish_run(run_id, "ok")
+    return ref
+
+
+def test_registry_test_auth_error_on_a_run_only_host_says_pull_secrets_are_not_tried(
+    strict_hosts, make_serve_client, seed, scanned
+):
+    ref = _seed_cluster_host(seed)
+    scanned.result = ImageResult(image=ref, platform="linux/amd64", status="error", error_kind="auth", error="denied")
+    text = signed_post(make_serve_client(), "/settings/registry-test", {"image": "cluster.example.com/y:2"}).text
+    assert "auth" in text and "pod pull secrets are not tried here" in text
+
+
+def test_registry_test_auth_error_on_a_configured_host_has_no_pull_secret_note(
+    strict_hosts, make_serve_client, scanned
+):
+    ref = ImageRef(ref="myacr.azurecr.io/a:1", repo="myacr.azurecr.io/a")
+    scanned.result = ImageResult(image=ref, platform="linux/amd64", status="error", error_kind="auth", error="denied")
+    client = make_serve_client(cloud_provider="azure")
+    text = signed_post(client, "/settings/registry-test", {"image": "myacr.azurecr.io/a:1"}).text
+    assert "auth" in text and "pod pull secrets are not tried here" not in text
+
+
+def test_registry_test_hint_names_the_access_it_uses(make_serve_client):
+    text = make_serve_client().get("/settings").text
+    assert "cloud identity and the mounted Docker configs" in text and "pod pull secrets" in text
+
+
+def test_registry_test_host_check_ignores_case_and_a_trailing_dot(strict_hosts, make_serve_client, seed, scanned):
+    _seed_cluster_host(seed)
+    client = make_serve_client()
+    assert "is readable" in signed_post(client, "/settings/registry-test", {"image": "Cluster.Example.com/y:2"}).text
