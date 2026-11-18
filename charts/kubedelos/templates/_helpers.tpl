@@ -20,13 +20,14 @@ app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
 {{/*
-The Host header values the UI answers to, as a comma list without repeats: the Service's names, then the Ingress hosts
-and the HTTPRoute hostnames (when they are enabled), then extraAllowedHosts.
+The Host header values the UI answers to, as a comma list without repeats: the Service's names, then localhost and
+127.0.0.1 (for kubectl port-forward), then the Ingress hosts and the HTTPRoute hostnames (when they are enabled), then
+extraAllowedHosts.
 */}}
 {{- define "kubedelos.allowedHosts" -}}
 {{- $name := include "kubedelos.fullname" . -}}
 {{- $ns := .Release.Namespace -}}
-{{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.%s" $name $ns .Values.clusterDomain) -}}
+{{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.%s" $name $ns .Values.clusterDomain) "localhost" "127.0.0.1" -}}
 {{- if .Values.ingress.enabled -}}
 {{- range .Values.ingress.hosts -}}
 {{- $hosts = append $hosts .host -}}

@@ -3,6 +3,8 @@
 {{- $trust := .Values.auth.trustProxyHeaders -}}
 kubedelos serve is installed as {{ $name }} in the {{ .Release.Namespace }} namespace, for cluster {{ .Values.clusterName | quote }}.
 Its UI is the Service {{ $name }}.{{ .Release.Namespace }}.svc, port 80.
+To reach it from your machine, run kubectl port-forward svc/{{ $name }} 8080:80 -n {{ .Release.Namespace }}
+and open http://localhost:8080. The NetworkPolicy does not block port-forward.
 {{- if and .Values.networkPolicy.enabled (empty .Values.networkPolicy.ingressFrom) }}
 
 The NetworkPolicy admits no traffic yet. Name your proxy, gateway or Ingress controller in networkPolicy.ingressFrom.
@@ -19,7 +21,9 @@ can do it under any name. Set readOnly: true, or put a sign-in proxy in front an
 {{- end }}
 {{- if $trust }}
 
-kubedelos trusts the {{ .Values.auth.identityHeader }} header, and the NetworkPolicy limits who can send it. Two paths skip
-your proxy: kubectl port-forward to the pod or Service, and a CNI that does not enforce NetworkPolicy. Limit who may
-port-forward in this namespace, and check that your CNI enforces NetworkPolicy.
+kubedelos trusts the {{ .Values.auth.identityHeader }} header, and the NetworkPolicy limits who can send it. These paths skip
+your proxy: kubectl port-forward to the pod or Service, a CNI that does not enforce NetworkPolicy, and on many CNIs
+traffic from hostNetwork pods or the node itself. NetworkPolicies are additive, so any other policy that selects this
+pod and allows more ingress defeats this one. Limit who may port-forward in this namespace, check that your CNI
+enforces NetworkPolicy, and check the other policies in this namespace.
 {{- end }}

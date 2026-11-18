@@ -261,6 +261,52 @@ def test_networkpolicy_ingress_from_and_egress(render):
         {"ingressFrom": [{"ipBlock": {"cidr": "::/0"}}]},
         {"ingressFrom": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": ["10.0.0.0/8"]}}]},
         {"ingressFrom": [PROXY, {"podSelector": {}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "0.0.0.0/00"}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "::/000"}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "0.0.0.0/0\t"}}]},
+        {
+            "ingressFrom": [
+                {
+                    "namespaceSelector": {
+                        "matchExpressions": [{"key": "kubernetes.io/metadata.name", "operator": "Exists"}]
+                    }
+                }
+            ]
+        },
+        {"ingressFrom": [{"podSelector": {"matchExpressions": [{"key": "nonexistent", "operator": "DoesNotExist"}]}}]},
+        {
+            "ingressFrom": [
+                {"podSelector": {"matchExpressions": [{"key": "app", "operator": "NotIn", "values": ["zzz"]}]}}
+            ]
+        },
+        {"ingressFrom": [{"podSelector": {"matchExpressions": [{}]}}]},
+        {
+            "ingressFrom": [
+                {
+                    "namespaceSelector": {
+                        "matchLabels": {},
+                        "matchExpressions": [
+                            {"key": "kubernetes.io/metadata.name", "operator": "NotIn", "values": ["x"]}
+                        ],
+                    }
+                }
+            ]
+        },
+        {"ingressFrom": [{"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kd"}}}]},
+        {
+            "ingressFrom": [
+                {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kd"}}, "podSelector": {}}
+            ]
+        },
+        {
+            "ingressFrom": [
+                {
+                    "namespaceSelector": {
+                        "matchExpressions": [{"key": "kubernetes.io/metadata.name", "operator": "In", "values": ["kd"]}]
+                    }
+                }
+            ]
+        },
     ],
 )
 def test_trust_requires_a_restricting_networkpolicy(render_error, network_policy):
@@ -277,8 +323,15 @@ def test_trust_renders_with_a_restricted_ip_block_or_labelled_pods(render):
     sources = [
         {"ipBlock": {"cidr": "10.1.2.0/24"}},
         {"podSelector": {"matchExpressions": [{"key": "app", "operator": "In", "values": ["proxy"]}]}},
+        {"podSelector": {"matchLabels": {"app": "proxy"}}, "namespaceSelector": None},
+        {
+            "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "kd"}},
+            "podSelector": PROXY["podSelector"],
+        },
+        {"namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "gateways"}}},
     ]
-    render({**TRUST, "networkPolicy": {"ingressFrom": sources}})
+    for source in sources:
+        render({**TRUST, "networkPolicy": {"ingressFrom": [source]}})
 
 
 def test_ingress_and_allowed_hosts(render):
@@ -348,7 +401,7 @@ def test_extra_allowed_hosts(render):
         }
     )
     hosts = allowed_hosts(docs)
-    assert hosts[4:] == ["a.example.com", "b.example.com", "c.example.com"]
+    assert hosts[4:] == ["localhost", "127.0.0.1", "a.example.com", "b.example.com", "c.example.com"]
     assert len(hosts) == len(set(hosts))
 
 
@@ -359,7 +412,7 @@ def test_disabled_exposure_adds_no_allowed_hosts(render):
             "httpRoute": {"hostnames": ["b.example.com"]},
         }
     )
-    assert len(allowed_hosts(docs)) == 4
+    assert len(allowed_hosts(docs)) == 6
 
 
 @pytest.fixture
@@ -401,13 +454,14 @@ def test_notes_writes_open_with_trust_off(notes):
     text = notes()
     assert HIDES in text
     assert INVENTORY not in text
-    assert "kubectl port-forward" not in text
 
 
 def test_notes_trust_on_names_both_bypasses(notes):
     text = notes({**TRUST, **INGRESS, "networkPolicy": {"ingressFrom": [PROXY]}})
     assert "kubectl port-forward" in text
     assert "does not enforce NetworkPolicy" in text
+    assert "additive" in text
+    assert "hostNetwork" in text
     assert INVENTORY not in text
     assert HIDES not in text
 
@@ -416,3 +470,31 @@ def test_notes_read_only_drops_the_write_warnings(notes):
     text = notes({"readOnly": True})
     assert HIDES not in text
     assert START_SCANS not in text
+
+
+def test_allowed_hosts_include_localhost_for_port_forward(render):
+    hosts = allowed_hosts(render())
+    assert hosts[4:6] == ["localhost", "127.0.0.1"]
+
+
+def test_notes_show_port_forward(notes):
+    assert "kubectl port-forward svc/t-kubedelos 8080:80 -n kd" in notes()
+    assert "http://localhost:8080" in notes()
+
+
+@pytest.mark.parametrize(
+    ("values", "message"),
+    [
+        ({"ingress": {"enabled": True, "hosts": []}}, "ingress.hosts"),
+        ({"httpRoute": {"enabled": True, "hostnames": ["kubedelos.example.com"]}}, "httpRoute.parentRefs"),
+        ({"ingress": {"enabled": True, "hosts": [{"host": "*.example.com"}]}}, "wildcard"),
+        ({"httpRoute": {"enabled": True, "parentRefs": [{"name": "gw"}], "hostnames": ["*.example.com"]}}, "wildcard"),
+    ],
+)
+def test_exposure_needs_a_usable_shape(render_error, values, message):
+    assert message in render_error({**BASE, **values})
+
+
+def test_httproute_without_hostnames_renders(render):
+    route = kind(render({"httpRoute": {"enabled": True, "parentRefs": [{"name": "gw"}]}}), "HTTPRoute")
+    assert "hostnames" not in route["spec"]
