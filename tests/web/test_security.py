@@ -10,7 +10,15 @@ from fastapi.testclient import TestClient
 
 from kubedelos.web.pages import render
 from kubedelos.web.security import MAX_SESSIONS, Guard, ServeGuard
-from tests.web.conftest import build_serve_app
+from tests.web.conftest import (
+    IDENTITY_HEADER,
+    SERVE_ORIGIN,
+    build_serve_app,
+    serve_cookie,
+    serve_headers,
+    serve_token,
+    signed_post,
+)
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."
 CSP = (
@@ -321,38 +329,11 @@ def test_serve_csrf_token_is_bound_to_the_cookie(serve_app, serve_client):
 
 # kubedelos serve: writes, CSRF and the signed-in name
 
-SERVE_ORIGIN = "https://kubedelos.example.com"
-IDENTITY_HEADER = "X-Auth-Request-Email"
-
 
 @pytest.fixture
 def serve(make_serve_client):
     """A factory of serve clients answering ``kubedelos.example.com``."""
     return lambda **options: make_serve_client(allowed_hosts=["kubedelos.example.com"], **options)
-
-
-def _cookie(client) -> str:
-    """The CSRF cookie the client holds, getting one first if it has none."""
-    if client.cookies.get(ServeGuard.CSRF_COOKIE) is None:
-        assert client.get("/scans").status_code == 200
-    return client.cookies.get(ServeGuard.CSRF_COOKIE)
-
-
-def _token(client, identity=None) -> str:
-    return client.app.state.serve_guard.csrf_token(_cookie(client), identity)
-
-
-def _headers(identity=None, origin=SERVE_ORIGIN) -> dict:
-    headers = {"origin": origin}
-    if identity is not None:
-        headers[IDENTITY_HEADER] = identity
-    return headers
-
-
-def signed_post(client, path, data, identity=None, origin=SERVE_ORIGIN):
-    """POST ``data`` to ``path`` with the cookie and the matching CSRF token, as the page's form would."""
-    data = {**data, "csrf_token": _token(client, identity)}
-    return client.post(path, data=data, headers=_headers(identity, origin), follow_redirects=False)
 
 
 def test_serve_guard_tokens():
@@ -399,30 +380,30 @@ def test_read_only_refuses_writes(serve):
 
 
 def test_post_without_cookie_is_refused(serve):
-    response = serve().post("/scans/cancel", data={"csrf_token": "x"}, headers=_headers(), follow_redirects=False)
+    response = serve().post("/scans/cancel", data={"csrf_token": "x"}, headers=serve_headers(), follow_redirects=False)
     assert response.status_code == 403
     assert response.text == "CSRF check failed"
 
 
 def test_token_for_another_cookie_is_refused(serve):
     client, other = serve(), serve()
-    token = _token(other)
-    _cookie(client)
-    response = client.post("/scans/cancel", data={"csrf_token": token}, headers=_headers(), follow_redirects=False)
+    token = serve_token(other)
+    serve_cookie(client)
+    response = client.post("/scans/cancel", data={"csrf_token": token}, headers=serve_headers(), follow_redirects=False)
     assert response.status_code == 403
 
 
 def test_token_in_the_header_passes(serve):
     client = serve()
-    headers = {**_headers(), "x-csrf-token": _token(client)}
+    headers = {**serve_headers(), "x-csrf-token": serve_token(client)}
     assert client.post("/scans/cancel", headers=headers, follow_redirects=False).status_code == 303
 
 
 def test_token_for_another_identity_is_refused(serve):
     client = serve(trust_proxy_headers=True)
-    token = _token(client, "a@example.com")
+    token = serve_token(client, "a@example.com")
     response = client.post(
-        "/scans/cancel", data={"csrf_token": token}, headers=_headers("b@example.com"), follow_redirects=False
+        "/scans/cancel", data={"csrf_token": token}, headers=serve_headers("b@example.com"), follow_redirects=False
     )
     assert response.status_code == 403
 
@@ -444,7 +425,7 @@ def test_foreign_origin_is_refused(serve, origin):
 
 def test_missing_origin_falls_back_to_the_referer(serve):
     client = serve()
-    data = {"csrf_token": _token(client)}
+    data = {"csrf_token": serve_token(client)}
     referer = {"referer": f"{SERVE_ORIGIN}/scans"}
     assert client.post("/scans/cancel", data=data, headers=referer, follow_redirects=False).status_code == 303
     assert client.post("/scans/cancel", data=data, follow_redirects=False).status_code == 403
@@ -457,10 +438,10 @@ def test_https_origin_with_port_passes(serve, origin):
 
 def test_header_ignored_without_trust(serve, caplog):
     client = serve()
-    token = _token(client)  # as the page makes it: the untrusted header does not name the user
+    token = serve_token(client)  # as the page makes it: the untrusted header does not name the user
     with caplog.at_level(logging.INFO, logger="kubedelos.web"):
         response = client.post(
-            "/scans/cancel", data={"csrf_token": token}, headers=_headers("a@example.com"), follow_redirects=False
+            "/scans/cancel", data={"csrf_token": token}, headers=serve_headers("a@example.com"), follow_redirects=False
         )
     assert response.status_code == 303
     assert caplog.records[-1].getMessage().endswith(" -")
@@ -476,8 +457,8 @@ def test_access_log_names_the_identity(serve, caplog):
 
 def test_identity_is_cleaned_before_use(serve, caplog):
     client = serve(trust_proxy_headers=True)
-    token = _token(client, "a@example.com[31m")  # the page makes it for the cleaned name
-    headers = _headers("a@example.com\x1b[31m")
+    token = serve_token(client, "a@example.com[31m")  # the page makes it for the cleaned name
+    headers = serve_headers("a@example.com\x1b[31m")
     with caplog.at_level(logging.INFO, logger="kubedelos.web"):
         response = client.post("/scans/cancel", data={"csrf_token": token}, headers=headers, follow_redirects=False)
     assert response.status_code == 303

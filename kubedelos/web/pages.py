@@ -3,24 +3,29 @@
 They live apart from ``kubedelos.web.app`` so the routes and the security middleware can import them at the top level:
 this module imports nothing from ``app``, ``routes`` or ``security``, which keeps the import graph acyclic. Pages call
 ``open_db`` for a read-only connection of their own (sqlite3 objects never cross threads); only the POST routes call
-``open_db_rw`` for a writable one. ``short_image`` is how every page names an image. ``render`` fills a template with
-what every page needs: the request, the kube-context, the CSP nonce and the nav. A page may override the context and nav
-(the signed-out page shows neither).
+``open_db_rw`` for a writable one. In ``kubedelos serve`` the scan and retry routes queue their request through
+``queue_ui_request``. ``short_image`` is how every page names an image. ``render`` fills a template with what every
+page needs: the request, the kube-context, the CSP nonce and the nav. A page may override the context and nav (the
+signed-out page shows neither).
 """
 
 import contextlib
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlencode
 
 from fastapi import Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from kubedelos.store import db  # through the module, so a test that patches db.connect reaches every caller
+from kubedelos.store import db, queue  # through the module, so a test that patches db.connect reaches every caller
 from kubedelos.store.queries import context_scans
+from kubedelos.web.identity import identity
 
+QUEUE_FULL = "the queue is full"
+DB_BUSY = "the database is busy; try again"
 MAX_ID = 2**63 - 1  # SQLite integers are signed 64-bit; a larger id would raise OverflowError
 NAV = (
     ("Dashboard", "/"),
@@ -43,6 +48,36 @@ def open_db(request: Request) -> contextlib.closing[sqlite3.Connection]:
 def open_db_rw(request: Request) -> contextlib.closing[sqlite3.Connection]:
     """A read-write connection to the scan database, closed by the ``with`` block. For POST routes only."""
     return contextlib.closing(db.connect(request.app.state.settings.db_path))
+
+
+def queue_ui_request(
+    request: Request,
+    *,
+    kind: str,
+    overrides: dict,
+    on_error: Callable[[str, int], Response],
+    target_run_id: int | None = None,
+) -> Response:
+    """Queue a scan or retry asked for in the serve UI, under the signed-in name, and wake the worker. Back to
+    ``/scans``, with ``?notice=queued`` when an equal request was already waiting; else ``on_error(message, status)``:
+    a 409 when the queue is full, a 503 when the database stays locked."""
+    try:
+        with open_db_rw(request) as conn:
+            queued = queue.enqueue(
+                conn,
+                kind=kind,
+                trigger="ui",
+                overrides=overrides,
+                requested_by=identity(request),
+                target_run_id=target_run_id,
+                now=request.app.state.clock(),
+            )
+    except queue.QueueFull:
+        return on_error(QUEUE_FULL, 409)
+    except sqlite3.OperationalError:  # locked past the busy timeout, most likely by a scan writing results
+        return on_error(DB_BUSY, 503)
+    request.app.state.worker.wake()
+    return RedirectResponse("/scans" if queued.added else "/scans?notice=queued", status_code=303)
 
 
 class UnknownContext(Exception):

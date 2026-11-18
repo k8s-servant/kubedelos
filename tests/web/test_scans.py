@@ -2,6 +2,7 @@
 
 import contextlib
 import itertools
+import json
 import re
 import sqlite3
 import threading
@@ -19,6 +20,7 @@ from kubedelos.store import queue, runlock
 from kubedelos.web import pages
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.routes import scans
+from tests.web.conftest import signed_post
 
 CLUSTER = Settings().scope
 
@@ -774,7 +776,7 @@ def test_serve_scans_page_lists_the_queue_and_next_sweep(serve_client, seed):
     card = html.split('id="queue-title"', 1)[1].split("</section>", 1)[0]
     assert "schedule" in card and "10 min ago" in card
     assert "2026-01-02 03:00 UTC" in html
-    assert "<button" not in card  # cancelling a queued request comes later
+    assert 'action="/scans/queue/1/cancel"' in card and 'name="csrf_token"' in card
 
 
 def test_serve_scans_page_with_an_empty_queue_and_sweeps_off(serve_client, sweeper):
@@ -835,3 +837,140 @@ def test_read_only_serve_progress_offers_no_cancel(make_serve_client):
     finally:
         scan.release.set()
         runner.shutdown(timeout=5)
+
+
+# kubedelos serve: UI scans and cancels go through the queue
+
+
+def _requests(seed):
+    conn = kubedelos.store.db.connect(seed.settings.db_path)
+    try:
+        return conn.execute("SELECT * FROM scan_request ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def _overrides(row):
+    return json.loads(row["overrides"])
+
+
+def test_serve_scan_is_queued(serve_client, seed, worker):
+    response = signed_post(serve_client, "/scans", {**FORM, "namespaces": "web, api"})
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    [row] = _requests(seed)
+    assert (row["kind"], row["trigger"], row["state"], row["requested_by"]) == ("scan", "ui", "queued", None)
+    assert _overrides(row)["namespaces"] == ["web", "api"]
+    assert set(_overrides(row)) == set(scans.FIELDS) | {"rescan"}  # never a context, kubeconfig or cluster name
+    assert _overrides(row)["rescan"] is False
+    assert worker.woken == 1
+    assert serve_client.app.state.scans.view() is None  # the runner was not started: only the worker starts it
+
+
+def test_serve_scan_records_the_trusted_identity(make_serve_client, seed):
+    client = make_serve_client(trust_proxy_headers=True)
+    assert signed_post(client, "/scans", FORM, identity="a@example.com").status_code == 303
+    [row] = _requests(seed)
+    assert row["requested_by"] == "a@example.com"
+
+
+def test_serve_blank_namespaces_mean_the_configured_ones(make_serve_client, seed):
+    client = make_serve_client(namespaces=["web"])
+    assert signed_post(client, "/scans", {**FORM, "namespaces": " "}).status_code == 303
+    [row] = _requests(seed)
+    assert _overrides(row)["namespaces"] == ["web"]
+
+
+def test_anonymous_ui_run_shows_anonymous(serve_client, seed):
+    run_id = seed.repo.start_run(seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(run_id, "ok")
+    html = serve_client.get("/scans").text
+    row = next(r for r in _rows(html) if f"Run {run_id}<" in r)
+    assert "<td>anonymous</td>" in row
+
+
+def test_serve_queue_card_shows_who_asked(serve_client, seed):
+    assert signed_post(serve_client, "/scans", FORM).status_code == 303
+    card = serve_client.get("/scans").text.split('id="queue-title"', 1)[1].split("</section>", 1)[0]
+    assert "<td>anonymous</td>" in card
+
+
+def test_serve_same_scan_twice_says_already_queued(serve_client, seed):
+    assert signed_post(serve_client, "/scans", FORM).headers["location"] == "/scans"
+    response = signed_post(serve_client, "/scans", FORM)
+    assert response.status_code == 303 and response.headers["location"] == "/scans?notice=queued"
+    assert "already queued" in serve_client.get(response.headers["location"]).text
+    assert len(_requests(seed)) == 1
+
+
+def test_serve_ignores_an_unknown_notice(serve_client):
+    html = serve_client.get("/scans?notice=<b>hi</b>").text
+    assert "already queued" not in html and "<b>hi</b>" not in html
+
+
+def test_serve_full_queue_is_409(serve_client, seed):
+    for n in range(queue.MAX_QUEUED):
+        assert signed_post(serve_client, "/scans", {**FORM, "namespaces": f"ns-{n}"}).status_code == 303
+    response = signed_post(serve_client, "/scans", {**FORM, "namespaces": "one-more"})
+    assert response.status_code == 409 and "the queue is full" in response.text
+    assert len(_requests(seed)) == queue.MAX_QUEUED
+
+
+def test_serve_scan_outside_scope_is_rejected(make_serve_client, seed, worker):
+    client = make_serve_client(namespaces=["web"])
+    response = signed_post(client, "/scans", {**FORM, "namespaces": "kube-system"})
+    assert response.status_code == 400
+    assert "namespace kube-system is outside the configured scope" in response.text
+    assert _requests(seed) == [] and worker.woken == 0
+
+
+def test_serve_cancel_queued_request(serve_client, seed):
+    signed_post(serve_client, "/scans", FORM)
+    [row] = _requests(seed)
+    response = signed_post(serve_client, f"/scans/queue/{row['id']}/cancel", {})
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    assert _requests(seed)[0]["state"] == "cancelled"
+
+
+def test_serve_cancel_started_request_changes_nothing(serve_client, seed):
+    signed_post(serve_client, "/scans", FORM)
+    conn = kubedelos.store.db.connect(seed.settings.db_path)
+    try:
+        started = queue.claim_next(conn)
+    finally:
+        conn.close()
+    response = signed_post(serve_client, f"/scans/queue/{started.id}/cancel", {})
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    assert _requests(seed)[0]["state"] == "started"
+
+
+def test_serve_cancel_of_an_unknown_request_goes_back(serve_client):
+    assert signed_post(serve_client, "/scans/queue/99/cancel", {}).headers["location"] == "/scans"
+    assert signed_post(serve_client, "/scans/queue/0/cancel", {}).status_code == 400
+
+
+def test_read_only_queue_card_has_no_cancel(make_serve_client, seed):
+    _queue_sweep(seed, datetime(2026, 1, 1, 11, 50, tzinfo=UTC))
+    html = make_serve_client(read_only=True).get("/scans").text
+    card = html.split('id="queue-title"', 1)[1].split("</section>", 1)[0]
+    assert "schedule" in card and "/cancel" not in card and "<button" not in card
+
+
+def test_laptop_scan_still_starts_the_runner(client, fake, seed):
+    assert _start(client).status_code == 303
+    assert fake.entered.wait(5) and len(fake.calls) == 1
+    assert _requests(seed) == []
+
+
+def test_laptop_has_no_queue_cancel(client, seed):
+    response = client.post("/scans/queue/1/cancel", data={"csrf_token": _csrf(client)}, headers=ORIGIN)
+    assert response.status_code == 404
+
+
+def test_serve_busy_database_is_503(serve_client, worker, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue, "enqueue", locked)
+    response = signed_post(serve_client, "/scans", FORM)
+    assert response.status_code == 503 and "the database is busy" in response.text
+    assert worker.woken == 0

@@ -1,3 +1,4 @@
+import json
 import re
 import threading
 from typing import get_args
@@ -8,9 +9,11 @@ from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.scan.service import ScanOutcome
+from kubedelos.store.db import connect
 from kubedelos.trivy.runner import RETRIED_PREFIX, ErrorKind
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.routes.failed import KIND_HELP, short_cause
+from tests.web.conftest import signed_post
 
 CLUSTER = Settings().scope
 ORIGIN = {"origin": "http://127.0.0.1:9370"}
@@ -360,3 +363,36 @@ def test_history_offers_retry_on_the_newest_partial_run_only(client, seed):
     history = client.get("/scans").text
     assert f'href="/scans/{newest}/failed#retry">retry</a>' in history
     assert f'href="/scans/{older}/failed#retry"' not in history
+
+
+# kubedelos serve: a retry goes through the queue
+
+
+def _requests(seed):
+    conn = connect(seed.settings.db_path)
+    try:
+        return conn.execute("SELECT * FROM scan_request ORDER BY id").fetchall()
+    finally:
+        conn.close()
+
+
+def test_serve_retry_is_queued(serve_client, seed, worker):
+    run_id = _retryable(seed)
+    _put(seed, run_id, "reg.example.com/b:1", kind="auth", error="UNAUTHORIZED")
+    data = {"timeout": "1800", "parallelism": "2", "kind": ["timeout", "auth"]}
+    response = signed_post(serve_client, f"/scans/{run_id}/retry", data)
+    assert response.status_code == 303 and response.headers["location"] == "/scans"
+    [row] = _requests(seed)
+    assert (row["kind"], row["trigger"], row["target_run_id"], row["state"]) == ("retry", "ui", run_id, "queued")
+    assert json.loads(row["overrides"]) == {"scan_timeout_s": 1800, "parallelism": 2, "kinds": ["auth", "timeout"]}
+    assert worker.woken == 1
+    assert serve_client.app.state.scans.view() is None
+
+
+def test_serve_retry_twice_says_already_queued(serve_client, seed):
+    run_id = _retryable(seed)
+    data = {"timeout": "1800", "parallelism": "2", "kind": ["timeout"]}
+    assert signed_post(serve_client, f"/scans/{run_id}/retry", data).headers["location"] == "/scans"
+    response = signed_post(serve_client, f"/scans/{run_id}/retry", data)
+    assert response.status_code == 303 and response.headers["location"] == "/scans?notice=queued"
+    assert len(_requests(seed)) == 1

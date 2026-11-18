@@ -14,8 +14,12 @@ has ended it tells htmx to reload the page, so the history shows the finished ru
 ``POST /scans/cancel`` asks the running scan to stop.
 
 In ``kubedelos serve`` the page also shows the queue (the requests waiting for the worker) and when the next scheduled
-sweep fires, and the history says who asked for each run. The serve middleware checks every POST's CSRF token, and in
-read-only mode refuses it before it reaches these routes; the page then drops the start form and Cancel.
+sweep fires, and the history says who asked for each run. There ``POST /scans`` starts nothing itself: it keeps the
+scan inside the configured scope (``kubedelos.scope``; a blank Namespaces field means the configured ones) and queues
+it for the worker, the only thing that starts the runner in serve, with the signed-in name. An equal queued scan is
+not added twice, and a full queue is a 409. ``POST /scans/queue/{id}/cancel`` cancels a request still waiting. The
+serve middleware checks every POST's CSRF token, and in read-only mode refuses it before it reaches these routes; the
+page then drops the start form and the Cancel buttons.
 """
 
 import re
@@ -24,22 +28,26 @@ from datetime import datetime, timedelta
 from math import ceil
 from urllib.parse import parse_qs, urlencode
 
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, Path, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
 from kubedelos.analytics import ago, describe_pkg_types
 from kubedelos.config import Settings
+from kubedelos.scope import outside_scope
 from kubedelos.store import queue, runlock
 from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_failures, run_history, run_number
-from kubedelos.web.jobs import ScanBusy
+from kubedelos.web.jobs import ACTIVE, FIELDS, ScanBusy
 from kubedelos.web.pages import (
+    DB_BUSY,
+    MAX_ID,
     UnknownContext,
     context_param,
     link,
     open_db,
     open_db_rw,
+    queue_ui_request,
     render,
     scannable_contexts,
     seconds_text,
@@ -51,7 +59,6 @@ from kubedelos.web.routes.failed import failure
 router = APIRouter()
 
 PER_PAGE = 25
-ACTIVE = ("starting", "running", "stopping")
 PKG_TYPES = ("os", "library")
 CHIP = {
     "ok": "chip-ok",
@@ -60,16 +67,6 @@ CHIP = {
     "interrupted": "chip-bad",
     "running": "chip-pinned",
 }
-# The form's fields, as Settings names them, with the labels the form shows them under.
-FIELDS = {
-    "namespaces": "Namespaces",
-    "exclude_namespaces": "Exclude namespaces",
-    "namespace_selector": "Namespace selector",
-    "selector": "Label selector",
-    "exclude_images": "Exclude images",
-    "parallelism": "Parallel images",
-    "pkg_types": "Package types",
-}
 LIST_FIELDS = ("namespaces", "exclude_namespaces", "exclude_images")
 READOUT_FAILURES = 5  # the newest failures the progress readout lists; the failures page has them all
 PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scanning", "saving": "saving"}
@@ -77,6 +74,7 @@ _MAX_FORM_FIELDS = 100
 _MAX_BODY = 64 * 1024
 UNREADABLE = "the form could not be read"
 NO_REQUESTER = "\N{EN DASH}"  # a history run nobody is recorded as asking for: a laptop run, or one from before serve
+QUEUED_NOTICE = "already queued"
 
 
 def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
@@ -118,14 +116,16 @@ def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> 
 
 
 def requester(requested_by: str | None, trigger: str | None) -> str | None:
-    """Who asked for a run or request: the signed-in user, else ``schedule`` for a sweep, else None."""
-    return requested_by or ("schedule" if trigger == "schedule" else None)
+    """Who asked for a run or request: the signed-in user, else ``schedule`` for a sweep, else ``anonymous`` for a UI
+    scan nobody signed in for, else None."""
+    return requested_by or {"schedule": "schedule", "ui": "anonymous"}.get(trigger or "")
 
 
 def _queue(conn: sqlite3.Connection, now: datetime) -> list[dict]:
     """The queue card's rows: the requests waiting for the worker, oldest first."""
     return [
         {
+            "id": r.id,
             "trigger": r.trigger,
             "by": requester(r.requested_by, r.trigger) or NO_REQUESTER,
             "requested": ago(datetime.fromisoformat(r.requested_at), now),
@@ -240,6 +240,7 @@ def _page(
     sent: dict | None = None,
     status: int = 200,
     context: str | None = None,
+    notice: str | None = None,
 ) -> HTMLResponse:
     """The scans page of ``context``, from a POST's form, or else of the context the query string names."""
     now = request.app.state.clock()
@@ -257,6 +258,7 @@ def _page(
         "now": now,
         "run": run,
         "queue": waiting,
+        "queue_notice": QUEUED_NOTICE if serve and notice == "queued" else None,
         "next_sweep": next_sweep_text(request.app.state.sweeper.next_run()) if serve else None,
         "form": _form(request, sent),
         "form_error": error,
@@ -290,8 +292,8 @@ def _invalid(exc: ValidationError) -> str:
 
 
 @router.get("/scans", response_class=HTMLResponse)
-def scans(request: Request, page: int = Query(1, ge=1, le=10**9)) -> HTMLResponse:
-    return _page(request, page)
+def scans(request: Request, page: int = Query(1, ge=1, le=10**9), notice: str | None = None) -> HTMLResponse:
+    return _page(request, page, notice=notice)
 
 
 @router.post("/scans")
@@ -331,15 +333,24 @@ def _start(request: Request, body: bytes) -> Response:
         "pkg_types": sent["pkg_types"],
     }
     settings = request.app.state.settings
+    serve = request.app.state.serve
+    if serve and not overrides["namespaces"]:
+        # A blank field means the configured namespaces, never all of them: that would widen the scope.
+        overrides["namespaces"] = list(settings.namespaces)
     try:
         valid = Settings.model_validate({**settings.model_dump(), **overrides})
     except ValidationError as exc:
         return page(_invalid(exc), 400)
+    if serve:
+        if problem := outside_scope(settings, valid):
+            return page(problem, 400)
+        wanted = {**{name: getattr(valid, name) for name in FIELDS}, "rescan": sent["rescan"]}
+        return queue_ui_request(request, kind="scan", overrides=wanted, on_error=page)
     try:
         with open_db_rw(request) as conn:
             runlock.close_stale_runs(conn, settings.data_dir)
     except sqlite3.OperationalError:  # locked past the busy timeout, most likely by another scan writing results
-        return page("the database is busy; try again", 503)
+        return page(DB_BUSY, 503)
     try:
         request.app.state.scans.start(
             {name: getattr(valid, name) for name in FIELDS}, context=target, rescan=sent["rescan"]
@@ -347,6 +358,16 @@ def _start(request: Request, body: bytes) -> Response:
     except ScanBusy as exc:
         return page(str(exc), 409)
     return RedirectResponse(scans_href(1, target if target != default else None), status_code=303)
+
+
+@router.post("/scans/queue/{request_id}/cancel")
+def cancel_queued(request: Request, request_id: int = Path(ge=1, le=MAX_ID)) -> Response:
+    """Cancel a request still waiting in the serve queue; one already started, or gone, is left as it is."""
+    if not request.app.state.serve:
+        return Response(status_code=404)
+    with open_db_rw(request) as conn:
+        queue.cancel(conn, request_id)
+    return RedirectResponse("/scans", status_code=303)
 
 
 @router.post("/scans/cancel")

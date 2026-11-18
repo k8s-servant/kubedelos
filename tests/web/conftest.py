@@ -13,6 +13,7 @@ from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from kubedelos.web.app import create_app, create_serve_app
 from kubedelos.web.jobs import ScanRunner
+from kubedelos.web.security import ServeGuard
 
 TOKEN = "startup-token-for-tests"  # distinctive, so the access-log test can search for it
 PORT = 9370
@@ -20,6 +21,8 @@ BASE_URL = f"http://127.0.0.1:{PORT}"
 CONTEXT = "my-cluster"
 SERVE_HOST = "example.com"
 NEXT_SWEEP = datetime(2026, 1, 2, 3, 0, tzinfo=UTC)
+SERVE_ORIGIN = "https://kubedelos.example.com"
+IDENTITY_HEADER = "X-Auth-Request-Email"
 
 
 class Clock:
@@ -96,13 +99,17 @@ def client(app):
 
 
 class FakeWorker:
-    """The queue worker as the serve app sees it: only whether its thread is alive."""
+    """The queue worker as the serve app sees it: whether its thread is alive, and how often a route woke it."""
 
     def __init__(self) -> None:
         self.running = True
+        self.woken = 0
 
     def alive(self) -> bool:
         return self.running
+
+    def wake(self) -> None:
+        self.woken += 1
 
 
 class FakeSweeper:
@@ -128,8 +135,11 @@ def sweeper():
     return FakeSweeper()
 
 
-def build_serve_app(seed, worker, sweeper, allowed_hosts=(SERVE_HOST,), *, read_only=False, trust_proxy_headers=False):
-    """The serve app over the seed's database, storing runs under ``my-cluster`` and answering ``allowed_hosts``."""
+def build_serve_app(
+    seed, worker, sweeper, allowed_hosts=(SERVE_HOST,), *, read_only=False, trust_proxy_headers=False, **configured
+):
+    """The serve app over the seed's database, storing runs under ``my-cluster`` and answering ``allowed_hosts``;
+    ``configured`` sets more of its Settings (``namespaces=["web"]``, say)."""
     connect(seed.settings.db_path).close()  # create and migrate first, as `kubedelos serve` does at startup
     settings = Settings(
         data_dir=seed.settings.data_dir,
@@ -137,6 +147,7 @@ def build_serve_app(seed, worker, sweeper, allowed_hosts=(SERVE_HOST,), *, read_
         allowed_hosts=list(allowed_hosts),
         read_only=read_only,
         trust_proxy_headers=trust_proxy_headers,
+        **configured,
     )
     runner = ScanRunner(settings, CONTEXT, clock=seed.clock, fixed_cluster=True)
     return create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=seed.clock)
@@ -156,14 +167,47 @@ def serve_client(serve_app):
 
 @pytest.fixture
 def make_serve_client(seed, worker, sweeper):
-    """A factory of serve clients, each over its own app: ``make_serve_client(read_only=True)`` and so on. The client's
-    base URL is the first allowed host, and every client is closed when the test ends."""
+    """A factory of serve clients, each over its own app: ``make_serve_client(read_only=True)`` and so on; other
+    keywords set the app's Settings. The client's base URL is the first allowed host, and every client is closed when
+    the test ends."""
     with contextlib.ExitStack() as stack:
 
-        def make(*, read_only=False, trust_proxy_headers=False, allowed_hosts=(SERVE_HOST,)):
+        def make(*, read_only=False, trust_proxy_headers=False, allowed_hosts=(SERVE_HOST,), **configured):
             app = build_serve_app(
-                seed, worker, sweeper, allowed_hosts, read_only=read_only, trust_proxy_headers=trust_proxy_headers
+                seed,
+                worker,
+                sweeper,
+                allowed_hosts,
+                read_only=read_only,
+                trust_proxy_headers=trust_proxy_headers,
+                **configured,
             )
             return stack.enter_context(TestClient(app, base_url=f"http://{allowed_hosts[0]}"))
 
         yield make
+
+
+def serve_cookie(client) -> str:
+    """The CSRF cookie the serve client holds, getting one first if it has none."""
+    if client.cookies.get(ServeGuard.CSRF_COOKIE) is None:
+        assert client.get("/scans").status_code == 200
+    return client.cookies.get(ServeGuard.CSRF_COOKIE)
+
+
+def serve_token(client, identity=None) -> str:
+    return client.app.state.serve_guard.csrf_token(serve_cookie(client), identity)
+
+
+def serve_headers(identity=None, origin=SERVE_ORIGIN) -> dict:
+    headers = {"origin": origin}
+    if identity is not None:
+        headers[IDENTITY_HEADER] = identity
+    return headers
+
+
+def signed_post(client, path, data, identity=None, origin=None):
+    """POST ``data`` to ``path`` with the cookie and the matching CSRF token, as the page's form would. The Origin is
+    ``https://`` plus the client's host unless ``origin`` names another."""
+    data = {**data, "csrf_token": serve_token(client, identity)}
+    origin = origin or f"https://{client.base_url.host}"
+    return client.post(path, data=data, headers=serve_headers(identity, origin), follow_redirects=False)

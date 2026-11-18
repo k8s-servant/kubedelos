@@ -29,7 +29,18 @@ from kubedelos.trivy.runner import error_cause, kill_all_running
 logger = logging.getLogger("kubedelos.web")
 
 State = Literal["starting", "running", "stopping", "finished", "error"]
-_ACTIVE: frozenset[str] = frozenset({"starting", "running", "stopping"})
+ACTIVE: frozenset[str] = frozenset({"starting", "running", "stopping"})  # a job in these states holds the slot
+# The scan form's fields, as Settings names them, with the labels the form shows them under. A queued UI scan's
+# overrides carry these (and ``rescan``) only, so a request never picks the context, kubeconfig or cluster name.
+FIELDS = {
+    "namespaces": "Namespaces",
+    "exclude_namespaces": "Exclude namespaces",
+    "namespace_selector": "Namespace selector",
+    "selector": "Label selector",
+    "exclude_images": "Exclude images",
+    "parallelism": "Parallel images",
+    "pkg_types": "Package types",
+}
 _ETA_MIN_DONE = 5
 _ERROR_LIMIT = 300
 _AFTER_KILL_S = 5.0  # how long shutdown waits, once Trivy is killed, for the scan to record its run
@@ -195,7 +206,7 @@ class ScanRunner:
         with self._lock:
             if self._closed:
                 raise ScanBusy("the UI is shutting down")
-            if self._job is not None and self._job.state in _ACTIVE:
+            if self._job is not None and self._job.state in ACTIVE:
                 raise ScanBusy("a scan is already running")
             job = _Job(cancel=threading.Event(), context=target, id=self._last_id + 1, retry_of=retry_of)
             job.thread = threading.Thread(target=self._run, args=(job, work), name="kubedelos-ui-scan", daemon=True)
@@ -221,7 +232,7 @@ class ScanRunner:
             if job is None:
                 return None
             left = None
-            if job.state in _ACTIVE and job.progress is not None and job.paced_from is not None:
+            if job.state in ACTIVE and job.progress is not None and job.paced_from is not None:
                 p = job.progress
                 left = eta(job.paced_from, self._clock(), p.done - job.paced_base, p.total - job.paced_base)
             progress = dataclasses.replace(job.progress) if job.progress is not None else None
