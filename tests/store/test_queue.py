@@ -128,6 +128,20 @@ def test_abandon_started_cancels_orphans_only(conn):
     assert states == {orphan: "cancelled", running: "started"}
 
 
+def test_requeue_puts_back_only_a_started_request_without_a_run(conn):
+    first = _ui(conn, namespaces=["a"]).id
+    second = _ui(conn, namespaces=["b"]).id
+    waiting = _ui(conn, namespaces=["c"]).id
+    queue.claim_next(conn)
+    queue.claim_next(conn)
+    queue.attach_run(conn, second, _run(conn))
+    assert queue.requeue(conn, first) is True
+    assert queue.requeue(conn, second) is False  # it already has its run
+    assert queue.requeue(conn, waiting) is False  # still queued
+    assert [r.id for r in queue.queued(conn)] == [first, waiting]  # back at the front: it keeps its id
+    assert queue.claim_next(conn).id == first
+
+
 def test_overrides_round_trip(conn):
     queue.enqueue(
         conn,

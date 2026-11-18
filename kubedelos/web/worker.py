@@ -7,6 +7,10 @@ prunes old runs after a finished sweep, and starts the next request. A request's
 ``Settings`` again before it runs: one that no longer validates is skipped, never fatal. Each thread opens its own
 SQLite connection, so none crosses threads. A failing pass is logged and the loop goes on; only :meth:`stop` or a
 shut-down runner ends it.
+
+The worker settles a request only from the view of the job it launched (matched by job id), so another scan's run is
+never recorded against it, nor a sweep's pruning triggered by it. A busy runner puts the claimed request back in the
+queue for a later pass; only a closed runner ends the loop.
 """
 
 import logging
@@ -19,7 +23,7 @@ from pydantic import ValidationError
 
 from kubedelos.config import Settings
 from kubedelos.store import db, queue, retention
-from kubedelos.web.jobs import ScanBusy, ScanRunner
+from kubedelos.web.jobs import JobView, ScanBusy, ScanRunner
 from kubedelos.web.routes.scans import ACTIVE, FIELDS
 
 logger = logging.getLogger("kubedelos.web")
@@ -41,6 +45,7 @@ class QueueWorker:
         self._wake = threading.Event()
         self._stopped = threading.Event()
         self._thread: threading.Thread | None = None
+        self._current: tuple[queue.Request, int] | None = None  # the request last started and its runner job id
 
     def enqueue_sweep(self) -> None:
         """Queue a sweep of the configured scope (skipping the result cache) and wake the worker.
@@ -77,13 +82,11 @@ class QueueWorker:
 
     def _loop(self) -> None:
         conn = db.connect(self._settings.db_path)
-        current: queue.Request | None = None
         try:
             while not self._stopped.is_set():
                 try:
-                    current = self._pass(conn, current)
-                except ScanBusy:  # the runner has been shut down: the app is going away
-                    return
+                    if not self._pass(conn):
+                        return
                 except Exception as exc:
                     # Type only: a message could carry a registry or API detail, and the next pass retries anyway.
                     logger.warning("queue worker pass failed (%s)", type(exc).__name__)
@@ -92,38 +95,64 @@ class QueueWorker:
         finally:
             conn.close()
 
-    def _pass(self, conn: sqlite3.Connection, current: queue.Request | None) -> queue.Request | None:
-        """Settle the request that last ran and start the next one; return the request now running, if any."""
+    def _pass(self, conn: sqlite3.Connection) -> bool:
+        """Settle the request this worker last started and start the next one; False once the runner is closed."""
+        if self._runner.closed:
+            return False
         view = self._runner.view()
-        if view is not None and view.state in ACTIVE:
-            return current
-        if current is not None:  # the request this worker last started has ended
-            queue.attach_run(conn, current.id, view.run_id)  # None when the scan raised
-            if current.trigger == "schedule" and view.status in ("ok", "partial"):
-                retention.prune(conn, now=self._clock(), retention_days=self._settings.retention_days)
-            current = None
+        if view is not None and view.state in ACTIVE:  # this worker's scan or another's: the slot is taken
+            return True
+        if self._current is not None:
+            self._settle(conn, view)
         req = queue.claim_next(conn)
         if req is None:
-            return None
+            return True
         settings_overrides = {k: v for k, v in req.overrides.items() if k not in _NOT_SETTINGS}
         try:
             valid = Settings.model_validate({**self._settings.model_dump(), **settings_overrides})
         except ValidationError as exc:
             queue.attach_run(conn, req.id, None)
             logger.debug("queued request %d skipped: %d invalid override(s)", req.id, exc.error_count())
-            return None
+            return True
+        try:
+            job_id = self._launch(req, valid)
+        except ScanBusy:
+            # The slot was taken between the view and the launch, or the runner is shutting down: either way the
+            # request waits in the queue, for a later pass or the next start.
+            queue.requeue(conn, req.id)
+            return not self._runner.closed
+        except Exception:
+            queue.attach_run(conn, req.id, None)  # settled as run-less, never left looking in flight
+            raise
+        self._current = (req, job_id)
+        return True
+
+    def _settle(self, conn: sqlite3.Connection, view: JobView | None) -> None:
+        """Record the run the last started request produced, and prune after a finished sweep."""
+        req, job_id = self._current
+        if view is None or view.job_id != job_id:
+            # Another job replaced this one's view before a pass saw it end: its run is unknown here, so none is
+            # attached rather than someone else's.
+            queue.attach_run(conn, req.id, None)
+            self._current = None
+            logger.warning("queued request %d ended unseen; no run recorded for it", req.id)
+            return
+        queue.attach_run(conn, req.id, view.run_id)  # None when the scan raised
+        self._current = None
+        if req.trigger == "schedule" and view.status in ("ok", "partial"):
+            retention.prune(conn, now=self._clock(), retention_days=self._settings.retention_days)
+
+    def _launch(self, req: queue.Request, valid: Settings) -> int:
         if req.kind == "retry":
             kinds = req.overrides.get("kinds")
-            self._runner.retry(
+            return self._runner.retry(
                 req.target_run_id,
                 {name: getattr(valid, name) for name in _RETRY_FIELDS},
                 kinds=set(kinds) if kinds is not None else None,
             )
-        else:
-            self._runner.start(
-                {name: getattr(valid, name) for name in FIELDS},
-                rescan=bool(req.overrides.get("rescan", False)),
-                trigger=req.trigger,
-                requested_by=req.requested_by,
-            )
-        return req
+        return self._runner.start(
+            {name: getattr(valid, name) for name in FIELDS},
+            rescan=bool(req.overrides.get("rescan", False)),
+            trigger=req.trigger,
+            requested_by=req.requested_by,
+        )

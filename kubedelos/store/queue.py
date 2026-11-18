@@ -145,6 +145,16 @@ def cancel(conn: sqlite3.Connection, request_id: int) -> bool:
     return cur.rowcount == 1
 
 
+def requeue(conn: sqlite3.Connection, request_id: int) -> bool:
+    """Put a started request that has no run yet back in the queue (the scan slot was busy); True when it was."""
+    with conn:
+        cur = conn.execute(
+            "UPDATE scan_request SET state = 'queued' WHERE id = ? AND state = 'started' AND run_id IS NULL",
+            (request_id,),
+        )
+    return cur.rowcount == 1
+
+
 def queued(conn: sqlite3.Connection) -> list[Request]:
     """The waiting requests, oldest first."""
     rows = conn.execute("SELECT * FROM scan_request WHERE state = 'queued' ORDER BY id").fetchall()

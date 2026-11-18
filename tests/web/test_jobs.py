@@ -476,3 +476,25 @@ def test_start_passes_trigger_and_requester(settings):
     call = scan.calls[0]
     assert (call["trigger"], call["requested_by"], call["rescan"]) == ("schedule", "a@example.com", True)
     runner.shutdown()
+
+
+def test_job_ids_increase_and_start_and_retry_return_them(settings):
+    scan, retry = FakeScan(), FakeScan()
+    scan.release.set()
+    retry.release.set()
+    runner = _runner(settings, scan, retry=retry)
+    first = runner.start({})
+    assert _wait_for(runner, "finished").job_id == first
+    second = runner.retry(7, {})
+    assert second > first
+    assert _wait_for(runner, "finished").job_id == second
+    third = runner.start({})
+    assert third > second
+    _wait_for(runner, "finished")
+
+
+def test_closed_flips_on_shutdown(settings):
+    runner = _runner(settings, FakeScan())
+    assert runner.closed is False
+    runner.shutdown()
+    assert runner.closed is True

@@ -10,7 +10,7 @@ from kubedelos.config import Settings
 from kubedelos.scan.service import ScanOutcome
 from kubedelos.store import db, queue, retention
 from kubedelos.store.repo import Repo
-from kubedelos.web.jobs import ScanRunner
+from kubedelos.web.jobs import JobView, ScanBusy, ScanRunner
 from kubedelos.web.worker import QueueWorker
 
 NOW = datetime(2026, 11, 18, 3, 0, tzinfo=UTC)
@@ -229,3 +229,104 @@ def test_a_shut_down_runner_ends_the_worker(make, conn, settings):
     _ui(conn, namespaces=["team-a"])
     worker.start()
     wait_until(lambda: not worker.alive(), timeout=2)
+
+
+class StubRunner:
+    """A runner whose view and launches the test sets by hand, to drive the worker's passes one at a time."""
+
+    def __init__(self) -> None:
+        self.current: JobView | None = None
+        self.closed = False
+        self.launch_error: BaseException | None = None
+        self.launches: list[dict] = []
+        self._ids = 0
+
+    def view(self) -> JobView | None:
+        return self.current
+
+    def start(self, overrides, **kw) -> int:
+        return self._launch(overrides, **kw)
+
+    def retry(self, run_id, overrides, **kw) -> int:
+        return self._launch(overrides, run_id=run_id, **kw)
+
+    def _launch(self, overrides, **kw) -> int:
+        if self.launch_error is not None:
+            raise self.launch_error
+        self._ids += 1
+        self.launches.append({"overrides": overrides, **kw})
+        self.current = _view("starting", job_id=self._ids)
+        return self._ids
+
+
+def _view(state, *, job_id, run_id=None, status=None):
+    return JobView(state, run_id, None, status, None, None, "my-cluster", job_id=job_id)
+
+
+@pytest.fixture
+def stub(settings):
+    runner = StubRunner()
+    return runner, QueueWorker(settings, runner, clock=lambda: NOW, poll_s=0.01)
+
+
+def test_a_foreign_job_is_never_attributed_to_the_worker_request(stub, conn, pruned):
+    runner, worker = stub
+    mine = queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=NOW).id
+    assert worker._pass(conn) is True
+    assert runner.launches and runner.current.job_id == 1
+    # Someone else's scan ran and finished before this pass saw ours end.
+    runner.current = _view("running", job_id=2)
+    worker._pass(conn)
+    assert _request(conn, mine)["run_id"] is None and _request(conn, mine)["state"] == "started"
+    foreign_run = Repo(conn).start_run("my-cluster", "ui", "0.76.1", scan_level="library,os")
+    runner.current = _view("finished", job_id=2, run_id=foreign_run, status="ok")
+    later = _ui(conn, namespaces=["team-a"]).id
+    worker._pass(conn)
+    assert _request(conn, mine)["run_id"] is None  # not the foreign run
+    assert pruned == []  # and the foreign "ok" does not count as a finished sweep
+    assert len(runner.launches) == 2 and _request(conn, later)["state"] == "started"  # and the worker moved on
+
+
+def test_the_worker_settles_its_own_job_by_id(stub, conn, pruned):
+    runner, worker = stub
+    mine = queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=NOW).id
+    worker._pass(conn)
+    run = Repo(conn).start_run("my-cluster", "schedule", "0.76.1", scan_level="library,os")
+    runner.current = _view("finished", job_id=1, run_id=run, status="ok")
+    worker._pass(conn)
+    assert _request(conn, mine)["run_id"] == run and len(pruned) == 1
+
+
+def test_a_transient_busy_runner_requeues_and_runs_later(stub, conn):
+    runner, worker = stub
+    req = _ui(conn, namespaces=["team-a"]).id
+    runner.launch_error = ScanBusy("a scan is already running")
+    assert worker._pass(conn) is True  # busy, not closed: keep going
+    assert _request(conn, req)["state"] == "queued" and runner.launches == []
+    runner.launch_error = None
+    worker._pass(conn)
+    assert _request(conn, req)["state"] == "started" and len(runner.launches) == 1
+
+
+def test_a_launch_that_raises_leaves_no_orphan(stub, conn):
+    runner, worker = stub
+    bad = _ui(conn, namespaces=["team-a"]).id
+    good = _ui(conn, namespaces=["team-b"]).id
+    runner.launch_error = RuntimeError("can't start new thread")
+    with pytest.raises(RuntimeError):
+        worker._pass(conn)
+    row = _request(conn, bad)
+    assert (row["state"], row["run_id"]) == ("started", None)  # settled as run-less, not left in flight
+    runner.launch_error = None
+    worker._pass(conn)
+    assert _request(conn, good)["state"] == "started" and len(runner.launches) == 1
+
+
+def test_a_closed_runner_ends_the_loop_and_keeps_the_request_queued(stub, conn):
+    runner, worker = stub
+    req = _ui(conn, namespaces=["team-a"]).id
+    runner.launch_error = ScanBusy("the UI is shutting down")
+    runner.closed = True
+    worker.start()
+    wait_until(lambda: not worker.alive(), timeout=2)
+    assert _request(conn, req)["state"] == "queued"  # for the next start
