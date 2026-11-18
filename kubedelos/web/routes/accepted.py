@@ -2,8 +2,9 @@
 
 The register lists the shown context's entries and the all-cluster ones, with each entry's state, days left and how
 many findings it covers in the dashboard's run (the newest whole-cluster run). The form is prefilled from the findings
-row that links to it; the owner defaults to the OS user and the expiry to 90 days ahead, at most 365. An entry belongs
-to the posted context, or to all clusters.
+row that links to it; the owner defaults to the signed-in name in serve (an empty posted owner becomes it) and to the
+OS user otherwise, and the expiry to 90 days ahead, at most 365. An entry belongs to the posted context, or to all
+clusters. In read-only serve the form and the revoke buttons are not offered.
 
 ``POST /accepted`` and ``POST /accepted/{id}/revoke`` read the urlencoded body themselves, as ``POST /scans`` does (the
 CSRF guard has checked it), and write through ``open_db_rw``. A context in a form must be one the UI knows; revoke only
@@ -21,6 +22,7 @@ from starlette.concurrency import run_in_threadpool
 
 from kubedelos.store import accepted
 from kubedelos.store.queries import newest_run
+from kubedelos.web.identity import identity
 from kubedelos.web.pages import MAX_ID, open_db, open_db_rw, render, shown_context
 
 router = APIRouter()
@@ -98,7 +100,7 @@ def new(
         "image": image,
         "namespace": namespace,
         "reason": "",
-        "owner": _os_user(),
+        "owner": identity(request) or _os_user(),
         "expires": (today + timedelta(days=DEFAULT_DAYS)).isoformat(),
         "scope": "context",
     }
@@ -147,6 +149,8 @@ def _create(request: Request, body: bytes) -> Response:
         return _form(request, {}, "the form could not be read", 400)
     names = ("cve", "reason", "owner", "expires", "scope", *NARROWING)
     values = {name: fields.get(name, "") for name in names}
+    if not values["owner"].strip():  # in serve with a trusted identity the signed-in user owns what they leave unnamed
+        values["owner"] = identity(request) or ""
     now = request.app.state.clock()
     try:
         if len(values["reason"].strip()) > MAX_REASON:

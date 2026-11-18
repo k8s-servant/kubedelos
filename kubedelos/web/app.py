@@ -46,7 +46,7 @@ from kubedelos.web.routes import (
     times,
 )
 from kubedelos.web.routes import settings as settings_page
-from kubedelos.web.security import Guard, ServeGuard, install, install_serve
+from kubedelos.web.security import READ_ONLY_NOTICE, Guard, ServeGuard, install, install_serve
 from kubedelos.web.worker import QueueWorker
 
 _HERE = Path(__file__).parent
@@ -91,6 +91,7 @@ def _templates(
     env.globals["csrf_token"] = csrf_token
     env.globals["can_write"] = can_write  # whether the page offers its forms: False only in read-only serve
     env.globals["serve"] = serve
+    env.globals["read_only_notice"] = READ_ONLY_NOTICE  # shown by base.html wherever can_write is False
     env.filters["safe_url"] = safe_url
     env.filters["plural"] = plural
     env.globals.update(

@@ -4,6 +4,8 @@ from datetime import date, timedelta
 from kubedelos.config import Settings
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
 from kubedelos.store import accepted
+from kubedelos.web.security import READ_ONLY_NOTICE
+from tests.web.conftest import signed_post
 
 CLUSTER = Settings().scope
 ORIGIN = {"origin": "http://127.0.0.1:9370"}
@@ -279,3 +281,64 @@ def test_register_names_the_run_by_its_number_in_the_cluster(client, seed, kube_
     _accept(seed, context="prod-eu")
     html = client.get("/accepted", params={"context": "prod-eu"}).text
     assert theirs == 2 and "covers 1 finding</a> in run 1" in html
+
+
+# kubedelos serve: read-only and the owner of an acceptance
+
+IDENTITY = "a@example.com"
+
+
+def _owner_of_the_only_entry(seed) -> str:
+    [row] = seed.repo._conn.execute("SELECT owner FROM acceptance").fetchall()
+    return row["owner"]
+
+
+def test_read_only_accepted_page_has_no_revoke(make_serve_client, seed):
+    client = make_serve_client(read_only=True)
+    _seed(seed)
+    _accept(seed)
+    html = client.get("/accepted").text
+    assert "behind the proxy" in html
+    assert "/revoke" not in html and 'name="csrf_token"' not in html
+
+
+def test_writable_accepted_page_has_revoke(serve_client, seed):
+    _seed(seed)
+    entry = _accept(seed)
+    assert f'action="/accepted/{entry}/revoke"' in serve_client.get("/accepted").text
+
+
+def test_read_only_accept_form_is_replaced_by_the_notice(make_serve_client):
+    html = make_serve_client(read_only=True).get("/accepted/new?cve=CVE-1").text
+    assert READ_ONLY_NOTICE in html
+    assert "<form" not in html
+
+
+def test_accept_form_prefills_the_trusted_identity(make_serve_client):
+    client = make_serve_client(trust_proxy_headers=True)
+    html = client.get("/accepted/new", headers={"X-Auth-Request-Email": IDENTITY}).text
+    assert f'name="owner" value="{IDENTITY}"' in html
+
+
+def test_empty_owner_becomes_the_identity(make_serve_client, seed):
+    client = make_serve_client(trust_proxy_headers=True)
+    response = signed_post(client, "/accepted", {**FORM, "owner": "  "}, identity=IDENTITY)
+    assert response.status_code == 303
+    assert _owner_of_the_only_entry(seed) == IDENTITY
+
+
+def test_typed_owner_is_kept(make_serve_client, seed):
+    client = make_serve_client(trust_proxy_headers=True)
+    response = signed_post(client, "/accepted", {**FORM, "owner": "team-payments"}, identity=IDENTITY)
+    assert response.status_code == 303
+    assert _owner_of_the_only_entry(seed) == "team-payments"
+
+
+def test_empty_owner_without_identity_is_refused(serve_client, seed):
+    response = signed_post(serve_client, "/accepted", {**FORM, "owner": ""})
+    assert response.status_code == 400
+    assert seed.repo._conn.execute("SELECT count(*) FROM acceptance").fetchone()[0] == 0
+
+
+def test_empty_owner_on_the_laptop_is_refused(client, seed):
+    assert _post(client, "/accepted", **{**FORM, "owner": ""}).status_code == 400

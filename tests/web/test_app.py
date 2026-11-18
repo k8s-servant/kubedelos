@@ -11,7 +11,7 @@ import kubedelos.web
 import kubedelos.web.app as app_module
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import render
-from kubedelos.web.security import ServeGuard
+from kubedelos.web.security import READ_ONLY_NOTICE, ServeGuard
 
 
 @pytest.fixture(autouse=True)
@@ -183,3 +183,14 @@ def test_the_400_page_keeps_the_shown_context(client, kube_contexts):
     assert 'href="/findings?context=prod-eu"' in response.text  # the nav stays on the cluster the page was for
     unknown = client.get("/namespaces", params={"context": "nowhere", "has": "SEVERE"})
     assert unknown.status_code == 400 and 'href="/findings"' in unknown.text  # an unknown one falls back
+
+
+@pytest.mark.parametrize("path", ["/", "/findings", "/scans", "/accepted"])
+def test_read_only_pages_show_the_notice(make_serve_client, path):
+    html = make_serve_client(read_only=True).get(path).text
+    assert '<p class="notice">View-only: this kubedelos is read-only.</p>' in html
+
+
+def test_writable_serve_and_laptop_never_show_the_notice(serve_client, client):
+    assert READ_ONLY_NOTICE not in serve_client.get("/").text
+    assert READ_ONLY_NOTICE not in client.get("/").text

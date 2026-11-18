@@ -1,5 +1,5 @@
 {#- The accepted risk register: the shown context's entries and the all-cluster ones, active first. Each row can be
-    revoked with a CSRF-protected POST. -#}
+    revoked with a CSRF-protected POST, unless this kubedelos is read-only. -#}
 {% extends "base.html" %}
 {% block title %}Accepted · kubedelos{% endblock %}
 {% block run_line %}<div class="page-head"><h1>Accepted risk</h1></div>{% endblock %}
@@ -52,7 +52,7 @@
             {%- else %}<a href="{{ link('/findings', run_id=run.id, cve=e.vuln_id, package=e.pkg_name, namespace=e.namespace, accepted='only') }}">covers {{ e.covers }} {{ e.covers | plural("finding") }}</a> in run {{ run.number }}{% endif -%}
           </td>
           <td>
-            {%- if e.state != "revoked" %}
+            {%- if e.state != "revoked" and can_write(request) %}
             <form method="post" action="/accepted/{{ e.id }}/revoke">
               <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
               <input type="hidden" name="context" value="{{ context }}">

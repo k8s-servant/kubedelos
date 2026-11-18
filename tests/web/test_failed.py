@@ -396,3 +396,16 @@ def test_serve_retry_twice_says_already_queued(serve_client, seed):
     response = signed_post(serve_client, f"/scans/{run_id}/retry", data)
     assert response.status_code == 303 and response.headers["location"] == "/scans?notice=queued"
     assert len(_requests(seed)) == 1
+
+
+def test_writable_failures_page_has_the_retry_form(serve_client, seed):
+    run_id = _retryable(seed)
+    assert f'action="/scans/{run_id}/retry"' in serve_client.get(f"/scans/{run_id}/failed").text
+
+
+def test_read_only_failures_page_has_no_retry_form(make_serve_client, seed):
+    client = make_serve_client(read_only=True)
+    run_id = _retryable(seed)
+    html = client.get(f"/scans/{run_id}/failed").text
+    assert "reg.example.com/a:1" in html
+    assert "/retry" not in html and 'name="csrf_token"' not in html

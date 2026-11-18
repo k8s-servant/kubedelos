@@ -1,4 +1,5 @@
-{#- The Accept… form, prefilled from the findings row that links here. Blank narrowing fields mean anywhere. -#}
+{#- The Accept… form, prefilled from the findings row that links here. Blank narrowing fields mean anywhere. In
+    read-only serve the form gives way to a line of text. -#}
 {% extends "base.html" %}
 {% block title %}Accept a finding · kubedelos{% endblock %}
 {% block run_line %}<div class="page-head"><h1>Accept a finding</h1></div>{% endblock %}
@@ -8,6 +9,9 @@
     {%- if error %}
     <div class="callout" role="alert"><p>{{ error }}</p></div>
     {%- endif %}
+    {%- if not can_write(request) %}
+    <p class="hint">Accepting a finding needs a kubedelos that is not read-only.</p>
+    {%- else %}
     <form method="post" action="/accepted" class="filters">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       <input type="hidden" name="context" value="{{ context }}">
@@ -33,5 +37,6 @@
         <a class="clear" href="{{ back }}">cancel</a>
       </div>
     </form>
+    {%- endif %}
   </section>
 {% endblock %}

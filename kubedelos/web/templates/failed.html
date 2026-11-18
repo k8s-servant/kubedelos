@@ -8,7 +8,7 @@
   {%- for note in notes %}
   <p class="notice retry-note">{{ note }}</p>
   {%- endfor %}
-  {%- if retry %}
+  {%- if retry and can_write(request) %}
   <section class="card retry" aria-labelledby="retry-title">
     <h2 class="card-title" id="retry-title">Retry failed images</h2>
     {%- if retry.error %}
