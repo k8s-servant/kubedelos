@@ -201,3 +201,29 @@ def test_cli_trivy_install_reports_verification_failure(monkeypatch):
 
     assert r.exit_code == 1
     assert "SHA-256 mismatch" in r.stderr
+
+
+def _failing_client() -> httpx.Client:
+    def no_network(request: httpx.Request) -> httpx.Response:
+        raise AssertionError("no download expected")
+
+    return httpx.Client(transport=httpx.MockTransport(no_network))
+
+
+def test_bundled_trivy_is_used_and_never_downloaded(tmp_path):
+    bundled = tmp_path / "bundled" / pins.TRIVY_VERSION / "trivy"
+    bundled.parent.mkdir(parents=True)
+    bundled.write_bytes(FAKE_BINARY)
+    bundled.chmod(0o755)
+    settings = Settings(trivy_dir=tmp_path / "bundled", cache_dir=tmp_path / "cache")
+    assert ensure_trivy(settings, client=_failing_client()) == bundled
+
+
+def test_bundled_trivy_dir_without_the_pinned_version_falls_back_to_the_cache(tmp_path):
+    (tmp_path / "bundled").mkdir()
+    settings = Settings(trivy_dir=tmp_path / "bundled", cache_dir=tmp_path / "cache")
+    cached = settings.cache_dir / "trivy" / pins.TRIVY_VERSION / "trivy"
+    cached.parent.mkdir(parents=True)
+    cached.write_bytes(FAKE_BINARY)
+    cached.chmod(0o755)
+    assert ensure_trivy(settings, client=_failing_client()) == cached

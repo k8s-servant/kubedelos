@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     cache_dir: Path = Field(default_factory=_default_cache_dir)
     data_dir: Path = Field(default_factory=_default_data_dir)
     trivy_path: Path | None = None
+    trivy_dir: Path | None = None  # a directory holding <pinned version>/trivy, as the container image bundles it
     parallelism: int = Field(default=4, ge=1, le=32)
     scan_timeout_s: int = 600
     layer_cache: bool = True  # keep each parallel scan's Trivy layer cache on disk between runs
@@ -62,6 +63,7 @@ class Settings(BaseSettings):
     allowed_hosts: Annotated[list[str], NoDecode] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
     read_only: bool = False  # serve only: refuse every write, so the UI is view-only
     trust_proxy_headers: bool = False  # serve only: read the user's name from ``identity_header``
+    secure_cookies: bool = False  # serve only: mark the CSRF cookie Secure, for a UI reached over HTTPS
     identity_header: str = "X-Auth-Request-Email"  # set by the sign-in proxy in front of serve
 
     @field_validator("sweep_timezone")

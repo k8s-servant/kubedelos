@@ -4,6 +4,11 @@
 
 ### Features
 
+- Helm chart `charts/kubedelos` installs `kubedelos serve`: one hardened replica (Recreate, non-root, read-only root filesystem), a PVC, a Service, a ConfigMap of `KUBEDELOS_*` settings and a read-only ClusterRole. `clusterName` is required and a values schema rejects unknown keys. A NetworkPolicy admits only `networkPolicy.ingressFrom` (nothing by default). An optional Ingress or Gateway API HTTPRoute adds its hosts to `KUBEDELOS_ALLOWED_HOSTS`, which the chart fills with the Service's DNS names, `localhost` and `127.0.0.1` (so `kubectl port-forward` works), the Ingress and HTTPRoute hosts and `extraAllowedHosts`.
+- Chart guards: with `auth.trustProxyHeaders` on, the chart refuses to render unless the NetworkPolicy is on and `ingressFrom` names a source that does not admit every pod (`{}`, an entry with no selector or `ipBlock`, a selector with no `matchLabels` or `In` expression, an empty `namespaceSelector`, one naming only the release namespace with no `podSelector`, an `ipBlock` with prefix 0). Wildcard Ingress hosts and HTTPRoute hostnames are refused, and an enabled Ingress needs a host and an enabled HTTPRoute a `parentRefs` entry. The guard catches common mistakes and is not a proof: `ipBlock` ranges, other NetworkPolicies, `kubectl port-forward`, `hostNetwork` traffic and a CNI that does not enforce NetworkPolicy are the operator's to check. NOTES.txt warns when the UI is exposed or writable without sign-in and, with trust on, names those bypasses.
+- Container image: a multi-arch `Dockerfile` (python alpine, pinned by digest) bundles the pinned Trivy, checksum-verified at build time, so the pod downloads nothing. It runs `kubedelos serve` as user 65532 and writes only `/data` and `/tmp`; `scripts/image-smoke.sh IMAGE` checks it.
+- Release: the image (amd64 and arm64, with SBOM and provenance) and the Helm chart are pushed to `ghcr.io/k8s-servant` on each release and signed keylessly with cosign, each in its own job; verify them with the identity of `release-please.yml` on `main`. CI lints and renders the chart, builds, smoke-tests and scans the image with the pinned Trivy (failing only on fixable `CRITICAL` findings), and installs every downloaded tool by its pinned SHA-256. A kind end-to-end job (`scripts/e2e-chart.sh`) installs the chart with the built image and waits for the first scheduled sweep.
+- `KUBEDELOS_SECURE_COOKIES=true` marks the `serve` CSRF cookie `Secure` (the chart sets it by default, `secureCookies`); `KUBEDELOS_TRIVY_DIR` names a directory holding `<version>/trivy`, used before the cache and never downloaded over.
 - `kubedelos serve` runs kubedelos in a cluster: the UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory and, unless read-only, write, so expose it only through an authenticating proxy or keep it cluster-internal.
 - Writes in `kubedelos serve`: UI scans, retries and cancels go through the queue and stay within the configured scope (a scan can only narrow it). Writes need an allowed `Origin` and a CSRF token.
 - `KUBEDELOS_READ_ONLY=true` makes `serve` refuse every write; the pages hide their forms and show a notice.
@@ -49,6 +54,7 @@
 
 ### Documentation
 
+- Guides for the in-cluster mode: [Running kubedelos in a cluster](docs/in-cluster.md) (install, every chart value, storage, exposure, the security model and verifying the signed release) and [oauth2-proxy behind Envoy Gateway](docs/exposure-oauth2-proxy-envoy-gateway.md), a worked example.
 - The README leads with the web UI, explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
 - The README names the oldest Trivy a custom `KUBEDELOS_TRIVY_PATH` can be: v0.54.0, the first with `--pkg-types`.
 

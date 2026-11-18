@@ -1,0 +1,73 @@
+# Values of the kubedelos chart. kubedelos serve keeps its state in one SQLite file, so there is always one replica.
+image:
+  repository: ghcr.io/k8s-servant/kubedelos
+  tag: "" # defaults to the chart's appVersion
+  digest: "" # sha256:..., wins over tag
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+clusterName: "" # required: the name runs are stored under
+
+# What a scan covers; empty means every namespace.
+scope:
+  namespaces: []
+  excludeNamespaces: []
+  namespaceSelector: "" # label selector, e.g. team=a
+  selector: "" # pod and workload label selector
+  excludeImages: [] # globs on the normalised image name
+
+sweep:
+  enabled: true
+  schedule: "0 3 * * *"
+  timezone: UTC
+retentionDays: 180 # 0 keeps every run
+scan:
+  parallelism: 4
+  timeoutSeconds: 600
+
+readOnly: false # true makes the UI view-only
+auth:
+  trustProxyHeaders: false # read the user's name from identityHeader; only behind a sign-in proxy
+  identityHeader: X-Auth-Request-Email
+secureCookies: true # mark the CSRF cookie Secure, for a UI reached over HTTPS
+extraAllowedHosts: [] # Host header values besides the Service names, e.g. an Ingress host
+clusterDomain: cluster.local
+logLevel: info # info prints an access line per request
+
+persistence:
+  size: 10Gi
+  storageClassName: ""
+  existingClaim: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 2Gi
+
+serviceAccount:
+  annotations: {}
+podAnnotations: {}
+podLabels: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+networkPolicy:
+  enabled: true
+  ingressFrom: []
+  egress: []
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  tls: []
+
+httpRoute:
+  enabled: false
+  parentRefs: []
+  hostnames: []
+  annotations: {}

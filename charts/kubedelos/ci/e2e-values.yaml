@@ -1,0 +1,8 @@
+# Values for scripts/e2e-chart.sh: a sweep every minute over one namespace on a throwaway kind cluster.
+# The NetworkPolicy stays on (its default); the script reads the database through kubectl exec.
+clusterName: kind-e2e
+scope:
+  namespaces: [web]
+sweep:
+  schedule: "* * * * *"
+secureCookies: false
