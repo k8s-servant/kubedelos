@@ -94,7 +94,9 @@ def test_setting_sources_name_the_flag_the_environment_or_the_default():
 
 def test_no_setting_is_named_like_a_secret():
     # The Settings page lists every field; a credential must never become one.
-    assert not [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
+    # secrets_dir is only the path of a directory, not a value.
+    names = [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
+    assert names == ["secrets_dir"]
 
 
 def test_scope_ignores_repeated_values():
@@ -181,3 +183,19 @@ def test_secure_cookies_and_trivy_dir_from_env(monkeypatch):
     monkeypatch.setenv("KUBEDELOS_TRIVY_DIR", "/opt/trivy")
     settings = Settings()
     assert settings.secure_cookies is True and settings.trivy_dir == Path("/opt/trivy")
+
+
+def test_docker_configs_need_secrets_dir(tmp_path):
+    assert Settings().docker_configs == [] and Settings().secrets_dir is None
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
+        Settings(docker_configs=[tmp_path / "a.json"])
+    settings = Settings(docker_configs=[tmp_path / "a.json"], secrets_dir=tmp_path)
+    assert settings.docker_configs == [tmp_path / "a.json"]
+
+
+def test_docker_configs_from_env_comma_or_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", "/a/one.json, /b/two.json")
+    assert Settings().docker_configs == [Path("/a/one.json"), Path("/b/two.json")]
+    monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", '["/a/one.json"]')
+    assert Settings().docker_configs == [Path("/a/one.json")]

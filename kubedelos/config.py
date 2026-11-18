@@ -6,11 +6,11 @@
 import json
 from collections.abc import Collection, Mapping
 from pathlib import Path
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import platformdirs
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 APP_NAME = "kubedelos"
@@ -65,6 +65,8 @@ class Settings(BaseSettings):
     trust_proxy_headers: bool = False  # serve only: read the user's name from ``identity_header``
     secure_cookies: bool = False  # serve only: mark the CSRF cookie Secure, for a UI reached over HTTPS
     identity_header: str = "X-Auth-Request-Email"  # set by the sign-in proxy in front of serve
+    secrets_dir: Path | None = None  # serve only: a private directory for the per-scan docker configs
+    docker_configs: Annotated[list[Path], NoDecode] = []  # mounted docker config.json files with registry credentials
 
     @field_validator("sweep_timezone")
     @classmethod
@@ -83,9 +85,15 @@ class Settings(BaseSettings):
             raise ValueError("must be an HTTP header name (letters, digits and hyphens)")
         return value
 
-    @field_validator("allowed_hosts", mode="before")
+    @model_validator(mode="after")
+    def _credentials_need_secrets_dir(self) -> Self:
+        if self.docker_configs and self.secrets_dir is None:
+            raise ValueError("KUBEDELOS_SECRETS_DIR is required for registry credentials")
+        return self
+
+    @field_validator("allowed_hosts", "docker_configs", mode="before")
     @classmethod
-    def _split_allowed_hosts(cls, value: Any) -> Any:
+    def _split_list(cls, value: Any) -> Any:
         """Accept a JSON list or a comma-separated string (``a.example.com,b.example.com``, as a Helm chart sets it)."""
         if not isinstance(value, str):
             return value
