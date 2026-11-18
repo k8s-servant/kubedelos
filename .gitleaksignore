@@ -1,4 +1,4 @@
 # Fake token-shaped value for the redaction tests (base64 of "token-value-1234567890").
 0086177f423f45506efbac9fd2d3ab252fec486d:tests/trivy/test_runner.py:generic-api-key:464
 # A time zone name compared in the scheduler test, not a key.
-9d6df62a640ba3a344fef7263412437e090d5ab4:tests/test_scheduler.py:generic-api-key:40
+e02811957edb3250cceec96d3d678481fdf211e8:tests/test_scheduler.py:generic-api-key:40
