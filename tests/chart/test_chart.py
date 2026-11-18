@@ -1,7 +1,8 @@
 """Renders the Helm chart with ``helm template`` and checks the documents it produces.
 
-The chart is the install path of ``kubedelos serve``; these tests pin its hardening, its read-only RBAC and that the
-ConfigMap it writes loads as ``Settings``. They skip without ``helm`` unless ``KUBEDELOS_REQUIRE_HELM=1`` (CI sets it).
+The chart is the install path of ``kubedelos serve``; these tests pin its hardening, its read-only RBAC, that the
+ConfigMap it writes loads as ``Settings``, the NetworkPolicy guard on header trust, the optional Ingress and HTTPRoute
+and the warnings in NOTES.txt. They skip without ``helm`` unless ``KUBEDELOS_REQUIRE_HELM=1`` (CI sets it).
 """
 
 import json
@@ -209,3 +210,209 @@ def test_deployment_rolls_on_config_change(render):
 
     assert checksum({}) == checksum({})
     assert checksum({}) != checksum({"retentionDays": 30})
+
+
+TRUST = {"auth": {"trustProxyHeaders": True}}
+PROXY = {
+    "namespaceSelector": {"matchLabels": {"kubernetes.io/metadata.name": "auth"}},
+    "podSelector": {"matchLabels": {"app": "oauth2-proxy"}},
+}
+
+
+def allowed_hosts(docs: list[dict]) -> list[str]:
+    return kind(docs, "ConfigMap")["data"]["KUBEDELOS_ALLOWED_HOSTS"].split(",")
+
+
+def test_networkpolicy_on_by_default_admits_nothing(render):
+    docs = render()
+    policy = kind(docs, "NetworkPolicy")["spec"]
+    pod_labels = kind(docs, "Deployment")["spec"]["template"]["metadata"]["labels"]
+    assert policy["podSelector"]["matchLabels"].items() <= pod_labels.items()
+    assert policy["policyTypes"] == ["Ingress"]
+    assert policy["ingress"] == []
+    assert "egress" not in policy
+
+
+def test_networkpolicy_can_be_turned_off(render):
+    assert not [doc for doc in render({"networkPolicy": {"enabled": False}}) if doc["kind"] == "NetworkPolicy"]
+
+
+def test_networkpolicy_ingress_from_and_egress(render):
+    egress = [{"to": [{"ipBlock": {"cidr": "10.0.0.0/8"}}], "ports": [{"port": 443, "protocol": "TCP"}]}]
+    policy = kind(render({"networkPolicy": {"ingressFrom": [PROXY], "egress": egress}}), "NetworkPolicy")["spec"]
+    assert policy["ingress"] == [{"from": [PROXY], "ports": [{"port": 8080, "protocol": "TCP"}]}]
+    assert policy["policyTypes"] == ["Ingress", "Egress"]
+    assert policy["egress"] == egress
+
+
+@pytest.mark.parametrize(
+    "network_policy",
+    [
+        {"enabled": False, "ingressFrom": [PROXY]},
+        {"ingressFrom": []},
+        {"ingressFrom": [{}]},
+        {"ingressFrom": [{"podSelector": {}}]},
+        {"ingressFrom": [{"podSelector": None}]},
+        {"ingressFrom": [{"podSelector": {"matchLabels": {}}}]},
+        {"ingressFrom": [{"podSelector": {"matchLabels": {}, "matchExpressions": []}}]},
+        {"ingressFrom": [{"namespaceSelector": {}}]},
+        {"ingressFrom": [{"namespaceSelector": {}, "podSelector": {"matchLabels": {"app": "proxy"}}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "0.0.0.0/0"}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "::/0"}}]},
+        {"ingressFrom": [{"ipBlock": {"cidr": "0.0.0.0/0", "except": ["10.0.0.0/8"]}}]},
+        {"ingressFrom": [PROXY, {"podSelector": {}}]},
+    ],
+)
+def test_trust_requires_a_restricting_networkpolicy(render_error, network_policy):
+    assert "networkPolicy.ingressFrom" in render_error({**BASE, **TRUST, "networkPolicy": network_policy})
+
+
+def test_trust_renders_with_a_named_proxy(render):
+    docs = render({**TRUST, "networkPolicy": {"ingressFrom": [PROXY]}})
+    assert kind(docs, "ConfigMap")["data"]["KUBEDELOS_TRUST_PROXY_HEADERS"] == "true"
+    assert kind(docs, "NetworkPolicy")["spec"]["ingress"][0]["from"] == [PROXY]
+
+
+def test_trust_renders_with_a_restricted_ip_block_or_labelled_pods(render):
+    sources = [
+        {"ipBlock": {"cidr": "10.1.2.0/24"}},
+        {"podSelector": {"matchExpressions": [{"key": "app", "operator": "In", "values": ["proxy"]}]}},
+    ]
+    render({**TRUST, "networkPolicy": {"ingressFrom": sources}})
+
+
+def test_ingress_and_allowed_hosts(render):
+    tls = [{"hosts": ["kubedelos.example.com"], "secretName": "kubedelos-tls"}]
+    annotations = {"nginx.ingress.kubernetes.io/proxy-body-size": "1m"}
+    docs = render(
+        {
+            "ingress": {
+                "enabled": True,
+                "className": "nginx",
+                "annotations": annotations,
+                "hosts": [{"host": "kubedelos.example.com"}],
+                "tls": tls,
+            }
+        }
+    )
+    ingress = kind(docs, "Ingress")
+    service = kind(docs, "Service")["metadata"]["name"]
+    assert ingress["metadata"]["annotations"] == annotations
+    assert ingress["spec"]["ingressClassName"] == "nginx"
+    assert ingress["spec"]["tls"] == tls
+    rule = ingress["spec"]["rules"][0]
+    assert rule["host"] == "kubedelos.example.com"
+    assert rule["http"]["paths"] == [
+        {"path": "/", "pathType": "Prefix", "backend": {"service": {"name": service, "port": {"number": 80}}}}
+    ]
+    assert "kubedelos.example.com" in allowed_hosts(docs)
+
+
+def test_ingress_and_httproute_are_off_by_default(render):
+    kinds = {doc["kind"] for doc in render()}
+    assert not kinds & {"Ingress", "HTTPRoute"}
+
+
+def test_httproute_and_allowed_hosts(render):
+    parent_refs = [{"name": "my-gateway", "namespace": "gateways", "sectionName": "https"}]
+    docs = render(
+        {
+            "httpRoute": {
+                "enabled": True,
+                "parentRefs": parent_refs,
+                "hostnames": ["kubedelos.example.com", "scans.example.com"],
+                "annotations": {"example.com/team": "platform"},
+            }
+        }
+    )
+    route = kind(docs, "HTTPRoute")
+    service = kind(docs, "Service")["metadata"]["name"]
+    assert route["apiVersion"] == "gateway.networking.k8s.io/v1"
+    assert route["metadata"]["annotations"] == {"example.com/team": "platform"}
+    assert route["spec"]["parentRefs"] == parent_refs
+    assert route["spec"]["hostnames"] == ["kubedelos.example.com", "scans.example.com"]
+    assert route["spec"]["rules"][0]["backendRefs"] == [{"name": service, "port": 80}]
+    assert {"kubedelos.example.com", "scans.example.com"} <= set(allowed_hosts(docs))
+
+
+def test_extra_allowed_hosts(render):
+    docs = render(
+        {
+            "ingress": {"enabled": True, "hosts": [{"host": "a.example.com"}]},
+            "httpRoute": {
+                "enabled": True,
+                "parentRefs": [{"name": "gw"}],
+                "hostnames": ["b.example.com", "a.example.com"],
+            },
+            "extraAllowedHosts": ["c.example.com", "b.example.com"],
+        }
+    )
+    hosts = allowed_hosts(docs)
+    assert hosts[4:] == ["a.example.com", "b.example.com", "c.example.com"]
+    assert len(hosts) == len(set(hosts))
+
+
+def test_disabled_exposure_adds_no_allowed_hosts(render):
+    docs = render(
+        {
+            "ingress": {"hosts": [{"host": "a.example.com"}]},
+            "httpRoute": {"hostnames": ["b.example.com"]},
+        }
+    )
+    assert len(allowed_hosts(docs)) == 4
+
+
+@pytest.fixture
+def notes(tmp_path):
+    def _notes(values: dict | None = None) -> str:
+        values_file = tmp_path / "values.yaml"
+        values_file.write_text(yaml.safe_dump({**BASE, **(values or {})}))
+        result = subprocess.run(
+            ["helm", "install", "t", str(CHART), "-n", "kd", "--dry-run=client", "-o", "json", "-f", str(values_file)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return " ".join(json.loads(result.stdout)["info"]["notes"].split())
+
+    return _notes
+
+
+INVENTORY = "can read the whole vulnerability inventory"
+START_SCANS = "start scans and accept risks"
+HIDES = "hides its findings"
+INGRESS = {"ingress": {"enabled": True, "hosts": [{"host": "kubedelos.example.com"}]}}
+ROUTE = {"httpRoute": {"enabled": True, "parentRefs": [{"name": "gw"}], "hostnames": ["kubedelos.example.com"]}}
+
+
+@pytest.mark.parametrize("exposure", [INGRESS, ROUTE])
+def test_notes_exposed_with_trust_off(notes, exposure):
+    text = notes(exposure)
+    assert INVENTORY in text
+    assert START_SCANS in text
+    assert "unless your proxy" in text
+    text = notes({**exposure, "readOnly": True})
+    assert INVENTORY in text
+    assert START_SCANS not in text
+
+
+def test_notes_writes_open_with_trust_off(notes):
+    text = notes()
+    assert HIDES in text
+    assert INVENTORY not in text
+    assert "kubectl port-forward" not in text
+
+
+def test_notes_trust_on_names_both_bypasses(notes):
+    text = notes({**TRUST, **INGRESS, "networkPolicy": {"ingressFrom": [PROXY]}})
+    assert "kubectl port-forward" in text
+    assert "does not enforce NetworkPolicy" in text
+    assert INVENTORY not in text
+    assert HIDES not in text
+
+
+def test_notes_read_only_drops_the_write_warnings(notes):
+    text = notes({"readOnly": True})
+    assert HIDES not in text
+    assert START_SCANS not in text

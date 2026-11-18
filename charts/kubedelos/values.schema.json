@@ -187,10 +187,16 @@
           "type": "boolean"
         },
         "ingressFrom": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         },
         "egress": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       }
     },
@@ -208,10 +214,26 @@
           "type": "object"
         },
         "hosts": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "host"
+            ],
+            "properties": {
+              "host": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
         },
         "tls": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         }
       }
     },
@@ -223,12 +245,16 @@
           "type": "boolean"
         },
         "parentRefs": {
-          "type": "array"
+          "type": "array",
+          "items": {
+            "type": "object"
+          }
         },
         "hostnames": {
           "type": "array",
           "items": {
-            "type": "string"
+            "type": "string",
+            "minLength": 1
           }
         },
         "annotations": {

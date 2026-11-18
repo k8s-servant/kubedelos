@@ -1,0 +1,25 @@
+{{- $name := include "kubedelos.fullname" . -}}
+{{- $exposed := or .Values.ingress.enabled .Values.httpRoute.enabled -}}
+{{- $trust := .Values.auth.trustProxyHeaders -}}
+kubedelos serve is installed as {{ $name }} in the {{ .Release.Namespace }} namespace, for cluster {{ .Values.clusterName | quote }}.
+Its UI is the Service {{ $name }}.{{ .Release.Namespace }}.svc, port 80.
+{{- if and .Values.networkPolicy.enabled (empty .Values.networkPolicy.ingressFrom) }}
+
+The NetworkPolicy admits no traffic yet. Name your proxy, gateway or Ingress controller in networkPolicy.ingressFrom.
+{{- end }}
+{{- if and $exposed (not $trust) }}
+
+WARNING: the UI is exposed and has no sign-in. Anyone who can reach the host can read the whole vulnerability inventory.
+{{- if not .Values.readOnly }} They can also start scans and accept risks, unless your proxy guards it.{{ end }}
+{{- end }}
+{{- if and (not .Values.readOnly) (not $trust) }}
+
+WARNING: writes are open and every user is anonymous. Accepting a risk hides its findings, and anyone
+can do it under any name. Set readOnly: true, or put a sign-in proxy in front and set auth.trustProxyHeaders.
+{{- end }}
+{{- if $trust }}
+
+kubedelos trusts the {{ .Values.auth.identityHeader }} header, and the NetworkPolicy limits who can send it. Two paths skip
+your proxy: kubectl port-forward to the pod or Service, and a CNI that does not enforce NetworkPolicy. Limit who may
+port-forward in this namespace, and check that your CNI enforces NetworkPolicy.
+{{- end }}

@@ -19,11 +19,23 @@ app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 {{- end -}}
 
-{{/* The Host header values the UI answers to, as a comma list: the Service's names, then extraAllowedHosts. */}}
+{{/*
+The Host header values the UI answers to, as a comma list without repeats: the Service's names, then the Ingress hosts
+and the HTTPRoute hostnames (when they are enabled), then extraAllowedHosts.
+*/}}
 {{- define "kubedelos.allowedHosts" -}}
 {{- $name := include "kubedelos.fullname" . -}}
-{{- $hosts := list $name (printf "%s.%s" $name .Release.Namespace) (printf "%s.%s.svc" $name .Release.Namespace) (printf "%s.%s.svc.%s" $name .Release.Namespace .Values.clusterDomain) -}}
-{{- concat $hosts .Values.extraAllowedHosts | join "," -}}
+{{- $ns := .Release.Namespace -}}
+{{- $hosts := list $name (printf "%s.%s" $name $ns) (printf "%s.%s.svc" $name $ns) (printf "%s.%s.svc.%s" $name $ns .Values.clusterDomain) -}}
+{{- if .Values.ingress.enabled -}}
+{{- range .Values.ingress.hosts -}}
+{{- $hosts = append $hosts .host -}}
+{{- end -}}
+{{- end -}}
+{{- if .Values.httpRoute.enabled -}}
+{{- $hosts = concat $hosts .Values.httpRoute.hostnames -}}
+{{- end -}}
+{{- concat $hosts .Values.extraAllowedHosts | uniq | join "," -}}
 {{- end -}}
 
 {{- define "kubedelos.image" -}}
