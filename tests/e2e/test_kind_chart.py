@@ -1,5 +1,5 @@
-"""End-to-end install of the Helm chart on a throwaway kind cluster, waiting for a scheduled sweep. Needs kind,
-helm, docker, kubectl and network access."""
+"""End-to-end install of the Helm chart on a throwaway kind cluster, waiting for a scheduled sweep that also
+scans a private registry:2 through mounted and pod pull secrets. Needs kind, helm, docker, kubectl and network access."""
 
 import os
 import re
@@ -55,3 +55,14 @@ def test_kind_chart() -> None:
     proc = _run_script(os.environ.copy(), timeout=2400)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     assert re.search(r"^sweep run \d+: (ok|partial), nginx:1\.19 scanned$", proc.stdout, re.MULTILINE), proc.stdout
+
+    # The private registry: a mounted config and a listed namespace's pull secret get an image scanned, while an
+    # unlisted namespace and an Opaque Secret are refused (auth), and the per-scan config files are gone afterwards.
+    for line in (
+        "registry e2e-mounted: scanned",
+        "registry e2e-pull: scanned",
+        "registry e2e-unlisted: error auth",
+        "registry e2e-opaque: error auth",
+        "secrets dir empty",
+    ):
+        assert re.search(rf"^{re.escape(line)}$", proc.stdout, re.MULTILINE), f"missing {line!r}:\n{proc.stdout}"

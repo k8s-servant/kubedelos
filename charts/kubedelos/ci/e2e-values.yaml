@@ -1,8 +1,15 @@
-# Values for scripts/e2e-chart.sh: a sweep every minute over one namespace on a throwaway kind cluster.
+# Values for scripts/e2e-chart.sh: a sweep every minute over a few namespaces on a throwaway kind cluster.
 # The NetworkPolicy stays on (its default); the script reads the database through kubectl exec.
+# The e2e-* namespaces hold pods naming an image in the private registry (see tests/e2e/registry): e2e-mounted is
+# covered by the mounted e2e-regcred (created by the script), e2e-pull and e2e-opaque are opted in for pod pull
+# secrets, and e2e-unlisted is deliberately not.
 clusterName: kind-e2e
 scope:
-  namespaces: [web]
+  namespaces: [web, e2e-mounted, e2e-pull, e2e-unlisted, e2e-opaque]
 sweep:
   schedule: "* * * * *"
 secureCookies: false
+registries:
+  dockerConfigSecrets: [e2e-regcred]
+  podPullSecrets: true
+  podPullSecretNamespaces: [e2e-pull, e2e-opaque]
