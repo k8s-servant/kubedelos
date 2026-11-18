@@ -59,7 +59,9 @@ For each image that runs in a listed namespace, kubedelos reads the `imagePullSe
 includes the ones the ServiceAccount admission controller copied from the pod's ServiceAccount, so kubedelos needs no
 access to ServiceAccounts). It then reads those Secrets by name:
 
-- A Secret whose `type` is not `kubernetes.io/dockerconfigjson` is dropped at once, unread and unlogged.
+- kubedelos gets each Secret a pod names. The type is only known after the get, so the whole object, `data` included,
+  reaches the process. A Secret whose `type` is not `kubernetes.io/dockerconfigjson` is then discarded without its data
+  being decoded, used or logged, and its name is not logged either.
 - From the rest, kubedelos keeps only the `auths` entries for the image's registry host. Entries for other hosts are
   never used, so the credentials are sent only to the registry they are for.
 - A Secret that does not exist, or that kubedelos may not get, is skipped. The scan goes on with what remains, and the
@@ -79,7 +81,8 @@ For one image, in this order:
 1. The mounted Docker configs, in the order listed in `registries.dockerConfigSecrets`. The first one with an entry
    for the image's host wins.
 2. Pod pull secrets override that for the image's host. When several pull secrets have an entry for the host, the first
-   in (namespace, pod) order wins.
+   in inventory order wins: namespaces in the order the API lists them, then the pods in each, then the scaled-to-zero
+   templates and CronJobs. It is not a sorted order.
 3. kubedelos writes the entries for that host, and only that host, to a temporary Docker config for this one scan, and
    points Trivy at it.
 4. Trivy then picks between the cloud identity and that Docker config. For a host the identity covers, **the cloud
@@ -103,8 +106,8 @@ With no `KUBEDELOS_SECRETS_DIR` (a laptop), no file is written and Trivy uses yo
 The chart mounts an in-memory `emptyDir` (`medium: Memory`, 16Mi) at `/run/kubedelos`
 (`KUBEDELOS_SECRETS_DIR`). For each Trivy process kubedelos creates a directory there (mode 0700) holding a
 `config.json` (mode 0600) with the entries for that image's host. It is deleted when the process ends, also on error or
-cancel. A kill that skips the cleanup leaves it only until `serve` starts again, which empties the directory, and the
-volume goes with the pod. So credentials are never written to node disk, SQLite or logs. This is the one place
+cancel. A kill that skips the cleanup leaves the file only until `serve` starts again, which removes leftover per-scan
+configs (`kubedelos-docker-*`) from the directory, and the volume goes with the pod. So credentials are never written to node disk, SQLite or logs. This is the one place
 kubedelos puts a credential in a file, and the memory volume is why that is acceptable. `KUBEDELOS_SECRETS_DIR` must
 be a different directory from the data and cache directories.
 
@@ -112,9 +115,9 @@ be a different directory from the data and cache directories.
 
 Read this before you turn pod pull secrets on.
 
-- kubedelos gets the Role's `get` on **every** Secret in each listed namespace, not only pull secrets. It reads one
-  only when a pod there names it under `imagePullSecrets` and its type is `kubernetes.io/dockerconfigjson`; the
-  type check happens before any content is looked at. But the Role itself is broader than that, and `NOTES.txt` says so.
+- The Role lets kubedelos get **every** Secret in each listed namespace, not only pull secrets. It gets one only when a
+  pod there names it under `imagePullSecrets`. If its type is not `kubernetes.io/dockerconfigjson`, the data is
+  discarded undecoded, unused and unlogged, but it has been fetched into the process. `NOTES.txt` says the same.
 - Anyone who can create pods in a listed namespace can name any `dockerconfigjson` Secret of that namespace in a pod,
   and kubedelos will then read it and use its credentials, for the registry host they are for. List only namespaces
   whose Secrets you accept sharing with this deployment.
@@ -132,5 +135,5 @@ Read this before you turn pod pull secrets on.
 | The pod is stuck in `ContainerCreating` after listing a Secret | The Secret does not exist in the release namespace, or has no `.dockerconfigjson` key (wrong type). |
 | `unauthorized` for an image in a listed namespace | The pod names no pull secret (check `kubectl get pod -o yaml`), the Secret has no entry for the image's registry host, or the credentials expired. Settings, Registries shows the namespaces and Secret names. |
 | `unauthorized` for an image in another namespace | That namespace is not in `registries.podPullSecretNamespaces`. |
-| `forbidden` for a Secret | Seen only at debug level: the Role is missing, usually because the namespace was added after install and the chart was not upgraded. |
+| `pull secret team-a/my-pull skipped: HTTP 403` in the debug log | The Role is missing, usually because the namespace was added after install and the chart was not upgraded. |
 | Docker Hub rate limit (`toomanyrequests`) | Anonymous pulls are limited. Add a Docker Hub account as a mounted Docker config. |

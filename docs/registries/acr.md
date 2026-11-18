@@ -125,7 +125,7 @@ Trivy also needs `AZURE_TENANT_ID` (the webhook sets it) for the exchange of the
 | `unauthorized` or `authentication required` for `myregistry.azurecr.io`, and the pod has no `AZURE_*` variables (`kubectl exec` and `env`) | `cloud.provider` is not `azure`, or the pod was not restarted after the upgrade. |
 | Same error, the variables are there | No `AcrPull` assignment for the managed identity on this registry (or, with ABAC, the wrong role), or it has not propagated yet. Check `az role assignment list --assignee "$PRINCIPAL_ID" --scope "$ACR_ID"`. |
 | Auth errors, the variables are there, and the role assignment is in place | The federated credential's issuer or subject does not match: wrong namespace or ServiceAccount name, or the issuer URL of another cluster. Entra then answers "no matching federated identity record", which only Trivy's debug log shows. |
-| `missing environment variable AZURE_TENANT_ID` | The pod label is missing. Use the chart's preset rather than annotating by hand. |
+| `missing environment variable AZURE_TENANT_ID` (in Trivy's debug log, not the UI) | The pod label is missing. Use the chart's preset rather than annotating by hand. |
 
 Trivy logs the cause of a failed cloud login at debug level only, so the registry's refusal is often all the UI
 shows. To see the cause, run `trivy image` by hand in a pod with the same ServiceAccount and label.
@@ -137,5 +137,6 @@ shows. To see the cause, run `trivy image` by hand in a pod with the same Servic
 - `az aks update --attach-acr` grants `AcrPull` to the cluster's kubelet identity, which is what pulls images for pods.
   kubedelos does not use that identity, so attaching the registry is not enough on its own. Do step 2.
 - One identity per install. Registries the identity cannot read need a pull secret or a second install.
-- No Azure ACR is available to this project's CI, so the Azure path is covered by a unit test with the environment
-  mocked, and by the checks above. The Trivy behaviour on this page comes from reading its v0.76.1 source.
+- No Azure ACR is available to this project's CI. The tests cover the chart rendering (annotation, pod label, required
+  client id) and the host matching on the Settings page. The Azure login itself is Trivy's, and it was not run end to end
+  for this project. What this page says about it comes from reading Trivy's v0.76.1 source.

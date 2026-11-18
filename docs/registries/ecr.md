@@ -140,7 +140,7 @@ What is not covered:
 | `denied` or `unauthorized`, and the pod has no `AWS_ROLE_ARN` variable | `cloud.provider` is not `aws`, the role ARN is empty or wrong, or the pod was not restarted after the upgrade. |
 | Same error, `AWS_ROLE_ARN` is set | The role lacks the ECR actions or the repository (step 2), or its trust policy names another namespace, ServiceAccount or OIDC provider (step 3). |
 | An image in another account fails | The repository policy in that account does not allow the role. |
-| A host like `myregistry.example.com` fails | Not an ECR endpoint, so Trivy does not use the identity. ECR through a pull-through cache or a custom domain needs a [pull secret](pull-secrets.md). |
+| A host like `myregistry.example.com` fails | Not an ECR endpoint, so Trivy does not use the identity. A pull-through cache repository is on the normal ECR host, so the identity covers it. A custom domain in front of ECR needs a [pull secret](pull-secrets.md), which is only good for 12 hours unless you refresh it. |
 
 Trivy logs the cause of a failed cloud login at debug level only. To see it, run `trivy image` by hand in a pod with the
 same ServiceAccount.
