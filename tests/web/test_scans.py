@@ -974,3 +974,12 @@ def test_serve_busy_database_is_503(serve_client, worker, monkeypatch):
     response = signed_post(serve_client, "/scans", FORM)
     assert response.status_code == 503 and "the database is busy" in response.text
     assert worker.woken == 0
+
+
+def test_serve_cancel_with_a_busy_database_is_503(serve_client, monkeypatch):
+    def locked(*args, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(queue, "cancel", locked)
+    response = signed_post(serve_client, "/scans/queue/1/cancel", {})
+    assert response.status_code == 503 and "the database is busy" in response.text

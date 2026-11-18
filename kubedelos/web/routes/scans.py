@@ -365,8 +365,11 @@ def cancel_queued(request: Request, request_id: int = Path(ge=1, le=MAX_ID)) -> 
     """Cancel a request still waiting in the serve queue; one already started, or gone, is left as it is."""
     if not request.app.state.serve:
         return Response(status_code=404)
-    with open_db_rw(request) as conn:
-        queue.cancel(conn, request_id)
+    try:
+        with open_db_rw(request) as conn:
+            queue.cancel(conn, request_id)
+    except sqlite3.OperationalError:  # locked past the busy timeout
+        return _page(request, error=DB_BUSY, status=503)
     return RedirectResponse("/scans", status_code=303)
 
 
