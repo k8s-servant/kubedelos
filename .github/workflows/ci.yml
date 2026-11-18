@@ -83,7 +83,8 @@ jobs:
     # The Helm chart: lint it, run the render tests (they need helm, so CI makes a missing helm a
     # failure), and validate the rendered manifests against the Kubernetes schemas for the default
     # values and for charts/kubedelos/ci/all-on-values.yaml, which switches every optional template on.
-    # The HTTPRoute schema comes from the datreeio CRDs catalog, because kubeconform ships none for it.
+    # The HTTPRoute schema comes from the datreeio CRDs catalog, because kubeconform ships none for it;
+    # the catalog is pinned to its main commit of 2026-11-18 so a catalog change cannot break CI.
     name: chart
     runs-on: ubuntu-latest
     permissions:
@@ -127,7 +128,7 @@ jobs:
           helm lint charts/kubedelos -f charts/kubedelos/ci/all-on-values.yaml
           helm template t charts/kubedelos --namespace kd -f charts/kubedelos/ci/all-on-values.yaml |
             kubeconform -strict -summary -schema-location default \
-              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
+              -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/784ec895547a36e548e6810b41f27baade3a0890/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json'
 
   image:
     # The container image: build it for amd64, smoke-test it (scripts/image-smoke.sh runs it the way
@@ -142,10 +143,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
           platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the amd64 image
         run: docker buildx build --platform linux/amd64 --load -t kubedelos:ci .
       - name: Smoke-test the image
