@@ -300,7 +300,8 @@ def test_serve_allows_ipv6_literal(seed, worker, sweeper):
 def test_serve_refuses_unsigned_writes(serve_client):
     response = serve_client.post("/scans", data={"namespaces": "a"})
     assert response.status_code == 403
-    assert response.text == "CSRF check failed"
+    assert "<h1>Form expired</h1>" in response.text
+    assert "The form was out of date or came from another site. Reload the page and try again." in response.text
     assert serve_client.post("/scans/cancel").status_code == 403
 
 
@@ -379,10 +380,20 @@ def test_read_only_refuses_writes(serve):
     assert "<h1>Read-only</h1>" in response.text
 
 
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+def test_read_only_refuses_every_write_method(serve, method):
+    client = serve(read_only=True)
+    response = client.request(method, "/scans/cancel", headers=serve_headers(), follow_redirects=False)
+    assert response.status_code == 403
+    assert "this kubedelos is read-only" in response.text
+
+
 def test_post_without_cookie_is_refused(serve):
     response = serve().post("/scans/cancel", data={"csrf_token": "x"}, headers=serve_headers(), follow_redirects=False)
     assert response.status_code == 403
-    assert response.text == "CSRF check failed"
+    assert "<h1>Form expired</h1>" in response.text
+    assert "The form was out of date or came from another site. Reload the page and try again." in response.text
+    assert response.headers["content-security-policy"] == CSP.format(nonce=_nonce(response))
 
 
 def test_token_for_another_cookie_is_refused(serve):
@@ -420,7 +431,7 @@ def test_token_for_another_identity_is_refused(serve):
 def test_foreign_origin_is_refused(serve, origin):
     response = signed_post(serve(), "/scans/cancel", {}, origin=origin)
     assert response.status_code == 403
-    assert response.text == "CSRF check failed"
+    assert "<h1>Form expired</h1>" in response.text
 
 
 def test_missing_origin_falls_back_to_the_referer(serve):
@@ -464,3 +475,16 @@ def test_identity_is_cleaned_before_use(serve, caplog):
     assert response.status_code == 303
     assert caplog.records[-1].getMessage() == "POST /scans/cancel 303 a@example.com[31m"
     assert "\x1b" not in caplog.text
+
+
+def test_utf8_identity_header_is_decoded(serve, caplog):
+    client = serve(trust_proxy_headers=True)
+    name = "J\u016brat\u0117@example.com"
+    token = serve_token(client, name)
+    headers = [(b"origin", SERVE_ORIGIN.encode()), (IDENTITY_HEADER.lower().encode(), name.encode())]
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        response = client.post(
+            "/scans/cancel", data={"csrf_token": token}, headers=dict(headers), follow_redirects=False
+        )
+    assert response.status_code == 303
+    assert caplog.records[-1].getMessage() == f"POST /scans/cancel 303 {name}"

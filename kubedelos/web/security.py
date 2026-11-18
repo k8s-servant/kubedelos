@@ -15,6 +15,7 @@ mode every non-GET is refused before any route runs. The signed-in name comes fr
 read only when ``trust_proxy_headers`` is on and cleaned first, and ends the access line.
 """
 
+import contextlib
 import hashlib
 import hmac
 import logging
@@ -196,7 +197,13 @@ class ServeGuard:
         """The cleaned signed-in name from the proxy's header, or ``None`` when the header is not trusted or empty."""
         if not self.trust_proxy_headers:
             return None
-        return clean_identity(request.headers.get(self.identity_header))
+        raw = request.headers.get(self.identity_header)
+        if raw is not None:
+            # Starlette reads header bytes as latin-1; a proxy sends UTF-8, so undo that and keep the raw value
+            # when the bytes were not UTF-8.
+            with contextlib.suppress(UnicodeError):
+                raw = raw.encode("latin-1").decode("utf-8")
+        return clean_identity(raw)
 
     def csrf_token(self, cookie: str, identity: str | None) -> str:
         message = f"{cookie}\n{identity or ''}".encode()
@@ -221,6 +228,11 @@ def _serve_origin_ok(request: Request, allowed_hosts: frozenset[str]) -> bool:
     return host_name(parts.netloc) in allowed_hosts
 
 
+def _csrf_failed(request: Request) -> Response:
+    message = "The form was out of date or came from another site. Reload the page and try again."
+    return render(request, "error.html", {"title": "Form expired", "message": message}, status=403)
+
+
 def _read_only(request: Request) -> Response:
     return render(request, "error.html", {"title": "Read-only", "message": READ_ONLY_NOTICE}, status=403)
 
@@ -240,7 +252,7 @@ async def _check_serve(
             cookie, request.state.identity, await _sent_csrf(request)
         )
         if not csrf_ok:
-            return PlainTextResponse("CSRF check failed", status_code=403)
+            return _csrf_failed(request)
     return await call_next(request)
 
 
