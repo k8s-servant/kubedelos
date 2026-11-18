@@ -11,6 +11,8 @@ from kubedelos.config import Settings
 def outside_scope(configured: Settings, requested: Settings) -> str | None:
     """Return the first way `requested` goes beyond `configured`, or None when it is inside."""
     if configured.namespaces:
+        if not requested.namespaces:  # empty reaches the scanner as "all namespaces"
+            return "namespaces must stay inside the configured scope"
         for namespace in requested.namespaces:
             if namespace not in configured.namespaces:
                 return f"namespace {namespace} is outside the configured scope"

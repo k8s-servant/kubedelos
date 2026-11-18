@@ -10,7 +10,25 @@ def test_same_scope_is_inside():
 def test_fewer_namespaces_is_inside():
     configured = Settings(namespaces=["a", "b"])
     assert outside_scope(configured, Settings(namespaces=["a"])) is None
-    assert outside_scope(configured, Settings(namespaces=[])) is None
+
+
+def test_empty_namespaces_under_a_restricted_scope_is_outside():
+    configured = Settings(namespaces=["a", "b"])
+    assert outside_scope(configured, Settings(namespaces=[])) == "namespaces must stay inside the configured scope"
+
+
+def test_empty_namespaces_when_all_are_configured_is_inside():
+    assert outside_scope(Settings(), Settings(namespaces=[])) is None
+
+
+def test_dropping_a_configured_namespace_selector_is_outside():
+    configured = Settings(namespace_selector="team=payments")
+    assert outside_scope(configured, Settings(selector="app=web")) == "namespace selector must stay team=payments"
+
+
+def test_exclusion_must_stay_alongside_a_namespace_list():
+    configured = Settings(namespaces=["a"], exclude_namespaces=["x"])
+    assert outside_scope(configured, Settings(namespaces=["a"])) == "namespace x is excluded by the configured scope"
 
 
 def test_namespace_outside_the_list():
