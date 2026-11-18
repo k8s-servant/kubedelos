@@ -268,7 +268,7 @@ These are the builder's calls; the spec leaves them open.
       `sweep_enabled=False` schedules nothing.
   - `kubedelos/web/worker.py`: `class QueueWorker`:
     - `__init__(self, settings: Settings, runner: ScanRunner, *, clock, poll_s: float = 2.0)`;
-    - `enqueue_sweep() -> None`, which adds `kind="scan", trigger="schedule", overrides={}` and calls `wake()`;
+    - `enqueue_sweep() -> None`, which adds `kind="scan", trigger="schedule", overrides={"rescan": True}` and calls `wake()`;
     - `wake() -> None`, `start() -> None`, `stop() -> None`;
     - `alive() -> bool`.
 
@@ -310,7 +310,7 @@ These are the builder's calls; the spec leaves them open.
       `misfire_grace_time == 3600`.
   - test_worker. Use a fake scan callable that records its calls and returns a `ScanOutcome`, and `poll_s=0.01`. Wait
     on conditions, never with a bare sleep.
-    - `test_sweep_runs_and_records_its_run`: `enqueue_sweep()` → the fake is called with `trigger="schedule"`, and the
+    - `test_sweep_runs_and_records_its_run`: `enqueue_sweep()` → the fake is called with `trigger="schedule"` and `rescan=True` (sweeps skip the result cache; the layer cache still applies), and the
       request ends `started` with the run id set.
     - `test_requests_run_one_at_a_time_in_order`.
     - `test_finished_sweep_prunes` (monkeypatch `retention.prune` to record its calls) and

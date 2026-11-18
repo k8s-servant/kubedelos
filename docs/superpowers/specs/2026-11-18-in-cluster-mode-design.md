@@ -101,6 +101,10 @@ Limits that follow:
   - **Master switch:** `KUBEDELOS_SWEEP_ENABLED` (default `true`).
   - **Job settings:** `coalesce=True`, `max_instances=1`, `misfire_grace_time=3600`.
   - **What a sweep does:** it does not scan by itself. It adds a `schedule` request to the queue.
+  - **Sweeps skip the result cache** (decided with the user). A sweep rescans every image, as "Rescan every image"
+    does, so its findings match the current Trivy DB rather than a result up to 24 h old. The on-disk layer cache
+    (`kubedelos/trivy/layers.py`) still applies, so an image whose layers were analysed before is only matched against
+    the DB again, which keeps a full sweep fast.
 - **One process owns the data.** At start, `serve` takes an exclusive `flock` on `<data dir>/serve.lock`, held for its
   lifetime. A second `serve` on the same volume exits with a clear error.
   - This replaces #12's DB lease (my call). `store/runlock.py` already uses `flock` to tell a live run from a stale
