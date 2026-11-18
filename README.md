@@ -15,7 +15,7 @@ Status: pre-alpha. Interfaces and output may change.
 and over time:
 
 - **What actually runs.** It lists the images running in the cluster, including init and ephemeral containers,
-  CronJobs and workloads scaled to zero. Access is read-only and Secrets are never read. Each unique image is scanned
+  CronJobs and workloads scaled to zero. Access is read-only and Secrets are not read (in `serve`, except opt-in pod pull secrets, see below). Each unique image is scanned
   once per platform.
 - **What to fix first.** The dashboard puts the Critical and High findings that have a fix on top, grouped by fix or by
   image, with the images worst hit and the images that failed to scan, plus a hint on which registry to log in to.
@@ -293,7 +293,7 @@ Inside a pod with no kubeconfig, kubedelos uses the in-cluster service account. 
 | Python | 3.12, 3.13, 3.14 | Each is tested in CI. |
 | Runs on | Linux and macOS, amd64 and arm64 | Windows is not supported. |
 | Trivy | v0.76.1, pinned and checksum-verified | `KUBEDELOS_TRIVY_PATH` runs your own binary; its results are not cached. |
-| Kubernetes | 1.35, tested on kind | Read-only `list` calls on stable APIs only: `v1` namespaces, pods and nodes, `apps/v1` Deployments and StatefulSets, `batch/v1` CronJobs. Secrets are never read. |
+| Kubernetes | 1.35, tested on kind | Read-only `list` calls on stable APIs only: `v1` namespaces, pods and nodes, `apps/v1` Deployments and StatefulSets, `batch/v1` CronJobs. Secrets are not read, except the opt-in pod pull secrets of `serve` (`get` on `secrets` in the namespaces you list). |
 | Image platforms | Linux images | Tested on `linux/arm64` nodes. Windows nodes' images are scanned for their own platform but are untested. |
 | Registries | Public registries, and private ones through your Docker credentials | Tested with Docker Hub and `registry.k8s.io`. See [Private registries](#private-registries) for ACR, Artifact Registry and ECR logins. |
 
@@ -327,7 +327,20 @@ kubedelos registry test registry.example/team/app:1.2.3
 
 It exits 0 when the image is readable, 1 when the registry refuses access or the image is not found, and 2 for
 other errors. When images fail registry auth in a scan, the dashboard lists them with the command to log in to each
-registry. Registry auth for the in-cluster mode (workload identity, pull secrets) is not in the Helm chart yet.
+registry.
+
+### In a cluster
+
+`kubedelos serve` (the Helm chart) reads private registries with a cloud workload identity, mounted Docker config Secrets
+and, if you opt in, the pull secrets of the pods it scans:
+
+- [Azure Container Registry from AKS](docs/registries/acr.md)
+- [Amazon ECR from EKS](docs/registries/ecr.md)
+- [Google Artifact Registry from GKE](docs/registries/gar.md)
+- [Pull secrets and Docker configs](docs/registries/pull-secrets.md)
+
+Pod pull secrets give kubedelos `get` on every Secret in the namespaces you list, and a scan writes its credentials to a
+memory-backed volume for as long as it runs. The last page says what that permits.
 
 ## License
 

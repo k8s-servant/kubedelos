@@ -22,8 +22,9 @@ One scan runs at a time, across all clusters. The Scans page shows its progress 
 
 kubedelos asks the Kubernetes API, read-only, for the namespaces and pods in scope. It collects the images of running
 pods (including init and ephemeral containers), plus the pod templates of CronJobs and of Deployments and StatefulSets
-scaled to zero, so an image that runs only now and then is still scanned. It never changes the cluster and never reads
-Secrets.
+scaled to zero, so an image that runs only now and then is still scanned. It never changes the cluster and reads no
+Secrets, except the pull secrets a pod names when you opt in to that in `kubedelos serve` (see
+[pull secrets](registries/pull-secrets.md)).
 
 The same image used by many pods is scanned once. Images are grouped by digest (or by name when the node reports no
 digest) and by platform: each image is scanned for the OS and architecture of the node it runs on (`linux/amd64`,

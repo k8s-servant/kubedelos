@@ -32,11 +32,13 @@ scripts/e2e-chart.sh                                            # chart on a thr
 - **Clean rewrite.** This project is an independent implementation. Do not copy or
   paraphrase code from other private or internal projects, and never add internal
   company names, hostnames or registries.
-- **Read-only cluster access.** No code path may change cluster objects or read Secrets.
+- **Read-only cluster access.** No code path may change cluster objects or read Secrets, except the pull
+  secrets a pod names, in namespaces the operator listed for that, and only when `podPullSecrets` is on.
 - **Trivy is pinned** (v0.76.1) with a per-platform SHA-256 in `kubedelos/trivy/pins.py`.
   Never resolve "latest". Scan with `--scanners vuln` only.
 - **Credentials never touch disk or logs.** Registry tokens are not written to SQLite
-  or logged, not even in error messages.
+  or logged, not even in error messages. The one exception is a per-scan Docker config on the
+  memory-backed secrets volume (`KUBEDELOS_SECRETS_DIR`), deleted when that scan ends.
 - **Data paths** come from `platformdirs`, overridable with `KUBEDELOS_CACHE_DIR` and
   `KUBEDELOS_DATA_DIR`.
 - **TDD:** write a failing test first; one test file per module.

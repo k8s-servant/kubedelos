@@ -387,7 +387,13 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
   identity header.
 - How the kind e2e waits for the first sweep (a one-minute schedule in test values is fine).
 - Whether Trivy reads a mounted Docker config before or after its cloud providers. The docs must say which wins for a
-  host covered by both; check it in the Trivy source when writing the docs.
+  host covered by both; check it in the Trivy source when writing the docs. **Answered (Trivy v0.76.1):** the cloud
+  identity is tried first and the Docker config is the fallback. `pkg/remote/remote.go` `authOptions` builds the list of
+  auth options as command-line credentials, then the provider's token (`pkg/fanal/image/registry/token.go`
+  `GetToken`), then the default keychain, which reads `DOCKER_CONFIG`; `tryGet` and `tryImage` use the first that
+  works. When a provider fails to get a token it logs at debug level and contributes nothing, so the Docker config is
+  tried next. A pull secret for a host the identity covers therefore does not override the identity; it is used when the
+  identity gets no token or the registry rejects it. The docs pages say so.
 
 ## Decisions recorded here
 
@@ -404,3 +410,11 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
 - The settings stay read-only in the UI; Helm values are the only way to change them in-cluster.
 - No `registries.cloudHosts` allowlist and no cloud-environment scrubbing: Trivy's providers match only vendor-run
   registry domains, so the identity cannot reach an attacker's server (see Approaches, Registry login).
+- Retries keep pull secrets: the Secret names an image's pods named are stored with each `image_result` (migration 11,
+  column `pull_secrets`, JSON `[[namespace, name], ...]`), so a retry of an auth failure reads the same Secrets. Contents
+  are read again at retry time and never stored.
+- Precedence of credentials: mounted Docker configs in the listed order, the first winning per host; then pod pull
+  secrets override them for the image's host, the first in (namespace, pod) order winning among several. Cloud identity
+  against Docker config is Trivy's call (see Left to the builder).
+- An image shared by pods in several namespaces is scanned once, with any listed namespace's pull secret; its findings
+  show for every workload running it. The UI has no per-namespace access control, so this exposes nothing new.
