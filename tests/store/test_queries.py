@@ -30,6 +30,7 @@ from kubedelos.store.queries import (
     run_failures,
     run_history,
     run_namespaces,
+    run_registry_hosts,
     scan_times,
     worst_images,
 )
@@ -944,3 +945,11 @@ def test_findings_export_has_every_row_of_the_view_in_its_order(db):
     assert [r["vuln_id"] for r in everything.fetchall()] == ["CVE-3", "CVE-2", "CVE-1", "CVE-1"]
     narrowed = queries.findings_export(conn, run_id, FindingFilter(namespace="api", accepted="all")).fetchall()
     assert [(r["ref"], r["vuln_id"]) for r in narrowed] == [("b", "CVE-1")]
+
+
+def test_run_registry_hosts_lists_each_host_once(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for ref in ("reg.example.com/a:1", "reg.example.com/b:1", "other.example.com/c:1"):
+        _add(repo, run_id, ref, "linux/amd64")
+    assert run_registry_hosts(conn, run_id) == {"reg.example.com", "other.example.com"}

@@ -6,7 +6,7 @@ from html import unescape
 import pytest
 
 from kubedelos.config import Settings
-from kubedelos.models import ImageRef, ImageResult
+from kubedelos.models import ImageRef, ImageResult, InventoryItem
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.web.routes import settings as settings_routes
 from tests.web.conftest import TOKEN, serve_cookie, serve_headers, signed_post
@@ -103,8 +103,14 @@ class FakeCache:
 
 
 @pytest.fixture
-def scanned(monkeypatch):
-    """Stub out Trivy: the calls ``scan_image`` got, and the result it answers with (``scanned.result``)."""
+def strict_hosts():
+    """Marks a test that runs with the real host check."""
+
+
+@pytest.fixture
+def scanned(monkeypatch, request):
+    """Stub out Trivy: the calls ``scan_image`` got, and the result it answers with (``scanned.result``). Any host
+    may be tested, unless the test asks for ``strict_hosts``."""
     calls = []
     box = types.SimpleNamespace(calls=calls, result=None, seen_config=None, timeout=None)
 
@@ -115,6 +121,8 @@ def scanned(monkeypatch):
             box.seen_config = json.loads((docker_config / "config.json").read_text())
         return box.result or ImageResult(image=ref, platform=platform, status="ok")
 
+    if "strict_hosts" not in request.fixturenames:
+        monkeypatch.setattr(settings_routes, "_host_allowed", lambda *args: True)
     monkeypatch.setattr(settings_routes, "ensure_trivy", lambda settings: "trivy")
     monkeypatch.setattr(settings_routes, "TrivyCache", FakeCache)
     monkeypatch.setattr(settings_routes, "scan_image", fake_scan)
@@ -296,3 +304,61 @@ def test_registry_test_scans_the_default_platform(serve_client, scanned, monkeyp
     monkeypatch.setattr(settings_routes, "scan_image", fake)
     signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"})
     assert seen == ["linux/arm64"]
+
+
+# Which registries the Test box may contact: a configured one, a cloud one, or one the cluster runs.
+
+REFUSED = "is not a registry this instance uses: test an image from a configured registry or one the cluster runs"
+
+
+@pytest.mark.parametrize("image", ["10.0.0.5:5000/x:1", "internal.example.com/x:1", "evil.azurecr.io.example.com/x:1"])
+def test_registry_test_refuses_an_unlisted_host(strict_hosts, make_serve_client, scanned, image):
+    client = make_serve_client(cloud_provider="azure", cloud_identity="id-1")
+    response = signed_post(client, "/settings/registry-test", {"image": image})
+    host = image.split("/")[0]
+    assert response.status_code == 200 and f"error: {host} {REFUSED}" in unescape(response.text)
+    assert scanned.calls == []
+
+
+def test_registry_test_allows_a_host_in_a_mounted_config(strict_hosts, make_serve_client, scanned, tmp_path):
+    path = tmp_path / "dc" / "regcred" / ".dockerconfigjson"
+    path.parent.mkdir(parents=True)
+    path.write_text(json.dumps({"auths": {"Internal.Example.com:5000": {"auth": "eDp5"}}}))
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    client = make_serve_client(secrets_dir=secrets, docker_configs=[path])
+    response = signed_post(client, "/settings/registry-test", {"image": "internal.example.com:5000/x:1"})
+    assert "is readable" in response.text and scanned.calls == ["internal.example.com:5000/x:1"]
+
+
+@pytest.mark.parametrize(
+    ("provider", "host"),
+    [
+        ("azure", "myacr.azurecr.io"),
+        ("azure", "myacr.azurecr.cn"),
+        ("gcp", "gcr.io"),
+        ("gcp", "eu.gcr.io"),
+        ("gcp", "europe-docker.pkg.dev"),
+        ("aws", "123456789012.dkr.ecr.eu-west-1.amazonaws.com"),
+        ("aws", "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn"),
+    ],
+)
+def test_registry_test_allows_the_cloud_providers_hosts(strict_hosts, make_serve_client, scanned, provider, host):
+    client = make_serve_client(cloud_provider=provider, cloud_identity="id-1")
+    assert "is readable" in signed_post(client, "/settings/registry-test", {"image": f"{host}/x:1"}).text
+
+
+def test_registry_test_cloud_hosts_need_the_matching_provider(strict_hosts, make_serve_client, scanned):
+    client = make_serve_client(cloud_provider="gcp", cloud_identity="id-1")
+    assert REFUSED in unescape(signed_post(client, "/settings/registry-test", {"image": "myacr.azurecr.io/x:1"}).text)
+    assert scanned.calls == []
+
+
+def test_registry_test_allows_a_host_the_cluster_runs(strict_hosts, make_serve_client, seed, scanned):
+    run_id = seed.repo.start_run("my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
+    ref = ImageRef(ref="cluster.example.com/team/app:1", repo="cluster.example.com/team/app", tag="1", digest=None)
+    item = InventoryItem(image=ref, platform="linux/amd64")
+    seed.repo.add_result(run_id, item, ImageResult(image=ref, platform="linux/amd64", status="ok"))
+    seed.repo.finish_run(run_id, "ok")
+    client = make_serve_client()
+    assert "is readable" in signed_post(client, "/settings/registry-test", {"image": "cluster.example.com/y:2"}).text

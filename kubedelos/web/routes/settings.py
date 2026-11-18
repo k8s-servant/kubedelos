@@ -13,6 +13,7 @@ scans one image with the same access a scan would get, one test at a time. No to
 
 import logging
 import os
+import re
 import threading
 from pathlib import Path
 from urllib.parse import parse_qs
@@ -25,8 +26,9 @@ from kubedelos.config import Settings, setting_sources
 from kubedelos.hints import login_hint
 from kubedelos.kube.inventory import DEFAULT_PLATFORM, parse_user_ref
 from kubedelos.models import InventoryItem, registry_host
+from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
-from kubedelos.store.queries import newest_run
+from kubedelos.store.queries import newest_run, run_registry_hosts
 from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
@@ -49,10 +51,20 @@ EMPTY_LISTS = {
 }
 
 
-CLOUD_HOSTS = {  # the registry hosts Trivy uses the cloud identity for (checked in Trivy v0.76.1)
-    "azure": ["*.azurecr.io", "*.azurecr.cn"],
-    "gcp": ["gcr.io", "*.gcr.io", "*-docker.pkg.dev"],
-    "aws": ["<account>.dkr.ecr.<region>.amazonaws.com", "<account>.dkr.ecr.<region>.amazonaws.com.cn"],
+# The registry hosts Trivy uses the cloud identity for (checked in Trivy v0.76.1): (shown text, anchored pattern). One
+# table feeds the card and the Test box's host check.
+_LABEL = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+CLOUD_HOSTS = {
+    "azure": [("*.azurecr.io", rf"{_LABEL}\.azurecr\.io"), ("*.azurecr.cn", rf"{_LABEL}\.azurecr\.cn")],
+    "gcp": [
+        ("gcr.io", r"gcr\.io"),
+        ("*.gcr.io", rf"{_LABEL}\.gcr\.io"),
+        ("*-docker.pkg.dev", rf"{_LABEL}-docker\.pkg\.dev"),
+    ],
+    "aws": [
+        ("<account>.dkr.ecr.<region>.amazonaws.com", rf"\d+\.dkr\.ecr\.{_LABEL}\.amazonaws\.com"),
+        ("<account>.dkr.ecr.<region>.amazonaws.com.cn", rf"\d+\.dkr\.ecr\.{_LABEL}\.amazonaws\.com\.cn"),
+    ],
 }
 DOCS = "https://github.com/k8s-servant/kubedelos/blob/main/docs/registries/"
 TEST_TIMEOUT_S = 120
@@ -74,6 +86,20 @@ def docs_page(host: str) -> str:
     return f"{DOCS}{page}.md"
 
 
+def _host_allowed(request: Request, host: str) -> bool:
+    """Whether the Test box may contact ``host``: one a mounted config names, one of the cloud provider's, or one the
+    cluster's newest run has images from. Anything else could point Trivy at an internal address."""
+    settings: Settings = request.app.state.settings
+    host = host.lower().rstrip(".")
+    if host in dockerconfig.load_mounted(settings.docker_configs):
+        return True
+    if any(re.fullmatch(pattern, host) for _, pattern in CLOUD_HOSTS.get(settings.cloud_provider, [])):
+        return True
+    with open_db(request) as conn:
+        run = newest_run(conn, request.app.state.context, cluster_scope=False)
+        return run is not None and host in {h.lower().rstrip(".") for h in run_registry_hosts(conn, run.id)}
+
+
 def _registries(settings: Settings, *, serve: bool) -> dict:
     """What the Registries card shows; names and namespaces only, never a file's contents."""
     provider = settings.cloud_provider
@@ -83,7 +109,7 @@ def _registries(settings: Settings, *, serve: bool) -> dict:
         identity = f"{provider}: {settings.cloud_identity or 'identity not set'}"
     return {
         "identity": identity,
-        "hosts": CLOUD_HOSTS.get(provider, []),
+        "hosts": [shown for shown, _ in CLOUD_HOSTS.get(provider, [])],
         "secrets": [path.parent.name for path in settings.docker_configs],
         "namespaces": ", ".join(settings.pod_pull_secret_namespaces) or "off",
     }
@@ -170,11 +196,18 @@ def _registry_test(request: Request, body: bytes) -> Response:
     if ref is None:
         shown = "".join(ch if ch.isprintable() else "?" for ch in image)[:200]
         return _result(request, f"error: invalid image reference: {shown}", failed=True)
+    host = registry_host(ref)
+    if not _host_allowed(request, host):
+        return _result(
+            request,
+            f"error: {host} is not a registry this instance uses: test an image from a configured registry or one the"
+            " cluster runs",
+            failed=True,
+        )
     if not _LOCK.acquire(blocking=False):
         return _result(request, "A test is already running", failed=True)
     try:
         settings: Settings = request.app.state.settings
-        host = registry_host(ref)
         try:
             trivy = ensure_trivy(settings)
             with (
