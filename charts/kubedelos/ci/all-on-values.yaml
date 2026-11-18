@@ -1,0 +1,35 @@
+# Every optional template switched on, so CI can render and validate all of them (helm lint, kubeconform).
+# These are placeholders (example.com, my-cluster), not a deployment recipe.
+clusterName: my-cluster
+readOnly: true
+scope:
+  excludeNamespaces: [kube-system]
+auth:
+  trustProxyHeaders: true
+networkPolicy:
+  enabled: true
+  ingressFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: ingress
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: oauth2-proxy
+ingress:
+  enabled: true
+  className: nginx
+  hosts:
+    - host: kubedelos.example.com
+  tls:
+    - secretName: kubedelos-tls
+      hosts:
+        - kubedelos.example.com
+httpRoute:
+  enabled: true
+  parentRefs:
+    - name: my-gateway
+      namespace: gateways
+  hostnames:
+    - kubedelos.example.com
+extraAllowedHosts:
+  - kubedelos.example.org
