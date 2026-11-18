@@ -54,24 +54,34 @@ if ! helm install kd "$ROOT/charts/kubedelos" -n kubedelos --create-namespace \
   exit 1
 fi
 
-# Newest scheduled run as "<id> <status>"; empty until the first sweep has started. The database is opened
-# read-only, and the pod has no curl or sqlite3 CLI, so python does the query.
+# Newest scheduled run as "<id> <status> <nginx rows>"; empty until the first sweep has started. The last field counts
+# the run's successfully scanned nginx rows (stored as the digest-pinned ref, docker.io/library/nginx@sha256:...,
+# of the only image in the web namespace), so a sweep where every image errored cannot pass. The database is
+# opened read-only, and the pod has no curl or sqlite3 CLI, so python does the query.
 QUERY='
 import sqlite3
 db = sqlite3.connect("file:/data/kubedelos.db?mode=ro", uri=True)
 row = db.execute("SELECT id, status FROM scan_run WHERE trigger = ? ORDER BY id DESC LIMIT 1", ("schedule",)).fetchone()
-print(*row if row else "")
+if row:
+    ok = db.execute(
+        "SELECT COUNT(*) FROM image_result WHERE run_id = ? AND status != ? AND ref LIKE ?", (row[0], "error", "%/nginx@%")
+    ).fetchone()[0]
+    print(*row, ok)
 '
 
 deadline=$((SECONDS + POLL_SECONDS))
 while [ "$SECONDS" -lt "$deadline" ]; do
   run="$(kc -n kubedelos exec deploy/kd-kubedelos -- python -c "$QUERY" 2>/dev/null || true)"
-  id="${run%% *}"
-  status="${run#* }"
-  case "$status" in
+  read -r id status scanned <<<"$run"
+  case "${status:-}" in
     ok | partial)
-      echo "sweep run $id: $status"
-      exit 0
+      if [ "${scanned:-0}" -ge 1 ]; then
+        echo "sweep run $id: $status, nginx:1.19 scanned"
+        exit 0
+      fi
+      echo "sweep run $id: $status, but nginx:1.19 was not scanned successfully"
+      dump_state
+      exit 1
       ;;
     failed | cancelled)
       echo "sweep run $id: $status"

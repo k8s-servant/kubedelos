@@ -54,4 +54,4 @@ def test_kind_chart() -> None:
     # The first sweep downloads the Trivy DB (up to 15 minutes), on top of the image build and cluster creation.
     proc = _run_script(os.environ.copy(), timeout=2400)
     assert proc.returncode == 0, f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
-    assert re.search(r"^sweep run \d+: (ok|partial)$", proc.stdout, re.MULTILINE), proc.stdout
+    assert re.search(r"^sweep run \d+: (ok|partial), nginx:1\.19 scanned$", proc.stdout, re.MULTILINE), proc.stdout
