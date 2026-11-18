@@ -163,11 +163,45 @@ jobs:
           test -x "${trivy}"
           "${trivy}" image --scanners vuln --severity CRITICAL --ignore-unfixed --exit-code 1 kubedelos:ci
 
+  e2e-chart:
+    # Installs the chart on a throwaway kind cluster with the image built from this checkout, and waits
+    # for the first scheduled sweep to finish (scripts/e2e-chart.sh). The first sweep downloads the
+    # Trivy DB, hence the long timeout. kubectl and docker come with the runner image.
+    name: e2e-chart
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      HELM_VERSION: 4.3.2
+      KIND_VERSION: 0.33.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install helm (checksum verified)
+        run: |
+          tarball="helm-v${HELM_VERSION}-linux-amd64.tar.gz"
+          curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}"
+          curl -fsSLO --retry 5 --retry-all-errors "https://get.helm.sh/${tarball}.sha256sum"
+          sha256sum -c "${tarball}.sha256sum"
+          tar -xzf "${tarball}" --strip-components=1 -C "${RUNNER_TEMP}" linux-amd64/helm
+          echo "${RUNNER_TEMP}" >> "${GITHUB_PATH}"
+      - name: Install kind (checksum verified)
+        run: |
+          base="https://github.com/kubernetes-sigs/kind/releases/download/v${KIND_VERSION}"
+          curl -fsSLO --retry 5 --retry-all-errors "${base}/kind-linux-amd64"
+          curl -fsSLO --retry 5 --retry-all-errors "${base}/kind-linux-amd64.sha256sum"
+          sha256sum -c kind-linux-amd64.sha256sum
+          install -m 0755 kind-linux-amd64 "${RUNNER_TEMP}/kind"
+      - name: Install the chart on kind and wait for a sweep
+        run: scripts/e2e-chart.sh
+
   result:
     # The one check the branch ruleset requires, so jobs can be added or renamed freely.
     name: CI result
     if: always()
-    needs: [lint, test, package, chart, image]
+    needs: [lint, test, package, chart, image, e2e-chart]
     runs-on: ubuntu-latest
     permissions: {}
     steps:
