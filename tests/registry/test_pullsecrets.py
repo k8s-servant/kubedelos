@@ -2,6 +2,7 @@ import json
 import logging
 
 from kubernetes.client import V1ObjectMeta, V1Secret
+from urllib3.exceptions import ReadTimeoutError
 
 from kubedelos.registry.dockerconfig import normalise_host
 from kubedelos.registry.pullsecrets import PullSecrets
@@ -49,7 +50,7 @@ def test_first_ref_wins():
     assert got["registry.example.com"]["username"] == "first"
 
 
-def test_non_docker_secret_dropped_unread():
+def test_non_docker_secret_dropped_unread(caplog):
     class Booby(V1Secret):
         @property
         def data(self):
@@ -61,7 +62,9 @@ def test_non_docker_secret_dropped_unread():
 
     opaque = Booby(metadata=V1ObjectMeta(name="tok", namespace="web"), type="Opaque")
     api = FakeKubeApi(secrets={("web", "tok"): opaque})
-    assert PullSecrets(api, ["web"]).auths_for([("web", "tok")], "registry.example.com") == {}
+    with caplog.at_level(logging.DEBUG):
+        assert PullSecrets(api, ["web"]).auths_for([("web", "tok")], "registry.example.com") == {}
+    assert caplog.records == []  # dropped silently: not even its name is logged
 
 
 def test_missing_or_forbidden_secret_is_skipped(caplog):
@@ -114,3 +117,27 @@ def test_pull_secrets_from_two_namespaces():
     pulls = PullSecrets(api, ["web", "ops"])
     assert list(pulls.auths_for([("web", "a"), ("ops", "b")], "two.example.com")) == ["two.example.com"]
     assert list(pulls.auths_for([("web", "a"), ("ops", "b")], "one.example.com")) == ["one.example.com"]
+
+
+def test_server_error_and_transport_error_are_skipped_not_cached(caplog):
+    api = FakeKubeApi(
+        secrets={("web", "ok"): _docker("web", "ok")},
+        secret_status={("web", "busy"): 500, ("web", "slow"): 429},
+        secret_errors={("web", "down"): ReadTimeoutError(None, "https://api.example.com", "timed out")},
+    )
+    pulls = PullSecrets(api, ["web"])
+    refs = [("web", "busy"), ("web", "slow"), ("web", "down"), ("web", "ok")]
+    with caplog.at_level(logging.DEBUG, logger="kubedelos.registry.pullsecrets"):
+        got = pulls.auths_for(refs, "registry.example.com")
+    assert list(got) == ["registry.example.com"]  # the readable Secret after the failures still counts
+    for name in ("busy", "slow", "down"):
+        assert f"web/{name}" in caplog.text
+    assert "HTTP 500" in caplog.text and "ReadTimeoutError" in caplog.text
+    api.secrets[("web", "busy")] = _docker("web", "busy", "other.example.com")
+    api.secret_status.clear()
+    assert list(pulls.auths_for([("web", "busy")], "other.example.com")) == ["other.example.com"]  # retried
+
+
+def test_plain_os_error_is_skipped():
+    api = FakeKubeApi(secret_errors={("web", "a"): OSError("connection reset")})
+    assert PullSecrets(api, ["web"]).auths_for([("web", "a")], "registry.example.com") == {}

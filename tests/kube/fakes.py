@@ -135,6 +135,7 @@ class FakeKubeApi:
         bad_request: set[str] | None = None,  # list methods that answer HTTP 400, as for a selector they reject
         secrets: dict[tuple[str, str], V1Secret] | None = None,  # (namespace, name) -> Secret
         secret_status: dict[tuple[str, str], int] | None = None,  # (namespace, name) -> HTTP status to answer
+        secret_errors: dict[tuple[str, str], Exception] | None = None,  # (namespace, name) -> error to raise
     ) -> None:
         self.namespaces = namespaces or []
         self.pods = pods or {}
@@ -149,6 +150,7 @@ class FakeKubeApi:
         self.bad_request = bad_request or set()
         self.secrets = secrets or {}
         self.secret_status = secret_status or {}
+        self.secret_errors = secret_errors or {}
         self.secret_reads: list[tuple[str, str]] = []
         self.selectors: list[tuple[str, str | None]] = []
 
@@ -196,6 +198,8 @@ class FakeKubeApi:
 
     def read_secret(self, ns, name):
         self.secret_reads.append((ns, name))
+        if (ns, name) in self.secret_errors:
+            raise self.secret_errors[(ns, name)]
         if (ns, name) in self.secret_status:
             raise ApiException(status=self.secret_status[(ns, name)], reason="x")
         if (ns, name) not in self.secrets:

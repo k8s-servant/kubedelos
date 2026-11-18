@@ -43,19 +43,23 @@ class PullSecrets:
         if ns not in self._namespaces:
             return {}
         if (ns, name) not in self._cache:
-            self._cache[(ns, name)] = self._fetch(ns, name)
+            auths = self._fetch(ns, name)
+            if auths is None:  # a failed read may be transient: skipped now, tried again on the next ask
+                return {}
+            self._cache[(ns, name)] = auths
         return self._cache[(ns, name)]
 
-    def _fetch(self, ns: str, name: str) -> Auths:
+    def _fetch(self, ns: str, name: str) -> Auths | None:
+        """The Secret's credentials, ``{}`` when it holds none, or ``None`` when it could not be read."""
         try:
             secret = self._api.read_secret(ns, name)
         except ApiException as exc:
-            if exc.status in (403, 404):
-                logger.debug("pull secret %s/%s skipped: HTTP %s", ns, name, exc.status)
-                return {}
-            raise
-        if secret.type != SECRET_TYPE:
-            logger.debug("pull secret %s/%s skipped: not a %s secret", ns, name, SECRET_TYPE)
+            logger.debug("pull secret %s/%s skipped: HTTP %s", ns, name, exc.status)
+            return None
+        except Exception as exc:  # transport errors (timeouts, resets): one unreadable Secret must not fail a scan
+            logger.debug("pull secret %s/%s skipped: %s", ns, name, type(exc).__name__)
+            return None
+        if secret.type != SECRET_TYPE:  # not ours: dropped before its data is touched, and not even named in a log
             return {}
         encoded = (secret.data or {}).get(DATA_KEY)
         if not encoded:
