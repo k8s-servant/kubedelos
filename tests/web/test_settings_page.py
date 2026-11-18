@@ -248,6 +248,8 @@ def test_registry_test_uses_mounted_configs(make_serve_client, scanned, tmp_path
         ("gcr.io", "gar"),
         ("eu-docker.pkg.dev", "gar"),
         ("1.dkr.ecr.eu-west-1.amazonaws.com", "ecr"),
+        ("1.dkr.ecr-fips.us-east-1.amazonaws.com", "ecr"),
+        ("1.dkr-ecr.eu-west-1.on.aws", "ecr"),
     ],
 )
 def test_registry_test_auth_failure_points_at_the_docs(serve_client, scanned, host, page):
@@ -341,11 +343,24 @@ def test_registry_test_allows_a_host_in_a_mounted_config(strict_hosts, make_serv
         ("gcp", "europe-docker.pkg.dev"),
         ("aws", "123456789012.dkr.ecr.eu-west-1.amazonaws.com"),
         ("aws", "123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn"),
+        ("aws", "123456789012.dkr.ecr-fips.us-east-1.amazonaws.com"),
+        ("aws", "123456789012.dkr-ecr.eu-west-1.on.aws"),
+        ("aws", "123456789012.dkr.ecr.us-isob-east-1.sc2s.sgov.gov"),
     ],
 )
 def test_registry_test_allows_the_cloud_providers_hosts(strict_hosts, make_serve_client, scanned, provider, host):
     client = make_serve_client(cloud_provider=provider, cloud_identity="id-1")
     assert "is readable" in signed_post(client, "/settings/registry-test", {"image": f"{host}/x:1"}).text
+
+
+@pytest.mark.parametrize(
+    "host",
+    ["evil.example.com", "123456789012.dkr.ecr.eu-west-1.amazonaws.com.evil.example", "dkr.ecr.eu-west-1.on.aws"],
+)
+def test_registry_test_aws_pattern_is_anchored(strict_hosts, make_serve_client, scanned, host):
+    client = make_serve_client(cloud_provider="aws", cloud_identity="id-1")
+    assert REFUSED in unescape(signed_post(client, "/settings/registry-test", {"image": f"{host}/x:1"}).text)
+    assert scanned.calls == []
 
 
 def test_registry_test_cloud_hosts_need_the_matching_provider(strict_hosts, make_serve_client, scanned):

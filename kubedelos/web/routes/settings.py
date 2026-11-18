@@ -54,6 +54,8 @@ EMPTY_LISTS = {
 # The registry hosts Trivy uses the cloud identity for (checked in Trivy v0.76.1): (shown text, anchored pattern). One
 # table feeds the card and the Test box's host check.
 _LABEL = r"[a-z0-9]+(?:-[a-z0-9]+)*"
+# The start of Trivy's ECR endpoint regex (pkg/fanal/image/registry/ecr/ecr.go): the dkr[.-]ecr and ecr-fips forms.
+_ECR = r"[^.]+\.dkr[.-]ecr(?:-fips)?\.[^.]+\."
 CLOUD_HOSTS = {
     "azure": [("*.azurecr.io", rf"{_LABEL}\.azurecr\.io"), ("*.azurecr.cn", rf"{_LABEL}\.azurecr\.cn")],
     "gcp": [
@@ -62,8 +64,14 @@ CLOUD_HOSTS = {
         ("*-docker.pkg.dev", rf"{_LABEL}-docker\.pkg\.dev"),
     ],
     "aws": [
-        ("<account>.dkr.ecr.<region>.amazonaws.com", rf"\d+\.dkr\.ecr\.{_LABEL}\.amazonaws\.com"),
-        ("<account>.dkr.ecr.<region>.amazonaws.com.cn", rf"\d+\.dkr\.ecr\.{_LABEL}\.amazonaws\.com\.cn"),
+        (f"<account>.dkr.ecr.<region>.{shown}", rf"{_ECR}{pattern}")
+        for shown, pattern in [
+            ("amazonaws.com (also ecr-fips)", r"amazonaws\.com"),
+            ("amazonaws.com.cn", r"amazonaws\.com\.cn"),
+            ("sc2s.sgov.gov", r"sc2s\.sgov\.gov"),
+            ("c2s.ic.gov", r"c2s\.ic\.gov"),
+            ("on.aws (as <account>.dkr-ecr.<region>.on.aws)", r"on\.aws"),
+        ]
     ],
 }
 DOCS = "https://github.com/k8s-servant/kubedelos/blob/main/docs/registries/"
@@ -79,7 +87,7 @@ def docs_page(host: str) -> str:
         page = "acr"
     elif name == "gcr.io" or name.endswith((".gcr.io", "-docker.pkg.dev")):
         page = "gar"
-    elif ".dkr.ecr." in name and name.endswith((".amazonaws.com", ".amazonaws.com.cn")):
+    elif any(re.fullmatch(pattern, name) for _, pattern in CLOUD_HOSTS["aws"]):
         page = "ecr"
     else:
         page = "pull-secrets"
