@@ -83,13 +83,16 @@ def for_host(auths: Auths, host: str) -> Auths:
     return {host: auths[host]} if host in auths else {}
 
 
+TEMP_PREFIX = "kubedelos-docker-"
+
+
 @contextmanager
 def temp_config(secrets_dir: Path, auths: Auths) -> Iterator[Path]:
     """A directory under ``secrets_dir`` holding a ``config.json`` of ``auths``, for ``DOCKER_CONFIG``.
 
     The directory is mode 0700 and the file 0600; both are removed on exit, also when the body raises.
     """
-    directory = Path(tempfile.mkdtemp(prefix="docker-", dir=secrets_dir))  # mkdtemp creates it 0700
+    directory = Path(tempfile.mkdtemp(prefix=TEMP_PREFIX, dir=secrets_dir))  # mkdtemp creates it 0700
     try:
         body = {"auths": {DOCKER_HUB_KEY if host == DOCKER_HUB else host: entry for host, entry in auths.items()}}
         fd = os.open(directory / "config.json", os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
@@ -101,13 +104,18 @@ def temp_config(secrets_dir: Path, auths: Auths) -> Iterator[Path]:
 
 
 def clear(secrets_dir: Path) -> None:
-    """Remove everything inside ``secrets_dir`` (left over by a crashed scan), keeping the directory itself."""
+    """Remove the directories :func:`temp_config` left in ``secrets_dir`` (a crashed scan), keeping everything else.
+
+    Only entries with :data:`TEMP_PREFIX` go, so a ``secrets_dir`` pointed at the wrong place deletes nothing else.
+    """
     try:
         entries = list(secrets_dir.iterdir())
     except FileNotFoundError:
         return
     for entry in entries:
-        if entry.is_dir() and not entry.is_symlink():
-            shutil.rmtree(entry, ignore_errors=True)
-        else:
-            entry.unlink(missing_ok=True)
+        if not entry.name.startswith(TEMP_PREFIX) or entry.is_symlink() or not entry.is_dir():
+            continue
+        try:
+            shutil.rmtree(entry)
+        except OSError as exc:
+            logger.warning("could not remove leftover %s: %s", entry.name, type(exc).__name__)

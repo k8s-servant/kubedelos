@@ -433,7 +433,7 @@ def serve_env(fake_env, monkeypatch):
 
 def test_serve_clears_secrets_dir_at_start(serve_env, fake_env, monkeypatch):
     secrets = fake_env / "secrets"
-    leftover = secrets / "docker-crashed"
+    leftover = secrets / "kubedelos-docker-crashed"
     leftover.mkdir(parents=True)
     (leftover / "config.json").write_text("{}")
     monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(secrets))

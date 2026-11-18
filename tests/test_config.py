@@ -189,7 +189,7 @@ def test_docker_configs_need_secrets_dir(tmp_path):
     assert Settings().docker_configs == [] and Settings().secrets_dir is None
     with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
         Settings(docker_configs=[tmp_path / "a.json"])
-    settings = Settings(docker_configs=[tmp_path / "a.json"], secrets_dir=tmp_path)
+    settings = Settings(docker_configs=[tmp_path / "a.json"], secrets_dir=tmp_path / "s")
     assert settings.docker_configs == [tmp_path / "a.json"]
 
 
@@ -210,3 +210,29 @@ def test_pod_pull_secret_namespaces_default_env_and_secrets_dir(monkeypatch, tmp
     assert Settings().pod_pull_secret_namespaces == ["web", "ops"]
     monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", '["web"]')
     assert Settings().pod_pull_secret_namespaces == ["web"]
+
+
+@pytest.mark.parametrize("where", ["same_data", "inside_data", "contains_data", "inside_cache", "contains_cache"])
+def test_secrets_dir_must_not_overlap_data_or_cache(tmp_path, where):
+    data, cache = tmp_path / "data", tmp_path / "cache"
+    secrets = {
+        "same_data": data,
+        "inside_data": data / "s",
+        "contains_data": tmp_path,
+        "inside_cache": cache / "s",
+        "contains_cache": tmp_path,
+    }[where]
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR must not"):
+        Settings(data_dir=data, cache_dir=cache, secrets_dir=secrets)
+
+
+def test_secrets_dir_must_not_contain_docker_configs(tmp_path):
+    secrets = tmp_path / "secrets"
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR must not contain"):
+        Settings(
+            data_dir=tmp_path / "d", cache_dir=tmp_path / "c", secrets_dir=secrets, docker_configs=[secrets / "c.json"]
+        )
+    ok = Settings(
+        data_dir=tmp_path / "d", cache_dir=tmp_path / "c", secrets_dir=secrets, docker_configs=[tmp_path / "c.json"]
+    )
+    assert ok.secrets_dir == secrets

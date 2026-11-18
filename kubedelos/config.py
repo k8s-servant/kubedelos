@@ -94,6 +94,20 @@ class Settings(BaseSettings):
             raise ValueError("KUBEDELOS_SECRETS_DIR is required for registry credentials")
         return self
 
+    @model_validator(mode="after")
+    def _secrets_dir_is_its_own(self) -> Self:
+        """``kubedelos serve`` empties this directory at start, so it must never be, hold or sit in other data."""
+        if self.secrets_dir is None:
+            return self
+        secrets = self.secrets_dir.resolve()
+        for label, other in (("data_dir", self.data_dir), ("cache_dir", self.cache_dir)):
+            other = other.resolve()
+            if secrets == other or secrets.is_relative_to(other) or other.is_relative_to(secrets):
+                raise ValueError(f"KUBEDELOS_SECRETS_DIR must not equal, contain or sit inside {label}")
+        if any(path.resolve().is_relative_to(secrets) for path in self.docker_configs):
+            raise ValueError("KUBEDELOS_SECRETS_DIR must not contain a docker config file")
+        return self
+
     @field_validator("allowed_hosts", "docker_configs", "pod_pull_secret_namespaces", mode="before")
     @classmethod
     def _split_list(cls, value: Any) -> Any:

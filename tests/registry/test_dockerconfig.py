@@ -104,9 +104,8 @@ def test_temp_config_removed_on_exception(tmp_path):
 
 
 def test_clear_empties_dir_keeps_it(tmp_path):
-    (tmp_path / "sub").mkdir()
-    (tmp_path / "sub" / "config.json").write_text("{}")
-    (tmp_path / "file").write_text("x")
+    (tmp_path / "kubedelos-docker-sub").mkdir()
+    (tmp_path / "kubedelos-docker-sub" / "config.json").write_text("{}")
     dockerconfig.clear(tmp_path)
     assert tmp_path.is_dir() and list(tmp_path.iterdir()) == []
     dockerconfig.clear(tmp_path / "absent")
@@ -118,3 +117,39 @@ def test_parse_error_message_has_no_content():
     assert "s3cr3t" not in str(info.value)
     with pytest.raises(ValueError):
         dockerconfig.parse(b'["not an object"]')
+
+
+def test_clear_removes_only_its_own_directories(tmp_path, caplog):
+    ours = tmp_path / "kubedelos-docker-abc"
+    ours.mkdir()
+    (ours / "config.json").write_text("{}")
+    db = tmp_path / "kubedelos.db"
+    db.write_text("data")
+    other = tmp_path / "keep-me"
+    other.mkdir()
+    dockerconfig.clear(tmp_path)
+    assert not ours.exists()
+    assert db.read_text() == "data" and other.is_dir()
+
+
+def test_clear_warns_and_goes_on_when_an_entry_cannot_be_removed(tmp_path, monkeypatch, caplog):
+    bad, good = tmp_path / "kubedelos-docker-bad", tmp_path / "kubedelos-docker-good"
+    bad.mkdir()
+    good.mkdir()
+    real = dockerconfig.shutil.rmtree
+
+    def rmtree(path, *a, **kw):
+        if path == bad:
+            raise PermissionError("no")
+        real(path, *a, **kw)
+
+    monkeypatch.setattr(dockerconfig.shutil, "rmtree", rmtree)
+    with caplog.at_level("WARNING"):
+        dockerconfig.clear(tmp_path)
+    assert not good.exists() and bad.exists()
+    assert "kubedelos-docker-bad" in caplog.text
+
+
+def test_temp_config_directory_has_the_fixed_prefix(tmp_path):
+    with dockerconfig.temp_config(tmp_path, {}) as directory:
+        assert directory.name.startswith("kubedelos-docker-")
