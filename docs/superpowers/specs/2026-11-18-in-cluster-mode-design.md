@@ -15,14 +15,15 @@ header when told to.
 Who uses it and for what:
 - Most people **view** results: dashboard, findings, compare, reports.
 - **Sweeps run on a schedule.**
-- A signed-in user can also **start a scan now** and **make a report** (CSV and print-friendly HTML, as today).
+- A user can also **start a scan now** and **make a report** (CSV and print-friendly HTML, as today).
 
 ## Goals
 
 1. `kubedelos serve`: the UI, a scheduler and one scan worker in one process, for a pod.
 2. Scheduled sweeps of the whole configured scope, plus on-demand scans from the UI, through one queue so only one scan
    runs at a time.
-3. Identity from a trusted proxy header. Without it, the UI is view-only.
+3. Writes (scan, retry, cancel, accept a risk) open by default, an optional read-only mode, and the user's name from a
+   trusted proxy header when there is one.
 4. A hardened container image with the pinned Trivy inside it, and a Helm chart that deploys all of this.
 5. Private registries through workload identity (ACR, ECR, GAR/GCR) and Kubernetes pull secrets.
 6. Old runs are pruned so the volume does not fill up.
@@ -45,8 +46,8 @@ Who uses it and for what:
 ## Anti-goals (would be a failure even if it works)
 
 - Any code path that creates, changes or deletes cluster objects. kubedelos never starts Jobs or Pods.
-- Write actions available to someone the operator's proxy did not sign in.
-- A pod inside the cluster able to fake the identity header and start scans.
+- Writes on an instance set read-only.
+- A pod inside the cluster able to fake the identity header, and so act under someone else's name.
 - Registry tokens or pull-secret contents in SQLite, logs, error messages, the Settings page, on node disk, or in a
   file that outlives one scan.
 - The pod's cloud identity token sent to a registry the operator did not name.
@@ -182,24 +183,29 @@ scan_request(
 - **Space:** no vacuum. SQLite reuses the freed pages, so with steady retention the file stops growing. It
   never shrinks, which is fine on a PVC, and laptop databases are untouched.
 
-### 4. Identity and view-only mode
+### 4. Writes, identity and read-only mode
 
-Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session model unchanged.
+Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session model unchanged, and is never read-only.
 
-- **Turning it on.** `KUBEDELOS_TRUST_PROXY_HEADERS=true` makes kubedelos read the identity header,
-  `KUBEDELOS_IDENTITY_HEADER` (default `X-Auth-Request-Email`; oauth2-proxy's other modes use `X-Forwarded-Email`,
-  and other proxies use names such as `Remote-User`). Both are chart values, off by default. kubedelos does not know or
-  care which proxy sets the header.
-- **Who may do what:**
+- **Writes are open by default.** Anyone who reaches the UI can scan, retry, cancel and accept or revoke risks, as on
+  the laptop. This fits the usual install, where the pod is reached only through the operator's signing-in proxy. The
+  chart's `NOTES.txt` warns when writes are open and trust is off: anyone who can reach the UI can then start scans
+  and accept risks, which hides findings from the dashboard and reports.
+- **Read-only mode is optional.** `KUBEDELOS_READ_ONLY=true` (chart value `readOnly`, default `false`) turns every
+  write off, for an instance meant only for looking. Its pages hide the forms and show a notice
+  (`View-only: this kubedelos is read-only.`), and any POST gets a 403 page saying so. Scheduled sweeps still run.
+- **The user's name, when there is one.** `KUBEDELOS_TRUST_PROXY_HEADERS=true` makes kubedelos read the identity
+  header, `KUBEDELOS_IDENTITY_HEADER` (default `X-Auth-Request-Email`; oauth2-proxy's other modes use
+  `X-Forwarded-Email`, and other proxies use names such as `Remote-User`). Both are chart values, off by default.
+  kubedelos does not know or care which proxy sets the header. With trust off the header is ignored.
+- **What the name is used for:**
 
-  | Request | Allowed |
-  |---|---|
-  | GET on any page, including reports and CSV downloads | always; who can reach the pages at all is up to the operator's exposure |
-  | POST: scan, cancel, retry, accept a risk, revoke | only with trust on and a non-empty header value |
-  | POST without an identity | 403, with a page saying the instance is view-only |
+  | | Trusted identity | No identity |
+  |---|---|---|
+  | A scan or retry from the UI | `requested_by` is the identity | `requested_by` is empty; the By column shows `anonymous` |
+  | Accepting a risk | the owner field is prefilled with the identity; left empty, the identity is the owner | the owner field is required, as on the laptop |
+  | The access log | the identity is the last field | `-` |
 
-  View-only pages hide the forms and say why. Accepting a risk records the header value as its owner when the form
-  leaves the owner empty.
 - **The trust boundary is the network, not kubedelos.** Trust is safe only when (a) the operator's proxy overwrites or
   strips any copy of the header a client sends, and (b) nothing but that proxy can reach the pod. kubedelos cannot check
   (a); the docs say so plainly, with what to check for common proxies. The chart enforces (b): with trust on it refuses
@@ -211,8 +217,10 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
   an empty result as no identity, before it is used for `requested_by`, an acceptance's owner or the access log.
 - **Hosts.** `KUBEDELOS_ALLOWED_HOSTS` (comma-separated) replaces the loopback Host check. The chart fills it from its
   own Ingress or HTTPRoute hostnames when those are used, plus `extraAllowedHosts` and the Service's DNS names.
-- **CSRF.** The Origin check stays, compared with the allowed hosts. The CSRF token is an HMAC of the identity value,
-  keyed by a secret made at start-up. A restart makes old forms fail once; the page reloads with a fresh one.
+- **CSRF.** Every write needs an Origin (or Referer) naming an allowed host and a CSRF token. There is no session, so
+  the token is bound to a per-browser cookie (`kubedelos_csrf`, random, `HttpOnly`, `SameSite=Strict`, set on the
+  first page) and, when there is one, to the identity: an HMAC of both, keyed by a secret made at start-up. A restart
+  makes old forms fail once; the page reloads with a fresh one.
 - **CSP and the other security headers stay as they are.** The access log adds the identity value (it is the user's
   email or user name, which the proxy already logs) and still never logs query strings.
 
@@ -251,7 +259,8 @@ OCI chart at `oci://ghcr.io/k8s-servant/charts/kubedelos` from `release-please.y
 - **ServiceAccount.**
 - **ClusterRole and binding:** `get`/`list` on namespaces, pods and nodes; `list` on deployments, statefulsets and
   cronjobs. That is what `kube/client.py` calls, and nothing else.
-- **ConfigMap:** the `KUBEDELOS_*` settings (scope, schedule, time zone, retention, cluster name, allowed hosts).
+- **ConfigMap:** the `KUBEDELOS_*` settings (scope, schedule, time zone, retention, cluster name, allowed hosts,
+  read-only mode, header trust).
 - **NetworkPolicy (on by default):**
   - Ingress only from `networkPolicy.ingressFrom`: raw NetworkPolicy `from` entries, so any proxy, gateway or Ingress
     controller can be named. Empty by default, which with the policy on means nothing but the kubelet probes gets in
@@ -279,8 +288,9 @@ a docs page, not chart templates, so the chart has no proxy to keep up to date).
 - `auth.trustProxyHeaders: true` without `networkPolicy.enabled` and a non-empty `networkPolicy.ingressFrom` fails to
   render, because any pod in the cluster could then claim to be anyone. So does an `ingressFrom` entry that admits every
   pod (see section 4).
-- `ingress` or `httpRoute` on with trust off renders, and `NOTES.txt` says the UI is view-only and that anyone who can
-  reach the host can read the whole vulnerability inventory unless the operator's proxy guards it.
+- `ingress` or `httpRoute` on with trust off renders, and `NOTES.txt` says that anyone who can reach the host can read
+  the whole vulnerability inventory, and, unless `readOnly` is set, start scans and accept risks, unless the operator's
+  proxy guards it.
 
 ### 7. Registry login (#14)
 
@@ -326,7 +336,7 @@ identity.
 
 It lists the in-cluster settings and where each came from (the ConfigMap's environment variables). It also shows:
 - the schedule and the next sweep time;
-- retention, the trust and identity header settings;
+- retention, read-only mode, the trust and identity header settings;
 - the detected cloud identity and the mounted Docker config Secret names.
 
 Nothing on it is editable. Changes go through Helm values.
@@ -335,8 +345,9 @@ Nothing on it is editable. Changes go through Helm values.
 
 1. **`serve`, scheduler, queue, retention.** Migration 10, `store/queue.py`, `serve.lock`, `/healthz`, Scans page queue.
    It is testable on a laptop: `serve` runs outside a cluster with `KUBEDELOS_CONTEXT=kind-lab`, so the cluster name
-   and kubeconfig still work. In that mode it is view-only, because trust is off.
-2. **Identity and view-only mode.** Header trust, allowed hosts, CSRF tied to the identity, view-only pages,
+   and kubeconfig still work. PR 1 ships it view-only; PR 2 opens the writes.
+2. **Writes, identity and read-only mode.** UI scans, retries and cancels through the queue, narrow-only scope,
+   header trust, CSRF, the optional read-only mode,
    requester shown.
 3. **Image and chart.** Dockerfile, chart, CI image build, smoke test, kind e2e that installs the chart and waits for a
    sweep. Release signing jobs go into `release-please.yml`. The exposure docs with the oauth2-proxy and Envoy Gateway
@@ -351,7 +362,7 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
 
 ## Left to the builder
 
-- The exact page layout of the queue and view-only notices, following the existing templates and CSS.
+- The exact page layout of the queue and read-only notices, following the existing templates and CSS.
 - The default `python:3.13-alpine` digest, and the oauth2-proxy version used in the docs example, at the time of the PR.
 - For the docs example, confirm in the Envoy Gateway source that `headersToBackend` overwrites a client's copy of the
   identity header.
