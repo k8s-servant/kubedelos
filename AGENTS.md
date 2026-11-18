@@ -19,6 +19,9 @@ don't add CI-only features such as exit-code gates or SARIF.
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'      # setup
 .venv/bin/pytest                                                # tests
+KUBEDELOS_REQUIRE_HELM=1 .venv/bin/pytest tests/chart           # chart render tests (skipped without helm)
+scripts/image-smoke.sh IMAGE                                    # image smoke test (needs docker; IMAGE built locally)
+scripts/e2e-chart.sh                                            # chart on a throwaway kind cluster (kind, helm, docker)
 .venv/bin/ruff check . && .venv/bin/ruff format --check .       # lint
 .venv/bin/pre-commit run --all-files                            # ruff, gitleaks, hygiene hooks
 .venv/bin/kubedelos --help                                      # CLI

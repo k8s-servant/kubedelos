@@ -210,17 +210,27 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
   strips any copy of the header a client sends, and (b) nothing but that proxy can reach the pod. kubedelos cannot check
   (a); the docs say so plainly, with what to check for common proxies. The chart enforces (b): with trust on it refuses
   to render unless the NetworkPolicy is on and its `ingressFrom` names at least one source, and it also refuses any
-  entry that admits every pod (`{}`, an empty `podSelector` without a `namespaceSelector`, or an empty
-  `namespaceSelector`). Two bypasses remain and the docs name them: `kubectl port-forward` (anyone with that RBAC) and a
-  CNI that does not enforce NetworkPolicy. `NOTES.txt` repeats both when trust is on.
+  entry that admits every pod: `{}` or an entry with none of `podSelector`, `namespaceSelector` and `ipBlock`; a
+  selector with no non-empty `matchLabels` and no `In` expression (so `Exists`, `DoesNotExist` and `NotIn`-only
+  selectors count as empty); an empty `namespaceSelector`; a `namespaceSelector` that names only the release namespace
+  with an empty or absent `podSelector`; and an `ipBlock` whose prefix length is 0 (`0.0.0.0/0`, `::/0`, `0.0.0.0/00`).
+  A null `namespaceSelector` counts as absent. The guard catches common mistakes and is not a proof: an `ipBlock` that
+  covers the pod network is the operator's to get right, NetworkPolicies are additive, and the docs name the bypasses:
+  `kubectl port-forward` (anyone with that RBAC), a CNI that does not enforce NetworkPolicy, and `hostNetwork` and node
+  traffic on many CNIs. `NOTES.txt` repeats them when trust is on.
 - **The header value is untrusted text.** kubedelos strips control characters, caps it at 256 characters and treats
   an empty result as no identity, before it is used for `requested_by`, an acceptance's owner or the access log.
 - **Hosts.** `KUBEDELOS_ALLOWED_HOSTS` (comma-separated) replaces the loopback Host check. The chart fills it from its
-  own Ingress or HTTPRoute hostnames when those are used, plus `extraAllowedHosts` and the Service's DNS names.
+  own names, in this order: the Service's DNS names, `localhost` and `127.0.0.1` (so `kubectl port-forward` works), the
+  Ingress hosts, the HTTPRoute hostnames and `extraAllowedHosts`. Wildcard hosts are refused, because kubedelos compares
+  the Host header exactly; an enabled Ingress needs at least one host and an enabled HTTPRoute at least one `parentRef`.
 - **CSRF.** Every write needs an Origin (or Referer) naming an allowed host and a CSRF token. There is no session, so
   the token is bound to a per-browser cookie (`kubedelos_csrf`, random, `HttpOnly`, `SameSite=Strict`, set on the
   first page) and, when there is one, to the identity: an HMAC of both, keyed by a secret made at start-up. A restart
-  makes old forms fail once; the page reloads with a fresh one.
+  makes old forms fail once; the page reloads with a fresh one. `KUBEDELOS_SECURE_COOKIES` (default `false`; chart value
+  `secureCookies`, default `true`) adds `Secure` to that cookie. Browsers accept `Secure` cookies on `http://localhost`,
+  so `kubectl port-forward` still works; a browser that reaches the UI over plain HTTP on another host drops the cookie,
+  so writes fail, and the operator then terminates TLS or sets `secureCookies: false`.
 - **CSP and the other security headers stay as they are.** The access log adds the identity value (it is the user's
   email or user name, which the proxy already logs) and still never logs query strings.
 
@@ -230,12 +240,12 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
 - **Build stage.** Builds the wheel and installs it into a venv. Downloads the pinned Trivy for the target arch and
   checks it against the SHA-256 in `kubedelos/trivy/pins.py`, reusing the code `kubedelos trivy install` runs.
 - **Final stage:**
-  - The venv and `/usr/local/bin/trivy`, with `KUBEDELOS_TRIVY_PATH` set to it.
+  - The venv and the pinned Trivy at `/usr/local/lib/kubedelos/trivy/<version>/trivy`, with `KUBEDELOS_TRIVY_DIR` set to
+    its parent. It replaces setting `KUBEDELOS_TRIVY_PATH`: a set `trivy_path` labels every run `custom`
+    (`scan/service.py`), and the retry check compares against that label.
   - User `65532:65532`, no shell tools needed at run time.
   - `KUBEDELOS_DATA_DIR=/data` and `KUBEDELOS_CACHE_DIR=/data/cache`, so the Trivy DBs and the layer cache sit on the PVC.
   - `TMPDIR=/tmp`, from an `emptyDir`.
-  - `KUBEDELOS_SECRETS_DIR=/run/kubedelos`, from an `emptyDir` with `medium: Memory` (size limit 16Mi), so per-scan
-    Docker configs never reach node disk.
   - The entrypoint is `kubedelos serve`.
 - **Root filesystem.** It works read-only; only `/data` and `/tmp` are written.
 - **Platforms.** `linux/amd64` and `linux/arm64`.
@@ -267,12 +277,6 @@ OCI chart at `oci://ghcr.io/k8s-servant/charts/kubedelos` from `release-please.y
     (and `kubectl port-forward`, which bypasses NetworkPolicy).
   - Egress: open by default, because registries and the Trivy DB mirror can be anywhere. A value can narrow it.
 
-**Cloud presets.** `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
-- `azure`: the ServiceAccount annotation `azure.workload.identity/client-id` and the pod label
-  `azure.workload.identity/use: "true"`. The webhook then injects the variables Trivy needs.
-- `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
-- `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
-
 **Exposure is the operator's choice**. The chart forces no gateway, Ingress controller or auth
 proxy. It offers two generic, optional templates, both off by default:
 - **`ingress`:** a plain `networking.k8s.io/v1` Ingress with `className`, `annotations` (for example an Ingress
@@ -287,7 +291,10 @@ a docs page, not chart templates, so the chart has no proxy to keep up to date).
 **Guards and warnings:**
 - `auth.trustProxyHeaders: true` without `networkPolicy.enabled` and a non-empty `networkPolicy.ingressFrom` fails to
   render, because any pod in the cluster could then claim to be anyone. So does an `ingressFrom` entry that admits every
-  pod (see section 4).
+  pod, including an `ipBlock` with prefix length 0 (see section 4, which lists every refused shape and what the guard
+  does not cover).
+- A wildcard Ingress host or HTTPRoute hostname fails to render, as does an enabled Ingress with no host or an enabled
+  HTTPRoute with no `parentRefs`.
 - `ingress` or `httpRoute` on with trust off renders, and `NOTES.txt` says that anyone who can reach the host can read
   the whole vulnerability inventory, and, unless `readOnly` is set, start scans and accept risks, unless the operator's
   proxy guards it.
@@ -296,8 +303,16 @@ a docs page, not chart templates, so the chart has no proxy to keep up to date).
 
 Most of the work is the environment; kubedelos adds pull secrets.
 
-1. **Cloud identity:** the chart's `cloud.provider` preset and Trivy's own providers (above). kubedelos has no code for
+1. **Cloud identity:** the chart's `cloud.provider` preset (below) and Trivy's own providers. kubedelos has no code for
    it. The Registries part of the Settings page shows the detected identity: provider and client id, never a token.
+**Cloud presets (PR 4).** They ship with the registry login, not with the chart in PR 3: turning on workload identity
+before `registries.cloudHosts` and the environment scrubbing exist would let the pod's identity reach registries the
+operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
+- `azure`: the ServiceAccount annotation `azure.workload.identity/client-id` and the pod label
+  `azure.workload.identity/use: "true"`. The webhook then injects the variables Trivy needs.
+- `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
+- `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
+
 2. **Mounted Docker configs:** `registries.dockerConfigSecrets: [name, ...]` mounts each named
    `kubernetes.io/dockerconfigjson` Secret as a read-only file.
    - The kubelet does the reading, so kubedelos needs no Secret RBAC for this.
@@ -318,7 +333,8 @@ Most of the work is the environment; kubedelos adds pull secrets.
      host they are for. A test covers a pod that names a non-docker Secret.
    - The Secret contents live in memory for the scan only, and the Secret names are logged at debug level, never their
      contents.
-4. **Per scan.** One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
+4. **Per scan.** `KUBEDELOS_SECRETS_DIR=/run/kubedelos` is an `emptyDir` with `medium: Memory` (size limit 16Mi), added
+   to the image and the chart in this PR, so per-scan Docker configs never reach node disk. One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
    (the memory-backed volume; on a laptop, unset, so no file is written and the user's Docker login applies as today).
    `scan_image` already takes `docker_config`. It is deleted when that process ends, even on error or cancel. A SIGKILL
    or OOM kill skips that, so `serve` empties `KUBEDELOS_SECRETS_DIR` at start, and the volume is gone with the pod. Only `auths` entries
@@ -352,7 +368,8 @@ Nothing on it is editable. Changes go through Helm values.
 3. **Image and chart.** Dockerfile, chart, CI image build, smoke test, kind e2e that installs the chart and waits for a
    sweep. Release signing jobs go into `release-please.yml`. The exposure docs with the oauth2-proxy and Envoy Gateway
    example.
-4. **Registry login.** `registries.cloudHosts` and the cloud-identity environment scrubbing, mounted Docker configs,
+4. **Registry login.** The `cloud.provider` presets, the memory-backed secrets volume (`KUBEDELOS_SECRETS_DIR`),
+   `registries.cloudHosts` and the cloud-identity environment scrubbing, mounted Docker configs,
    opt-in pod pull secrets, the memory-backed temporary Docker config, the Settings
    Registries section, the AGENTS.md change, docs pages for ACR + workload identity, ECR, GAR and pull secrets.
    Tested against a `registry:2` with htpasswd in kind, plus a unit test with the Azure path mocked at the environment

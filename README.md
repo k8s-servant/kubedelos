@@ -27,9 +27,9 @@ and over time:
 - **Careful by default.** Trivy is pinned and checksum-verified, never "latest", and registry tokens are never written
   to disk or logs.
 
-kubedelos doesn't gate CI pipelines: Trivy already does that well. Next on the roadmap is an in-cluster mode installed
-with Helm, with scheduled scans, the same UI for each cluster, and reports sent to each namespace's owners by email,
-Slack or Teams.
+kubedelos doesn't gate CI pipelines: Trivy already does that well. The in-cluster mode is installed with Helm and
+has scheduled scans and the same UI for each cluster; reports sent to each namespace's owners by email, Slack or Teams
+are next on the roadmap.
 
 ## Quickstart
 
@@ -200,12 +200,28 @@ the on-disk layer cache keeps them fast.
 | `KUBEDELOS_IDENTITY_HEADER` | `X-Auth-Request-Email` |
 | `KUBEDELOS_ALLOWED_HOSTS` | `localhost,127.0.0.1`: the `Host` header values the UI answers to (`/healthz` answers to any) |
 
+Two more settings serve the container image: `KUBEDELOS_TRIVY_DIR` names a directory holding `<version>/trivy`, used
+before the cache and never downloaded over (the image sets it to its bundled Trivy), and `KUBEDELOS_SECURE_COOKIES`
+(default `false`; the chart sets `true`) marks the CSRF cookie `Secure`, for a UI reached over HTTPS.
+
 `--host` (default `0.0.0.0`), `--port` (default `8080`) and `--kubeconfig` are the flags. To try it on a laptop:
 
 ```bash
 KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=my-context KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' \
   kubedelos serve --host 127.0.0.1 --port 9371
 ```
+
+### Install with Helm
+
+```bash
+helm install kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos --set clusterName=my-cluster
+```
+
+The chart runs one hardened replica with a volume for the data, a read-only ClusterRole and a NetworkPolicy, and the
+image bundles the pinned Trivy. [Running kubedelos in a cluster](docs/in-cluster.md) has every value, the security model
+(open writes, header trust and what the chart's guard does and does not cover), how to expose the UI, and how to verify
+the signed image and chart with cosign. [An example](docs/exposure-oauth2-proxy-envoy-gateway.md) puts it behind
+oauth2-proxy and Envoy Gateway.
 
 ## What gets scanned
 
@@ -311,7 +327,7 @@ kubedelos registry test registry.example/team/app:1.2.3
 
 It exits 0 when the image is readable, 1 when the registry refuses access or the image is not found, and 2 for
 other errors. When images fail registry auth in a scan, the dashboard lists them with the command to log in to each
-registry. Registry auth for the in-cluster mode (workload identity, pull secrets) comes with the Helm chart.
+registry. Registry auth for the in-cluster mode (workload identity, pull secrets) is not in the Helm chart yet.
 
 ## License
 
