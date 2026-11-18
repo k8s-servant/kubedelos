@@ -97,7 +97,9 @@ def test_replicas_is_not_a_value(render_error):
 
 def test_image_defaults_to_app_version_and_digest_wins(render):
     container = kind(render(), "Deployment")["spec"]["template"]["spec"]["containers"][0]
-    assert container["image"] == "ghcr.io/k8s-servant/kubedelos:0.0.0"
+    # release-please bumps appVersion in Chart.yaml, so the expected tag is read from it rather than hard-coded.
+    app_version = yaml.safe_load((CHART / "Chart.yaml").read_text())["appVersion"]
+    assert container["image"] == f"ghcr.io/k8s-servant/kubedelos:{app_version}"
     digest = "sha256:" + "a" * 64
     container = kind(render({"image": {"digest": digest}}), "Deployment")["spec"]["template"]["spec"]["containers"][0]
     assert container["image"] == f"ghcr.io/k8s-servant/kubedelos@{digest}"
