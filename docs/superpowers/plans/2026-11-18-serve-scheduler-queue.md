@@ -434,12 +434,13 @@ These are the builder's calls; the spec leaves them open.
 - [ ] **Step 3:** Implement `serve` in `cli.py`, next to `ui`.
   - README: a "kubedelos serve (in-cluster)" section covering what it does, the six `KUBEDELOS_*` settings with
     defaults, that it is view-only until sign-in lands, and how to try it on a laptop:
-    `KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=kind-lab KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' kubedelos serve --host 127.0.0.1 --port 9371`.
+    `KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=my-context KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' kubedelos serve --host 127.0.0.1 --port 9371`.
   - CHANGELOG: Features entries for `serve`, scheduled sweeps through the queue, retention and migration 10.
 - [ ] **Step 4:** Run `.venv/bin/pytest -q && .venv/bin/ruff check . && .venv/bin/ruff format --check . &&
   .venv/bin/pre-commit run --all-files`. Expected: all clean.
-- [ ] **Step 5: Manual check against kind-lab only.** Use a scratch data dir (`KUBEDELOS_DATA_DIR=<scratchpad>/serve-data`)
+- [ ] **Step 5: Manual check against a disposable test cluster** (for example a local kind cluster). Use a scratch data
+  dir (`KUBEDELOS_DATA_DIR=<scratch>/serve-data`)
   and a `*/2 * * * *` schedule. Within about 3 minutes a run with trigger `schedule` appears on
-  `http://127.0.0.1:9371/scans`. `curl -X POST` gets 403, and `curl -H 'Host: 10.1.2.3' /healthz` gets 200. Never point
-  it at a work cluster.
+  `http://127.0.0.1:9371/scans`. `curl -X POST` gets 403, and `curl -H 'Host: 10.1.2.3' /healthz` gets 200. Use only a
+  cluster made for testing.
 - [ ] **Step 6:** Commit `feat: add kubedelos serve`, then push `feat/serve` and open the PR with `Refs #12, #24`.
