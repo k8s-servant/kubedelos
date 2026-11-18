@@ -14,9 +14,9 @@ Status: pre-alpha. Interfaces and output may change.
 `trivy k8s` tell you what is vulnerable right now. kubedelos is for what comes after that report, across a whole cluster
 and over time:
 
-- **What actually runs.** It lists the images running in the cluster, including init and ephemeral containers,
-  CronJobs and workloads scaled to zero. Access is read-only and Secrets are not read (in `serve`, except opt-in pod pull secrets, see below). Each unique
-  image is scanned once per platform.
+- **What actually runs.** It lists the images running in the cluster, including init and ephemeral containers, CronJobs
+  and workloads scaled to zero. Access is read-only and Secrets are not read (in `serve`, except opt-in pod pull
+  secrets, see below). Each unique image is scanned once per platform.
 - **What to fix first.** The dashboard puts the Critical and High findings that have a fix on top, grouped by fix or by
   image, with the images worst hit and the images that failed to scan, plus a hint on which registry to log in to.
 - **What changed.** Every run is kept in a local SQLite database, so the dashboard shows the change since the last
@@ -325,13 +325,13 @@ Check access to one image with:
 kubedelos registry test registry.example/team/app:1.2.3
 ```
 
-It exits 0 when the image is readable, 1 when the registry refuses access or the image is not found, and 2 for
-other errors. When images fail registry auth in a scan, the dashboard lists them with the command to log in to each
-registry.
+It exits 0 when the image is readable, 1 when the registry refuses access or the image is not found, and 2 for other
+errors. When images fail registry auth in a scan, the dashboard lists them with the command to log in to each registry.
 
 ### In a cluster
 
-`kubedelos serve` (the Helm chart) reads private registries with a cloud workload identity, mounted Docker config Secrets
+`kubedelos serve` (the Helm chart) reads private registries with a cloud workload identity, mounted Docker config
+Secrets
 and, if you opt in, the pull secrets of the pods it scans:
 
 - [Azure Container Registry from AKS](docs/registries/acr.md)

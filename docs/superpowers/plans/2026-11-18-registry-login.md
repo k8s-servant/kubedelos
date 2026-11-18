@@ -1,6 +1,7 @@
 # Registry login (in-cluster) Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** `kubedelos serve` can scan private images: through the pod's cloud identity (the `cloud.provider` presets),
 through mounted Docker config Secrets, and (opt-in) through the pull secrets a pod names, without credentials reaching
@@ -26,8 +27,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
   be logged at debug level and stored in SQLite (they are not credentials).
 - A per-scan Docker config is the only credential file, and only under `KUBEDELOS_SECRETS_DIR` (an `emptyDir` with
   `medium: Memory`, `sizeLimit: 16Mi`, mounted at `/run/kubedelos`). Directory mode 0700, file mode 0600. Deleted when
-  that image's scan ends, on success, error, cancel or exception. With `KUBEDELOS_SECRETS_DIR` unset (the laptop), no file
-  is ever written.
+  that image's scan ends, on success, error, cancel or exception. With `KUBEDELOS_SECRETS_DIR` unset (the laptop), no
+  file is ever written.
 - Only `auths` entries are written. `credHelpers`, `credsStore` and every other key of a mounted config are dropped.
 - A Secret whose `type` is not `kubernetes.io/dockerconfigjson` is dropped unread and unlogged.
 - Trivy is pinned (v0.76.1) with `--scanners vuln`. No new Trivy flags.
@@ -66,8 +67,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
    `test_docker_hub_keys_normalise`).
 3. **A scan cancelled, timed out, or killed by an exception mid-image** → its temporary config directory is gone
    afterwards (Task 3 `test_temp_config_removed_when_scan_raises`).
-4. **A pod naming a Secret that does not exist, is forbidden, or is not a dockerconfigjson** → the image is scanned with
-   what remains, a debug line names the Secret (never its content), and the run does not fail (Task 2
+4. **A pod naming a Secret that does not exist, is forbidden, or is not a dockerconfigjson** → the image is
+   scanned with what remains, a debug line names the Secret (never its content), and the run does not fail (Task 2
    `test_missing_or_forbidden_secret_is_skipped`, `test_non_docker_secret_dropped_unread`).
 5. **A mounted config file that is missing, empty or not JSON** (a Secret of the wrong type, mid-rotation) → that file
    is skipped with a warning naming the path, the others still apply (Task 1 `test_bad_mounted_config_skipped`).
@@ -103,7 +104,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
 - [ ] **Step 1: Write the failing tests**: `test_parse_keeps_only_auths` (a config with `credHelpers`, `credsStore`,
   `HttpHeaders` keeps only `auths`), `test_docker_hub_keys_normalise` (all four spellings → `docker.io`, and
   `temp_config` writes `https://index.docker.io/v1/`), `test_host_with_port_kept` (`registry.example.com:5000`),
-  `test_first_mounted_config_wins`, `test_bad_mounted_config_skipped` (missing, empty, `not json` files; caplog shows the
+  `test_first_mounted_config_wins`, `test_bad_mounted_config_skipped` (missing, empty, `not json` files; caplog shows
+  the
   path and no file content), `test_temp_config_modes_and_removal` (0700 dir, 0600 file, gone after the `with`),
   `test_temp_config_removed_on_exception`, `test_clear_empties_dir_keeps_it`, `test_parse_error_message_has_no_content`
   (a config whose bad JSON contains `s3cr3t`; the message does not).
@@ -139,11 +141,13 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
     skipped: %s", ns, name, reason)` and continue.
 
 - [ ] **Step 1: Write the failing tests**: `test_inventory_records_pull_secret_names_in_listed_namespaces` (two pods in
-  `web` naming `regcred` and `other`, a pod in `jobs` not listed → its item has none), `test_pull_secrets_off_by_default`,
+  `web` naming `regcred` and `other`, a pod in `jobs` not listed → its item has none),
+  `test_pull_secrets_off_by_default`,
   `test_non_docker_secret_dropped_unread` (a `V1Secret` of type `Opaque` whose `data` is a property that fails the
   test when read), `test_missing_or_forbidden_secret_is_skipped` (404 and 403; caplog at debug shows `web/regcred`
   and no content), `test_only_the_image_host_is_kept`, `test_secret_read_once_per_run`,
-  `test_unlisted_namespace_never_read`, `test_pull_secrets_from_two_namespaces`, `test_failed_items_keep_pull_secret_names` (round trip through the repo), and
+  `test_unlisted_namespace_never_read`, `test_pull_secrets_from_two_namespaces`,
+  `test_failed_items_keep_pull_secret_names` (round trip through the repo), and
   the migration test the store tests already use for each migration.
 - [ ] **Step 2: Run, expect failures.**
 - [ ] **Step 3: Implement.** Keep `collect` reading only what it reads today plus `spec.image_pull_secrets`.
@@ -163,7 +167,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
   - `@dataclass(frozen=True) class ScanAccess: docker_config: Path | None`.
   - `class RegistryAccess` with `__init__(self, settings: Settings, api: KubeApi | None = None)` (loads mounted configs
     once per run; builds `PullSecrets` when `api` and namespaces are given) and
-    `@contextmanager for_item(self, item: InventoryItem) -> Iterator[ScanAccess]`: `docker_config` is a `temp_config` when `secrets_dir` is set and the
+    `@contextmanager for_item(self, item: InventoryItem) -> Iterator[ScanAccess]`: `docker_config` is a `temp_config`
+    when `secrets_dir` is set and the
     merged auths for the host are non-empty, else `None`.
   - `RegistryAccess.none() -> RegistryAccess`: no configs (used where no settings apply, and in tests).
   - `scan_many(..., access: RegistryAccess | None = None)`: `work` enters `access.for_item(item)` around both attempts
@@ -171,12 +176,15 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
   - `run_scan` builds `RegistryAccess(settings, api)`; `retry_failed` builds it with `kube_client.load(settings)` only
     when `settings.pod_pull_secret_namespaces` is set and a stored item has pull secrets (otherwise no API is loaded,
     keeping "the cluster is not read" for plain retries; update the docstring).
-  - `registry test` uses `RegistryAccess(settings).for_item(...)` for its one image (on a laptop: no secrets dir, so nothing changes).
+  - `registry test` uses `RegistryAccess(settings).for_item(...)` for its one image (on a laptop: no secrets dir, so
+    nothing changes).
   - `_serve` calls `dockerconfig.clear(settings.secrets_dir)` before the
     worker starts, when `secrets_dir` is set.
 
-- [ ] **Step 1: Write the failing tests**: `test_pull_secret_overrides_mounted_config` (same host in both; the written config holds the pull secret's entry),
-  `test_no_file_without_secrets_dir`, `test_no_file_without_entries_for_host`, `test_temp_config_removed_when_scan_raises`
+- [ ] **Step 1: Write the failing tests**: `test_pull_secret_overrides_mounted_config` (same host in both; the written
+      config holds the pull secret's entry),
+  `test_no_file_without_secrets_dir`, `test_no_file_without_entries_for_host`,
+  `test_temp_config_removed_when_scan_raises`
   (a `scan_image` stub that raises inside `scan_many`; the secrets dir is empty afterwards),
   `test_scan_many_passes_access_to_each_image` (stubbed `scan_image` records `docker_config` per ref),
   `test_serve_clears_secrets_dir_at_start`, `test_registry_test_uses_mounted_configs`.
@@ -199,7 +207,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
 - Produces:
   - `Settings.cloud_provider: Literal["azure", "aws", "gcp", "none"] = "none"`, `Settings.cloud_identity: str | None`.
   - A "Registries" card, shown in both modes: cloud provider and identity (or "none: your own cloud logins apply" on
-    the laptop), the registry hosts Trivy uses that identity for (fixed text per provider, from the spec), mounted Docker config files (the Secret name is the
+    the laptop), the registry hosts Trivy uses that identity for (fixed text per provider, from the spec), mounted
+    Docker config files (the Secret name is the
     parent directory name), pull-secret namespaces (or "off").
   - `POST /settings/registry-test` (serve only; 404 in `ui` mode), form field `image`, HTMX target the card's result
     area. Validates the ref as `registry test` does; one at a time via a module `threading.Lock` (busy → "A test is
@@ -249,9 +258,8 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
     `defaultMode: 0400`) at `/etc/kubedelos/docker-configs/<name>`. The pod's `fsGroup` 65532 makes 0440 readable.
   - `pullsecret-rbac.yaml`: per listed namespace a Role (`get` on `secrets`, no `resourceNames`, no `list`/`watch`) and
     a RoleBinding to the chart's ServiceAccount. Nothing cluster-wide.
-- Guards (`_validate.tpl`, each a clear `fail` message): the provider's id value empty when `cloud.provider` is
-  not `none`; `podPullSecrets` on with empty namespaces; namespaces given with
-  `podPullSecrets` off.
+- Guards (`_validate.tpl`, each a clear `fail` message): the provider's id value empty when `cloud.provider` is not
+  `none`; `podPullSecrets` on with empty namespaces; namespaces given with `podPullSecrets` off.
 - Dockerfile: `ENV KUBEDELOS_SECRETS_DIR=/run/kubedelos`, `RUN mkdir /run/kubedelos && chown 65532:65532 /run/kubedelos
   && chmod 0700 /run/kubedelos`. The smoke test runs with `--read-only --tmpfs /run/kubedelos:uid=65532,mode=0700`.
 - NOTES.txt: with pod pull secrets on, one line naming the namespaces and what it permits (spec 7.3).
@@ -294,7 +302,8 @@ Scenarios, each a pod in its own namespace naming `10.96.200.50:5000/e2e/nginx:1
 ### Task 7: Docs, AGENTS.md rule change, README, CHANGELOG, spec
 
 **Files:**
-- Create: `docs/registries/acr.md`, `docs/registries/ecr.md`, `docs/registries/gar.md`, `docs/registries/pull-secrets.md`
+- Create: `docs/registries/acr.md`, `docs/registries/ecr.md`, `docs/registries/gar.md`,
+  `docs/registries/pull-secrets.md`
 - Modify: `AGENTS.md`, `README.md`, `CHANGELOG.md`, `docs/in-cluster.md`, the spec
 
 - [ ] **Step 1: Check in the Trivy v0.76.1 source** which wins for a host covered by both a cloud provider and a Docker

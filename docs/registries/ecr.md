@@ -18,8 +18,10 @@ already contains `kubedelos`, in the release namespace. With the names above it 
 
 - Permission to create an IAM role and attach a policy to it.
 
-Flags checked against the eksctl docs ([IAM roles for service accounts](https://docs.aws.amazon.com/eks/latest/eksctl/iamserviceaccounts.html))
-and the eksctl source for `create iamserviceaccount` (`pkg/ctl/create/iamserviceaccount.go`, which defines `--role-only`,
+Flags checked against the eksctl docs ([IAM roles for service
+accounts](https://docs.aws.amazon.com/eks/latest/eksctl/iamserviceaccounts.html))
+and the eksctl source for `create iamserviceaccount` (`pkg/ctl/create/iamserviceaccount.go`, which defines
+`--role-only`,
 `--attach-policy-arn`, `--role-name` and `--approve`).
 
 ## 1. Create the identity
@@ -85,7 +87,9 @@ empty.
 1. Open the Settings page (`kubectl port-forward svc/kubedelos 8080:80 -n kubedelos`). The Registries card shows the
    cloud identity (`aws` and the role ARN, never a token) and the hosts it is used for.
 2. Type an ECR image into "Test an image", for example `123456789012.dkr.ecr.eu-west-1.amazonaws.com/team/app:1.0`,
-   and press Test. It scans that one image once with the access a scan would use. The box exists only in
+   and press Test. It scans that one image once, with the cloud identity and the mounted Docker configs (pod pull
+   secrets are not
+   used: there is no pod). The box exists only in
    `kubedelos serve` with writes on, and refuses a host that is not in a mounted Docker config, not covered by the cloud
    identity and not used by an image in the cluster's newest run.
 3. Start a scan from the Scans page, or wait for the sweep. Images that fail with the kind `auth` are listed on the

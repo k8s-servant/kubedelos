@@ -6,9 +6,8 @@ Trivy takes an access token from the GKE metadata server for the Google service 
 [Running kubedelos in a cluster](../in-cluster.md) for the install itself.
 
 The names below are placeholders: project `my-project`, cluster `my-cluster`, location `europe-west1`, release
-`kubedelos` in namespace `kubedelos`. The chart names its ServiceAccount `<release>-kubedelos`, or just the release
-name when it already contains `kubedelos`, in the release namespace. With the names above it is `kubedelos` in
-`kubedelos`.
+`kubedelos` in namespace `kubedelos`. The chart names its ServiceAccount `<release>-kubedelos`, or just the release name
+when it already contains `kubedelos`, in the release namespace. With the names above it is `kubedelos` in `kubedelos`.
 
 ## What you need
 
@@ -28,7 +27,8 @@ name when it already contains `kubedelos`, in the release namespace. With the na
   Updating a node pool affects the workloads running in it.
 - Permission to create a service account and change IAM policy.
 
-Flags checked against [Use Workload Identity Federation for GKE](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity).
+Flags checked against [Use Workload Identity Federation for
+GKE](https://docs.cloud.google.com/kubernetes-engine/docs/how-to/workload-identity).
 
 ## 1. Create the identity
 
@@ -36,8 +36,7 @@ Flags checked against [Use Workload Identity Federation for GKE](https://docs.cl
 gcloud iam service-accounts create kubedelos --project=my-project
 ```
 
-The service account's email is `kubedelos@my-project.iam.gserviceaccount.com`. It goes into the chart values in
-step 4.
+The service account's email is `kubedelos@my-project.iam.gserviceaccount.com`. It goes into the chart values in step 4.
 
 ## 2. Let it read the registry
 
@@ -84,9 +83,9 @@ fails when `cloud.gcp.serviceAccount` is empty.
 1. Open the Settings page (`kubectl port-forward svc/kubedelos 8080:80 -n kubedelos`). The Registries card shows the
    cloud identity (`gcp` and the service account email, never a token) and the hosts it is used for.
 2. Type an image into "Test an image", for example `europe-west1-docker.pkg.dev/my-project/my-repo/app:1.0`, and press
-   Test. It scans that one image once with the access a scan would use. The box exists only in `kubedelos serve` with
-   writes on, and refuses a host that is not in a mounted Docker config, not covered by the cloud identity and not used
-   by an image in the cluster's newest run.
+   Test. It scans that one image once, with the cloud identity and the mounted Docker configs (pod pull secrets are not
+   used: there is no pod). The box exists only in `kubedelos serve` with writes on, and refuses a host that is not in a
+   mounted Docker config, not covered by the cloud identity and not used by an image in the cluster's newest run.
 3. Start a scan from the Scans page, or wait for the sweep. Images that fail with the kind `auth` are listed on the
    run's failures page.
 

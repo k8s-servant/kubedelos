@@ -8,8 +8,9 @@ the data and cache directories, the Trivy in use and the log level.
 The Registries card says which cloud identity and which mounted Docker config Secrets (by name) the scans use, and
 which namespaces' pull secrets are read. In ``kubedelos serve`` it has a form, ``POST /settings/registry-test``, that
 scans one image with the cloud identity and the mounted Docker configs, one test at a time. There is no pod, so
-pod pull secrets are not used: an image only a pod pull secret can open fails here and works in a scan. No token is shown or read for display:
-``Settings`` holds none (a test keeps it that way), and a failed test shows Trivy's redacted cause only.
+pod pull secrets are not used: an image only a pod pull secret can open fails here and works in a scan.
+No token is shown or read for display: ``Settings`` holds none (a test keeps it that way), and a failed test
+shows Trivy's redacted cause only.
 """
 
 import logging

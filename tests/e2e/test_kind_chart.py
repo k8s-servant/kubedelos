@@ -1,5 +1,6 @@
 """End-to-end install of the Helm chart on a throwaway kind cluster, waiting for a scheduled sweep that also
-scans a private registry:2 through mounted and pod pull secrets. Needs kind, helm, docker, kubectl and network access."""
+scans a private registry:2 through mounted and pod pull secrets. Needs kind, helm, docker, kubectl and network
+access."""
 
 import os
 import re

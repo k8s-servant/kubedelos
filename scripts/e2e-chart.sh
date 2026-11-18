@@ -232,7 +232,8 @@ while [ "$SECONDS" -lt "$deadline" ]; do
             echo "secrets dir empty"
             exit 0
           fi
-          echo "/run/kubedelos was never empty while no scan ran (last count: $left, -1 means a scan was always running)"
+          echo "/run/kubedelos was never empty while no scan ran" \
+            "(last count: $left, -1 means a scan was always running)"
         fi
         dump_state
         exit 1

@@ -322,7 +322,8 @@ Most of the work is the environment; kubedelos adds pull secrets.
      `imagePullSecrets` into each pod's spec.
    - kubedelos reads only `KUBEDELOS_POD_PULL_SECRET_NAMESPACES` (the same list, set by the chart). For each image in
      one of them, it reads the pod's `imagePullSecrets`. A Secret whose `type` is not `kubernetes.io/dockerconfigjson`
-     is discarded without its data being decoded, used or logged (the get has already fetched it, since the type is only known
+     is discarded without its data being decoded, used or logged (the get has already fetched it, since the type is only
+     known
      after it). From the rest it keeps only the `auths` entries for that image's host and
      merges them over the mounted configs. The host match is also what limits where those credentials are sent.
    - The security note says plainly what this permits: anyone who can create pods in a listed namespace can make
@@ -334,7 +335,8 @@ Most of the work is the environment; kubedelos adds pull secrets.
    to the image and the chart in PR 4, so per-scan Docker configs never reach node disk. One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
    (the memory-backed volume; on a laptop, unset, so no file is written and the user's Docker login applies as today).
    `scan_image` already takes `docker_config`. It is deleted when that process ends, even on error or cancel. A SIGKILL
-   or OOM kill skips that, so `serve` removes leftover `kubedelos-docker-*` configs from `KUBEDELOS_SECRETS_DIR` at start, and the volume is gone with the pod. Only `auths` entries
+   or OOM kill skips that, so `serve` removes leftover `kubedelos-docker-*` configs from `KUBEDELOS_SECRETS_DIR` at
+   start, and the volume is gone with the pod. Only `auths` entries
    are written; credential helpers in a mounted config are dropped, since the image has none.
 5. **Rule change.** AGENTS.md's "never read Secrets" becomes "never read Secrets, except the pull secrets a pod names,
    in namespaces the operator listed for that, and only when `podPullSecrets` is on", in the same PR. Its "credentials
@@ -349,8 +351,8 @@ docs that explain the cloud-side role arrive together. `cloud.provider`: `azure`
 - `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
 
 `kubedelos registry test` gains no new options. In `serve`, a "Test an image" box on the Settings page runs the same
-check with the same credentials a scan would use (the cloud identity and the mounted Docker configs). It is a POST, so it needs an
-identity.
+check with the same credentials a scan would use (the cloud identity and the mounted Docker configs). It is a POST, so
+it needs an identity.
 
 ### 8. Settings page in `serve`
 
@@ -412,10 +414,12 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
 - No `registries.cloudHosts` allowlist and no cloud-environment scrubbing: Trivy's providers match only vendor-run
   registry domains, so the identity cannot reach an attacker's server (see Approaches, Registry login).
 - Retries keep pull secrets: the Secret names an image's pods named are stored with each `image_result` (migration 11,
-  column `pull_secrets`, JSON `[[namespace, name], ...]`), so a retry of an auth failure reads the same Secrets. Contents
+  column `pull_secrets`, JSON `[[namespace, name], ...]`), so a retry of an auth failure reads the same Secrets.
+  Contents
   are read again at retry time and never stored.
 - Precedence of credentials: mounted Docker configs in the listed order, the first winning per host; then pod pull
-  secrets override them for the image's host, the first in inventory order (namespaces as the API lists them, then pods, then scaled-to-zero templates and CronJobs)
+  secrets override them for the image's host, the first in inventory order (namespaces as the API lists them, then pods,
+  then scaled-to-zero templates and CronJobs)
   winning among several. Cloud identity
   against Docker config is Trivy's call (see Left to the builder).
 - An image shared by pods in several namespaces is scanned once, with any listed namespace's pull secret; its findings

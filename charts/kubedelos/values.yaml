@@ -63,7 +63,8 @@ cloud:
 
 # Where kubedelos finds registry credentials. All of it is read-only.
 registries:
-  dockerConfigSecrets: [] # kubernetes.io/dockerconfigjson Secrets in the release namespace, mounted in order; the first match wins
+  # kubernetes.io/dockerconfigjson Secrets in the release namespace, mounted in order; the first match wins
+  dockerConfigSecrets: []
   podPullSecrets: false # read the imagePullSecrets of scanned pods from the namespaces below
   podPullSecretNamespaces: [] # required when podPullSecrets is on; each gets a Role with get on secrets
 podAnnotations: {}

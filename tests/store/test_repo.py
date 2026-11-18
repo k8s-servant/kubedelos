@@ -605,7 +605,8 @@ def test_migration_11_adds_pull_secrets_to_old_results(tmp_path):
     )
     old.execute("INSERT INTO scan_run (started_at, status, trigger) VALUES ('2026-11-01T00:00:00+00:00', 'ok', 'cli')")
     old.execute(
-        "INSERT INTO image_result (run_id, image_key, ref, repo, platform, status) VALUES (1, 'k', 'reg.io/a:1', 'reg.io/a', 'linux/amd64', 'error')"
+        "INSERT INTO image_result (run_id, image_key, ref, repo, platform, status)"
+        " VALUES (1, 'k', 'reg.io/a:1', 'reg.io/a', 'linux/amd64', 'error')"
     )
     old.commit()
     old.close()

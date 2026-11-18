@@ -20,7 +20,8 @@ The chart names its ServiceAccount `<release>-kubedelos`, or just the release na
   (`az aks create` takes the same two flags.) Azure CLI 2.47.0 or later.
 - Permission to create a managed identity, a federated credential and a role assignment on the registry.
 
-Flags checked against Microsoft Learn: [Deploy and configure workload identity on AKS](https://learn.microsoft.com/en-us/azure/aks/workload-identity-deploy-cluster).
+Flags checked against Microsoft Learn: [Deploy and configure workload identity on
+AKS](https://learn.microsoft.com/en-us/azure/aks/workload-identity-deploy-cluster).
 
 ## 1. Create the identity
 
@@ -96,7 +97,8 @@ The render fails when `cloud.azure.clientId` is empty.
 1. Open the Settings page (`kubectl port-forward svc/kubedelos 8080:80 -n kubedelos`). The Registries card shows the
    cloud identity (`azure` and the client id, never a token) and the hosts it is used for.
 2. Type an image from the registry into "Test an image", for example `myregistry.azurecr.io/team/app:1.0`, and press
-   Test. It scans that one image once, with the access a scan would use. The box is there only in `kubedelos serve`
+   Test. It scans that one image once, with the cloud identity and the mounted Docker configs (pod pull secrets are not
+   used: there is no pod). The box is there only in `kubedelos serve`
    with writes on (not in read-only mode), and refuses a host that is not in a mounted Docker config, not covered by
    the cloud identity and not used by an image in the cluster's newest run.
 3. Start a scan from the Scans page, or wait for the sweep. Images that fail with the kind `auth` are listed on the
@@ -109,12 +111,11 @@ Trivy v0.76.1 uses the Azure identity only for hosts ending in `.azurecr.io` or 
 the token. It sends it to the ACR service for the registry in the image name, and that service refuses a registry
 outside the identity's tenant.
 
-For such a host Trivy tries the cloud identity first, then the Docker config
-(`pkg/remote/remote.go`, `authOptions`). If the identity gives no token, or the registry rejects it, Trivy tries the
-Docker config next. A failure to get the token is logged by Trivy at debug level only
-(`pkg/fanal/image/registry/token.go`), so kubedelos sees the registry's ordinary auth error if both fail. This means a
-mounted Docker config or pull secret for the same host does not override the identity; it is the fallback. See
-[Pull secrets](pull-secrets.md).
+For such a host Trivy tries the cloud identity first, then the Docker config (`pkg/remote/remote.go`, `authOptions`). If
+the identity gives no token, or the registry rejects it, Trivy tries the Docker config next. A failure to get the token
+is logged by Trivy at debug level only (`pkg/fanal/image/registry/token.go`), so kubedelos sees the registry's ordinary
+auth error if both fail. This means a mounted Docker config or pull secret for the same host does not override the
+identity; it is the fallback. See [Pull secrets](pull-secrets.md).
 
 Trivy also needs `AZURE_TENANT_ID` (the webhook sets it) for the exchange of the Entra token for an ACR token.
 
@@ -138,5 +139,6 @@ shows. To see the cause, run `trivy image` by hand in a pod with the same Servic
   kubedelos does not use that identity, so attaching the registry is not enough on its own. Do step 2.
 - One identity per install. Registries the identity cannot read need a pull secret or a second install.
 - No Azure ACR is available to this project's CI. The tests cover the chart rendering (annotation, pod label, required
-  client id) and the host matching on the Settings page. The Azure login itself is Trivy's, and it was not run end to end
+  client id) and the host matching on the Settings page. The Azure login itself is Trivy's, and it was not run end to
+  end
   for this project. What this page says about it comes from reading Trivy's v0.76.1 source.

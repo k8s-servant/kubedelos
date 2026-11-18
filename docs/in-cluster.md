@@ -104,7 +104,8 @@ Each registry setting has its own page:
   `registries.podPullSecrets`, for any other registry.
 
 The cloud preset only wires the identity into the pod; the cloud-side role (`AcrPull`, an ECR read policy,
-`roles/artifactregistry.reader`) is yours to create, and it decides which registries kubedelos can read. The Settings page
+`roles/artifactregistry.reader`) is yours to create, and it decides which registries kubedelos can read. The Settings
+page
 has a Registries card that shows what is configured and, in `serve`, a "Test an image" box.
 
 Per-scan Docker configs are written to `/run/kubedelos` (`KUBEDELOS_SECRETS_DIR`), a memory-backed volume, so a
