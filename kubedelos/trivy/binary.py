@@ -48,7 +48,8 @@ def _cached_path(settings: Settings) -> Path:
 
 
 def ensure_trivy(settings: Settings, *, download: bool = True, client: httpx.Client | None = None) -> Path:
-    """Return a usable Trivy binary: ``settings.trivy_path``, the cached pinned release, or a fresh download of it.
+    """Return a usable Trivy binary: ``settings.trivy_path``, the pinned release bundled in ``settings.trivy_dir``,
+    the cached pinned release, or a fresh download of it.
 
     ``client`` is the HTTP client used for the download; by default a new one is created and closed.
     """
@@ -58,6 +59,11 @@ def ensure_trivy(settings: Settings, *, download: bool = True, client: httpx.Cli
                 f"KUBEDELOS_TRIVY_PATH points to {settings.trivy_path}, which is not an executable file"
             )
         return settings.trivy_path
+
+    if settings.trivy_dir is not None:
+        bundled = settings.trivy_dir / pins.TRIVY_VERSION / "trivy"
+        if _is_executable(bundled):
+            return bundled
 
     target = _cached_path(settings)
     if _is_executable(target):

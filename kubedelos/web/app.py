@@ -209,6 +209,7 @@ def create_serve_app(
         read_only=settings.read_only,
         trust_proxy_headers=settings.trust_proxy_headers,
         identity_header=settings.identity_header,
+        secure_cookies=settings.secure_cookies,
     )
 
     def csrf_token(request: Request) -> str:

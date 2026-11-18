@@ -173,3 +173,11 @@ def test_identity_header_must_be_a_header_name():
         with pytest.raises(ValidationError):
             Settings(identity_header=bad)
     assert Settings(identity_header="Remote-User").identity_header == "Remote-User"
+
+
+def test_secure_cookies_and_trivy_dir_from_env(monkeypatch):
+    assert (Settings().secure_cookies, Settings().trivy_dir) == (False, None)
+    monkeypatch.setenv("KUBEDELOS_SECURE_COOKIES", "true")
+    monkeypatch.setenv("KUBEDELOS_TRIVY_DIR", "/opt/trivy")
+    settings = Settings()
+    assert settings.secure_cookies is True and settings.trivy_dir == Path("/opt/trivy")

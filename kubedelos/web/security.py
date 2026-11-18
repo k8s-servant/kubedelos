@@ -187,7 +187,10 @@ class ServeGuard:
 
     CSRF_COOKIE = "kubedelos_csrf"
 
-    def __init__(self, *, read_only: bool, trust_proxy_headers: bool, identity_header: str) -> None:
+    def __init__(
+        self, *, read_only: bool, trust_proxy_headers: bool, identity_header: str, secure_cookies: bool = False
+    ) -> None:
+        self.secure_cookies = secure_cookies
         self.read_only = read_only
         self.trust_proxy_headers = trust_proxy_headers
         self.identity_header = identity_header
@@ -276,8 +279,16 @@ def install_serve(app: FastAPI, allowed_hosts: Collection[str], guard: ServeGuar
             request.state.csrf_cookie = cookie or new_cookie
             response = await _check_serve(request, guard, allowed, call_next)
             if new_cookie is not None:
-                # secure=False: behind the TLS-terminating proxy in front of it, the pod sees plain HTTP.
-                response.set_cookie(guard.CSRF_COOKIE, new_cookie, httponly=True, samesite="strict", path="/")
+                # Secure only when asked for (KUBEDELOS_SECURE_COOKIES): the pod itself sees plain HTTP behind the
+                # TLS-terminating proxy, but the browser reaches the UI over HTTPS and can then insist on it.
+                response.set_cookie(
+                    guard.CSRF_COOKIE,
+                    new_cookie,
+                    httponly=True,
+                    samesite="strict",
+                    path="/",
+                    secure=guard.secure_cookies,
+                )
         set_headers(response, nonce)
         logger.info("%s %s %d %s", request.method, _raw_path(request), response.status_code, identity or "-")
         return response

@@ -488,3 +488,13 @@ def test_utf8_identity_header_is_decoded(serve, caplog):
         )
     assert response.status_code == 303
     assert caplog.records[-1].getMessage() == f"POST /scans/cancel 303 {name}"
+
+
+def test_serve_csrf_cookie_is_secure_when_configured(make_serve_client):
+    client = make_serve_client(secure_cookies=True)
+    cookie = client.get("/").headers["set-cookie"]
+    assert "kubedelos_csrf=" in cookie and "Secure" in cookie
+
+
+def test_serve_csrf_cookie_is_not_secure_by_default(serve_client):
+    assert "Secure" not in serve_client.get("/").headers["set-cookie"]
