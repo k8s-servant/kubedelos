@@ -4,9 +4,11 @@ import re
 import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
+from fastapi.testclient import TestClient
 
 from kubedelos.web.pages import render
 from kubedelos.web.security import MAX_SESSIONS, Guard
+from tests.web.conftest import build_serve_app
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."
 CSP = (
@@ -264,3 +266,51 @@ def test_signed_out_page_does_not_show_the_context(anon):
     response = anon.get("/_page")
     assert response.status_code == 403
     assert "my-cluster" not in response.text
+
+
+# kubedelos serve: view-only, behind an allowed Host
+
+
+@pytest.mark.parametrize(
+    ("host", "status"), [("example.com", 200), ("EXAMPLE.com:8080", 200), ("evil.example.org", 400), ("", 400)]
+)
+def test_serve_host_check(serve_client, host, status):
+    response = serve_client.get("/", headers={"host": host})
+    assert response.status_code == status
+    if status == 400:
+        assert response.text == "invalid Host header"
+
+
+def test_serve_allows_ipv6_literal(seed, worker, sweeper):
+    app = build_serve_app(seed, worker, sweeper, allowed_hosts=["::1"])
+    with TestClient(app, base_url="http://[::1]:8080") as client:
+        assert client.get("/", headers={"host": "[::1]:8080"}).status_code == 200
+
+
+def test_serve_refuses_writes(serve_client, seed):
+    response = serve_client.post("/scans", data={"namespaces": "a"})
+    assert response.status_code == 403
+    assert "view-only" in response.text
+    assert "KUBEDELOS_TRUST_PROXY_HEADERS" in response.text
+    assert serve_client.post("/scans/cancel").status_code == 403
+
+
+def test_serve_sets_security_headers(serve_client):
+    for response in (serve_client.get("/"), serve_client.post("/scans")):
+        assert response.headers["content-security-policy"] == CSP.format(nonce=_nonce(response))
+        assert response.headers["x-content-type-options"] == "nosniff"
+
+
+def test_serve_logs_the_access_line(serve_client, caplog):
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        serve_client.get("/scans?page=1")
+    assert "GET /scans 200" in caplog.text and "page=1" not in caplog.text
+
+
+def test_serve_csrf_token_is_empty(serve_app, serve_client):
+    @serve_app.get("/_csrf")
+    def csrf(request: Request):
+        template = serve_app.state.templates.env.from_string("[{{ csrf_token(request) }}]")
+        return PlainTextResponse(template.render(request=request))
+
+    assert serve_client.get("/_csrf").text == "[]"

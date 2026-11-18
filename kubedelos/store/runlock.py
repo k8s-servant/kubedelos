@@ -4,7 +4,8 @@ A scan that is killed (SIGKILL, a crash, a closed laptop) leaves its ``scan_run`
 must close such rows, but must never close a scan still going on in another terminal. So every run is owned by a
 lock file, ``<data_dir>/runs/<owner>.lock``, holding an exclusive OS lock for the whole run, and its token is stored on
 the row. The OS drops the lock when the process dies, however it dies, so "nobody holds the lock" means "no live
-process owns this run".
+process owns this run". A separate ``<data_dir>/serve.lock`` keeps a second ``kubedelos serve`` from sharing one
+data directory.
 """
 
 import contextlib
@@ -49,6 +50,10 @@ else:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
+class AlreadyServing(Exception):
+    """Another ``kubedelos serve`` holds the serve lock of this data directory."""
+
+
 def _lock_path(data_dir: Path, owner: str) -> Path:
     return Path(data_dir) / "runs" / f"{owner}.lock"
 
@@ -77,6 +82,27 @@ def hold(data_dir: Path) -> Iterator[str]:
         os.close(fd)
         with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)  # Windows cannot delete an open file: do it once closed
+
+
+@contextlib.contextmanager
+def hold_serve(data_dir: Path) -> Iterator[None]:
+    """Hold the exclusive ``serve.lock`` of ``data_dir`` for the block, or raise ``AlreadyServing``.
+
+    The file is created if missing and never deleted: the OS drops the lock when the holder dies, and deleting the file
+    could let a second server lock a new file while the first still holds the old one.
+    """
+    data_dir = Path(data_dir)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(data_dir / "serve.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if not _try_lock(fd):
+            raise AlreadyServing(f"another kubedelos serve uses {data_dir}")
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def is_owned(data_dir: Path, owner: str) -> bool:

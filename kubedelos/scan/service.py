@@ -57,6 +57,7 @@ def run_scan(
     cancel: threading.Event | None = None,
     cache_max_age: timedelta = timedelta(hours=24),
     rescan: bool = False,
+    requested_by: str | None = None,
 ) -> ScanOutcome:
     """Scan every image in the cluster and record the run. Interrupts mark the run ``cancelled`` and re-raise."""
     api = api if api is not None else kube_client.load(settings)
@@ -69,12 +70,13 @@ def run_scan(
     with runlock.hold(settings.data_dir) as owner:
         # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
         run_id = repo.start_run(
-            api.current_context(),
+            settings.cluster_name or api.current_context(),
             trigger,
             CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
             scan_level=settings.scan_level,
             scope=settings.scope,
             owner=owner,
+            requested_by=requested_by,
         )
         try:
             repo.add_warnings(run_id, warnings)

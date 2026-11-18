@@ -1,5 +1,6 @@
 {#- The scans page: the start form (prefilled with the saved settings), the progress of the UI's scan and the paged run
-    history. htmx, loaded here only, polls the progress readout. -#}
+    history. htmx, loaded here only, polls the progress readout. In serve, which is view-only, the queue card takes the
+    start form's place and the history says who asked for each run. -#}
 {% extends "base.html" %}
 {% block title %}Scans · kubedelos{% endblock %}
 {% block head %}
@@ -8,6 +9,9 @@
 {%- endblock %}
 {% block run_line %}<div class="page-head"><h1>Scans</h1></div>{% endblock %}
 {% block content %}
+  {%- if serve %}
+  {% include "partials/scan_queue.html" %}
+  {%- else %}
   <section class="card scan-start" aria-labelledby="start-title">
     <h2 class="card-title" id="start-title">Start a scan of <code class="ctx">{{ context }}</code></h2>
     {%- if form_error %}
@@ -65,6 +69,7 @@
     </form>
     {%- endif %}
   </section>
+  {%- endif %}
 
   {#- The live region stays put while htmx swaps the readout inside it, so screen readers announce each update. #}
   <div class="scan-live" aria-live="polite">
@@ -89,6 +94,9 @@
             <th scope="col">Images</th>
             <th scope="col">Failed</th>
             <th scope="col">Duration</th>
+            {%- if serve %}
+            <th scope="col">By</th>
+            {%- endif %}
           </tr>
         </thead>
         <tbody>
@@ -101,6 +109,9 @@
             <td class="num">{{ row.images }}</td>
             <td class="num">{% if row.failed_href %}<a href="{{ row.failed_href }}">{{ row.failed }}</a>{% else %}{{ row.failed }}{% endif %}{% if row.retry_href %} · <a href="{{ row.retry_href }}">retry</a>{% endif %}</td>
             <td class="num">{% if row.times_href %}<a href="{{ row.times_href }}">{{ row.duration }}</a>{% else %}{{ row.duration }}{% endif %}</td>
+            {%- if serve %}
+            <td>{{ row.by }}</td>
+            {%- endif %}
           </tr>
           {%- endfor %}
         </tbody>

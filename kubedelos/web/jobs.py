@@ -4,7 +4,9 @@ A scan started from the UI runs :func:`kubedelos.scan.service.run_scan` on a dae
 failed images runs :func:`kubedelos.scan.service.retry_failed` in the same single slot), so the request that
 started it returns at once and the page polls :meth:`ScanRunner.view` for progress. ``run_scan`` opens its own kube
 API client and SQLite connection on that thread, so no sqlite object crosses threads. The scan always targets the
-UI's context, never the kubeconfig's current context at click time. Errors are shown through
+UI's context, never the kubeconfig's current context at click time. With ``fixed_cluster`` (``kubedelos serve``, in a
+pod) there is one cluster: the context is only its display name, every other context is refused, and the scan keeps
+``Settings.context`` (normally None, for the in-cluster config). Errors are shown through
 :func:`kubedelos.trivy.runner.error_cause`, which redacts credentials and keeps them to one line; a Kubernetes API
 error shows only its status and reason, never the response headers or body it carries.
 """
@@ -49,6 +51,7 @@ class JobView:
     eta: timedelta | None
     context: str  # the kube-context this scan targets
     retry_of: int | None = None  # the run whose failed images this job scans again; None for a scan
+    job_id: int = 0  # this runner's id for the job, as start() and retry() return it
 
 
 def _utcnow() -> datetime:
@@ -81,6 +84,7 @@ def eta(started: datetime, now: datetime, done: int, total: int) -> timedelta | 
 class _Job:
     cancel: threading.Event
     context: str
+    id: int = 0
     thread: threading.Thread | None = None
     state: State = "starting"
     run_id: int | None = None
@@ -104,65 +108,103 @@ class ScanRunner:
         scan: Callable[..., ScanOutcome] = run_scan,
         retry: Callable[..., ScanOutcome] = retry_failed,
         clock: Callable[[], datetime] = _utcnow,
+        fixed_cluster: bool = False,
     ) -> None:
         self._settings = settings
         self._context = context
+        self._fixed = fixed_cluster
         self._scan = scan
         self._retry = retry
         self._clock = clock
         self._lock = threading.Lock()
         self._job: _Job | None = None
         self._closed = False  # set by shutdown: the app is going away, so no new daemon scan may start
+        self._last_id = 0  # job ids only grow, so a caller can tell its own job's view from a later one
 
-    def start(self, overrides: dict, context: str | None = None, *, rescan: bool = False) -> None:
+    @property
+    def closed(self) -> bool:
+        """True once :meth:`shutdown` has run: this runner starts no more scans."""
+        with self._lock:
+            return self._closed
+
+    def start(
+        self,
+        overrides: dict,
+        context: str | None = None,
+        *,
+        rescan: bool = False,
+        trigger: str = "ui",
+        requested_by: str | None = None,
+    ) -> int:
         """Start a scan of ``context`` (the UI's startup context by default) with ``overrides`` applied; ``rescan``
-        skips the result cache. The caller checks that ``context`` is one the kubeconfig has.
+        skips the result cache. ``trigger`` and ``requested_by`` are recorded on the run. The caller checks that
+        ``context`` is one the kubeconfig has.
 
-        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down, and ``ValueError`` for another
+        context on a fixed cluster. Returns the job's id, which its :class:`JobView` carries.
         """
-        target = context or self._context
-        # The context goes last so an override can never point the scan at another cluster.
-        scan_settings = self._settings.model_copy(update={**overrides, "context": target})
+        target, scan_settings = self._target(overrides, context)
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
-            return self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=cancel, rescan=rescan)
+            return self._scan(
+                scan_settings,
+                trigger=trigger,
+                on_progress=on_progress,
+                cancel=cancel,
+                rescan=rescan,
+                requested_by=requested_by,
+            )
 
-        self._launch(target, work)
+        return self._launch(target, work)
 
     def retry(
         self, run_id: int, overrides: dict, context: str | None = None, kinds: Collection[str] | None = None
-    ) -> None:
+    ) -> int:
         """Scan the failed images of run ``run_id`` of ``context`` again (those of ``kinds`` when given), with
         ``overrides`` (the time limit and parallelism) applied. The caller checks that the run is the context's
         newest; ``retry_failed`` checks the rest.
 
-        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down, and ``ValueError`` for another
+        context on a fixed cluster. Returns the job's id, which its :class:`JobView` carries.
         """
-        target = context or self._context
-        retry_settings = self._settings.model_copy(update={**overrides, "context": target})
+        target, retry_settings = self._target(overrides, context)
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
             return self._retry(retry_settings, run_id=run_id, on_progress=on_progress, cancel=cancel, kinds=kinds)
 
-        self._launch(target, work, retry_of=run_id)
+        return self._launch(target, work, retry_of=run_id)
+
+    def _target(self, overrides: dict, context: str | None) -> tuple[str, Settings]:
+        """The display context and the settings to scan with. The context goes last, so an override can never point
+        the scan at another cluster; on a fixed cluster that is the configured ``Settings.context``.
+        """
+        target = context or self._context
+        if self._fixed:
+            if target != self._context:
+                raise ValueError(f"this server scans only {self._context}")
+            return target, self._settings.model_copy(update={**overrides, "context": self._settings.context})
+        # A laptop scan stores the kube-context's own name; KUBEDELOS_CLUSTER_NAME names only the one served cluster.
+        return target, self._settings.model_copy(update={**overrides, "context": target, "cluster_name": None})
 
     def _launch(
         self,
         target: str,
         work: Callable[[Callable[[Progress], None], threading.Event], ScanOutcome],
         retry_of: int | None = None,
-    ) -> None:
+    ) -> int:
         with self._lock:
             if self._closed:
                 raise ScanBusy("the UI is shutting down")
             if self._job is not None and self._job.state in _ACTIVE:
                 raise ScanBusy("a scan is already running")
-            job = _Job(cancel=threading.Event(), context=target, retry_of=retry_of)
+            job = _Job(cancel=threading.Event(), context=target, id=self._last_id + 1, retry_of=retry_of)
             job.thread = threading.Thread(target=self._run, args=(job, work), name="kubedelos-ui-scan", daemon=True)
             # Start before publishing: if the thread can't start, no job is left stuck at "starting". The worker
             # touches job state only under this lock, so it waits until the job is published.
             job.thread.start()
+            self._last_id = job.id
             self._job = job
+            return job.id
 
     def cancel(self) -> None:
         """Ask the active scan to stop after the images in flight; the view says ``stopping`` at once."""
@@ -183,7 +225,9 @@ class ScanRunner:
                 p = job.progress
                 left = eta(job.paced_from, self._clock(), p.done - job.paced_base, p.total - job.paced_base)
             progress = dataclasses.replace(job.progress) if job.progress is not None else None
-            return JobView(job.state, job.run_id, progress, job.status, job.error, left, job.context, job.retry_of)
+            return JobView(
+                job.state, job.run_id, progress, job.status, job.error, left, job.context, job.retry_of, job.id
+            )
 
     def shutdown(self, timeout: float = 10.0) -> None:
         """Refuse new scans, cancel the active one, if any, and wait up to ``timeout`` seconds for its thread to end.

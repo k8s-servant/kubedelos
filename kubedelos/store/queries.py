@@ -794,13 +794,15 @@ class HistoryRow:
     started_at: datetime
     finished_at: datetime | None
     owner: str | None
+    trigger: str | None  # "ui", "schedule" or "cli"; None on runs from before triggers were recorded
+    requested_by: str | None  # who asked for the run in ``serve``; None for a sweep and for laptop runs
 
 
 def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
     """One page of the context's runs of every status, newest first, and how many runs the context has in all."""
     total = conn.execute("SELECT COUNT(*) FROM scan_run WHERE context = ?", (context,)).fetchone()[0]
     rows = conn.execute(
-        "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner,"
+        "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner, trigger, requested_by,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed"
         " FROM scan_run WHERE context = ? ORDER BY id DESC LIMIT ? OFFSET ?",
@@ -818,6 +820,8 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
             started_at=datetime.fromisoformat(r["started_at"]),
             finished_at=datetime.fromisoformat(r["finished_at"]) if r["finished_at"] else None,
             owner=r["owner"],
+            trigger=r["trigger"],
+            requested_by=r["requested_by"],
         )
         for r in rows
     ]

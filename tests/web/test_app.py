@@ -33,6 +33,31 @@ def test_app_state(app, seed):
     assert app.state.settings is seed.settings
     assert app.state.context == "my-cluster"
     assert app.state.clock is seed.clock
+    assert app.state.serve is False
+
+
+def test_serve_app_state(serve_app, worker, sweeper):
+    assert serve_app.state.serve is True
+    assert serve_app.state.context == "my-cluster"
+    assert serve_app.state.list_contexts() == ["my-cluster"]
+    assert serve_app.state.worker is worker and serve_app.state.sweeper is sweeper
+    assert isinstance(serve_app.state.scans, ScanRunner)
+    assert not hasattr(serve_app.state, "guard")
+
+
+def test_serve_app_has_the_same_pages(app, serve_app):
+    paths = {getattr(route, "path", None) for route in app.routes} - {"/_page", "/_int", "/_csrf"}
+    assert paths <= {getattr(route, "path", None) for route in serve_app.routes}
+
+
+def test_serve_app_renders_every_page(serve_client):
+    for path in ("/", "/findings", "/namespaces", "/diff", "/reports", "/accepted", "/scans", "/settings", "/about"):
+        assert serve_client.get(path).status_code == 200, path
+
+
+def test_serve_app_handles_bad_parameters(serve_client):
+    assert serve_client.get("/scans?page=x").status_code == 400
+    assert serve_client.get("/?context=nope").status_code == 404
 
 
 def test_docs_routes_disabled(client):

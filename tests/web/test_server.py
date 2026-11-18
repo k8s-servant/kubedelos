@@ -120,3 +120,59 @@ def test_serve_shuts_the_scan_runner_down_when_the_server_stops(monkeypatch):
     assert events == ["run", "shutdown"]
     # The atexit backstop covers the run only, and is dropped once serve has shut the runner down itself.
     assert registered == [app.state.scans.shutdown] and unregistered == registered
+
+
+def test_public_bind_any_ipv4():
+    sock = server.bind("0.0.0.0", 0, public=True)  # noqa: S104 - in-cluster serve listens on every address
+    try:
+        assert sock.getsockname()[0] == "0.0.0.0"  # noqa: S104
+        assert sock.family == socket.AF_INET
+    finally:
+        sock.close()
+
+
+@pytest.mark.skipif(not socket.has_ipv6, reason="no IPv6")
+def test_public_bind_ipv6_literal():
+    sock = server.bind("::", 0, public=True)
+    try:
+        assert sock.family == socket.AF_INET6
+        assert sock.getsockname()[0] == "::"
+    finally:
+        sock.close()
+
+
+def test_loopback_bind_unchanged():
+    sock = server.bind("localhost", 0, public=False)
+    try:
+        assert sock.getsockname()[0] == "127.0.0.1"
+    finally:
+        sock.close()
+
+
+def test_serve_stops_the_sweeper_then_the_worker_then_the_runner(monkeypatch):
+    events = []
+
+    class FakeServer:
+        def __init__(self, config):
+            pass
+
+        def run(self, sockets=None):
+            events.append("run")
+
+    class Part:
+        def __init__(self, name):
+            self.name = name
+
+        def stop(self):
+            events.append(self.name)
+
+        def shutdown(self, timeout=10.0):
+            events.append(self.name)
+
+    monkeypatch.setattr(uvicorn, "Server", FakeServer)
+    monkeypatch.setattr(server.atexit, "register", lambda fn: None)
+    monkeypatch.setattr(server.atexit, "unregister", lambda fn: None)
+    app = FastAPI()
+    app.state.sweeper, app.state.worker, app.state.scans = Part("sweeper"), Part("worker"), Part("runner")
+    server.serve(app, object())  # type: ignore[arg-type]
+    assert events == ["run", "sweeper", "worker", "runner"]

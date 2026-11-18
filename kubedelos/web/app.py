@@ -1,9 +1,11 @@
-"""The FastAPI application behind ``kubedelos ui``.
+"""The FastAPI applications behind ``kubedelos ui`` and ``kubedelos serve``.
 
-``create_app`` wires the security middleware, the templates, the static files and the page routers. The helpers the
-pages and the security middleware share (``open_db``, ``render``) live in ``kubedelos.web.pages``, so that this module
-can import the routes at the top level without an import cycle. The app owns one ``ScanRunner`` for the scans page;
-``server.serve`` shuts it down when the server stops.
+``create_app`` (the laptop UI) and ``create_serve_app`` (the in-cluster, view-only UI) share ``_build``, which wires the
+templates, the static files, the exception handlers and the page routers; each then adds its own security middleware.
+The helpers the pages and the security middleware share (``open_db``, ``render``) live in ``kubedelos.web.pages``, so
+that this module can import the routes at the top level without an import cycle. The laptop app owns one
+``ScanRunner`` for the scans page; the serve app is handed its runner, queue worker and sweeper already built, since
+the worker, not a route, starts every scan there. ``server.serve`` stops them when the server stops.
 """
 
 import contextlib
@@ -25,11 +27,25 @@ from fastapi.templating import Jinja2Templates
 from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stale
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
+from kubedelos.scheduler import Sweeper
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import UnknownContext, open_db, plural, render, shown_context
-from kubedelos.web.routes import about, accepted, dashboard, diff, failed, findings, namespaces, reports, scans, times
+from kubedelos.web.routes import (
+    about,
+    accepted,
+    dashboard,
+    diff,
+    failed,
+    findings,
+    health,
+    namespaces,
+    reports,
+    scans,
+    times,
+)
 from kubedelos.web.routes import settings as settings_page
-from kubedelos.web.security import Guard, install
+from kubedelos.web.security import Guard, install, install_serve
+from kubedelos.web.worker import QueueWorker
 
 _HERE = Path(__file__).parent
 
@@ -66,14 +82,10 @@ def static_url(name: str) -> str:
 _STATIC_VERSIONS: dict[str, str] = {}
 
 
-def _templates(guard: Guard) -> Jinja2Templates:
+def _templates(csrf_token: Callable[[Request], str], *, serve: bool) -> Jinja2Templates:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_HERE / "templates"), autoescape=True)
-
-    def csrf_token(request: Request) -> str:
-        sid = request.cookies.get(guard.cookie_name)
-        return guard.csrf_token(sid) if guard.valid_session(sid) else ""
-
     env.globals["csrf_token"] = csrf_token
+    env.globals["serve"] = serve
     env.filters["safe_url"] = safe_url
     env.filters["plural"] = plural
     env.globals.update(
@@ -87,29 +99,25 @@ def _templates(guard: Guard) -> Jinja2Templates:
     return Jinja2Templates(env=env)
 
 
-def create_app(
+def _build(
     settings: Settings,
     *,
     context: str,
-    token: str,
-    port: int,
-    clock: Callable[[], datetime] = _utcnow,
-    list_contexts: Callable[[], list[str]] | None = None,
+    list_contexts: Callable[[], list[str]],
+    clock: Callable[[], datetime],
+    csrf_token: Callable[[Request], str],
+    serve: bool,
     flags: frozenset[str] = frozenset(),
 ) -> FastAPI:
-    """Build the UI. ``context`` is the one shown by default, ``token`` the startup secret, ``port`` what the Host
-    check expects, ``list_contexts`` lists the kubeconfig's contexts (read on each page), and ``flags`` names the
-    settings given as flags to ``kubedelos ui`` (for the Settings page)."""
+    """The app both UIs share: state, templates, static files, exception handlers and routers, without middleware."""
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
-    guard = Guard(token, port)
     app.state.settings = settings
     app.state.context = context
     app.state.flags = flags
-    app.state.list_contexts = list_contexts or (lambda: kube_client.list_contexts(settings))
+    app.state.list_contexts = list_contexts
     app.state.clock = clock
-    app.state.guard = guard
-    app.state.templates = _templates(guard)
-    app.state.scans = ScanRunner(settings, context, clock=clock)
+    app.state.serve = serve
+    app.state.templates = _templates(csrf_token, serve=serve)
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
     @app.exception_handler(RequestValidationError)
@@ -139,5 +147,66 @@ def create_app(
     app.include_router(scans.router)
     app.include_router(settings_page.router)
     app.include_router(about.router)
+    app.include_router(health.router)
+    return app
+
+
+def create_app(
+    settings: Settings,
+    *,
+    context: str,
+    token: str,
+    port: int,
+    clock: Callable[[], datetime] = _utcnow,
+    list_contexts: Callable[[], list[str]] | None = None,
+    flags: frozenset[str] = frozenset(),
+) -> FastAPI:
+    """Build the UI. ``context`` is the one shown by default, ``token`` the startup secret, ``port`` what the Host
+    check expects, ``list_contexts`` lists the kubeconfig's contexts (read on each page), and ``flags`` names the
+    settings given as flags to ``kubedelos ui`` (for the Settings page)."""
+    guard = Guard(token, port)
+
+    def csrf_token(request: Request) -> str:
+        sid = request.cookies.get(guard.cookie_name)
+        return guard.csrf_token(sid) if guard.valid_session(sid) else ""
+
+    app = _build(
+        settings,
+        context=context,
+        list_contexts=list_contexts or (lambda: kube_client.list_contexts(settings)),
+        clock=clock,
+        csrf_token=csrf_token,
+        serve=False,
+        flags=flags,
+    )
+    app.state.guard = guard
+    app.state.scans = ScanRunner(settings, context, clock=clock)
     install(app, guard)
+    return app
+
+
+def create_serve_app(
+    settings: Settings,
+    *,
+    runner: ScanRunner,
+    worker: QueueWorker,
+    sweeper: Sweeper,
+    clock: Callable[[], datetime] = _utcnow,
+) -> FastAPI:
+    """Build the view-only UI of ``kubedelos serve``. Its one context is ``settings.cluster_name``; ``runner`` (built
+    with ``fixed_cluster=True``) runs what ``worker`` takes off the queue, and ``sweeper`` queues the scheduled sweeps.
+    Every non-GET request is refused, so no form posts and the CSRF token is empty."""
+    name = settings.cluster_name or ""
+    app = _build(
+        settings,
+        context=name,
+        list_contexts=lambda: [name],
+        clock=clock,
+        csrf_token=lambda request: "",
+        serve=True,
+    )
+    app.state.scans = runner
+    app.state.worker = worker
+    app.state.sweeper = sweeper
+    install_serve(app, settings.allowed_hosts)
     return app

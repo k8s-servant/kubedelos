@@ -12,6 +12,11 @@ the scan it closes the stale ``running`` rows no live process owns, through ``op
 connection these routes open. ``GET /scans/progress`` serves the progress readout alone, for polling; once the scan
 has ended it tells htmx to reload the page, so the history shows the finished run.
 ``POST /scans/cancel`` asks the running scan to stop.
+
+In ``kubedelos serve`` the page is view-only: the serve middleware refuses every POST before it reaches these routes,
+so the queue worker is the only thing that starts a scan. The page drops the start form and instead shows the queue
+(the requests waiting for the worker) and when the next scheduled sweep fires, and the history says who asked for
+each run.
 """
 
 import re
@@ -25,9 +30,9 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from kubedelos.analytics import describe_pkg_types
+from kubedelos.analytics import ago, describe_pkg_types
 from kubedelos.config import Settings
-from kubedelos.store import runlock
+from kubedelos.store import queue, runlock
 from kubedelos.store.queries import RESULT_STATUSES, HistoryRow, newest_run, run_failures, run_history, run_number
 from kubedelos.web.jobs import ScanBusy
 from kubedelos.web.pages import (
@@ -72,6 +77,7 @@ PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scannin
 _MAX_FORM_FIELDS = 100
 _MAX_BODY = 64 * 1024
 UNREADABLE = "the form could not be read"
+NO_REQUESTER = "\N{EN DASH}"  # a history run nobody is recorded as asking for: a laptop run, or one from before serve
 
 
 def duration_text(started_at: datetime, finished_at: datetime | None) -> str:
@@ -108,7 +114,30 @@ def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> 
         "retry_href": link(request, f"/scans/{run.id}/failed") + "#retry" if run.id == retryable_id else None,
         "duration": duration_text(run.started_at, run.finished_at),
         "times_href": link(request, f"/scans/{run.id}/times") if run.status != "running" else None,
+        "by": requester(run.requested_by, run.trigger) or NO_REQUESTER,
     }
+
+
+def requester(requested_by: str | None, trigger: str | None) -> str | None:
+    """Who asked for a run or request: the signed-in user, else ``schedule`` for a sweep, else None."""
+    return requested_by or ("schedule" if trigger == "schedule" else None)
+
+
+def _queue(conn: sqlite3.Connection, now: datetime) -> list[dict]:
+    """The queue card's rows: the requests waiting for the worker, oldest first."""
+    return [
+        {
+            "trigger": r.trigger,
+            "by": requester(r.requested_by, r.trigger) or NO_REQUESTER,
+            "requested": ago(datetime.fromisoformat(r.requested_at), now),
+        }
+        for r in queue.queued(conn)
+    ]
+
+
+def next_sweep_text(when: datetime | None) -> str:
+    """When the next scheduled sweep fires, in the sweep's time zone, or "sweeps are off"."""
+    return when.strftime("%Y-%m-%d %H:%M %Z") if when is not None else "sweeps are off"
 
 
 def _form(request: Request, sent: dict | None = None) -> dict:
@@ -214,17 +243,22 @@ def _page(
     context: str | None = None,
 ) -> HTMLResponse:
     """The scans page of ``context``, from a POST's form, or else of the context the query string names."""
+    now = request.app.state.clock()
+    serve = request.app.state.serve
     with open_db(request) as conn:
         context = shown_context(request, conn, context)
         history, total = run_history(conn, context, page, PER_PAGE)
         run = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
         job = _job(request, conn)
+        waiting = _queue(conn, now) if serve else []
     retryable_id = run.id if run is not None and run.status == "partial" else None
     last_page = max(1, ceil(total / PER_PAGE))
     first = (page - 1) * PER_PAGE + 1
     ctx = {
-        "now": request.app.state.clock(),
+        "now": now,
         "run": run,
+        "queue": waiting,
+        "next_sweep": next_sweep_text(request.app.state.sweeper.next_run()) if serve else None,
         "form": _form(request, sent),
         "form_error": error,
         "pkg_choices": PKG_TYPES,

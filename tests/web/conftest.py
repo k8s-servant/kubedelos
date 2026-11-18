@@ -1,4 +1,5 @@
-"""Shared fixtures for the web UI tests: a migrated database, a seeding Repo and a logged-in TestClient."""
+"""Shared fixtures for the web UI tests: a migrated database, a seeding Repo, a logged-in TestClient and a client of
+the view-only ``kubedelos serve`` app (with fakes for its queue worker and sweeper)."""
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -9,12 +10,15 @@ from fastapi.testclient import TestClient
 from kubedelos.config import Settings
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
-from kubedelos.web.app import create_app
+from kubedelos.web.app import create_app, create_serve_app
+from kubedelos.web.jobs import ScanRunner
 
 TOKEN = "startup-token-for-tests"  # distinctive, so the access-log test can search for it
 PORT = 9370
 BASE_URL = f"http://127.0.0.1:{PORT}"
 CONTEXT = "my-cluster"
+SERVE_HOST = "example.com"
+NEXT_SWEEP = datetime(2026, 1, 2, 3, 0, tzinfo=UTC)
 
 
 class Clock:
@@ -87,4 +91,57 @@ def client(app):
     with TestClient(app, base_url=BASE_URL) as client:
         response = client.get(f"/?token={TOKEN}", follow_redirects=False)
         assert response.status_code == 303
+        yield client
+
+
+class FakeWorker:
+    """The queue worker as the serve app sees it: only whether its thread is alive."""
+
+    def __init__(self) -> None:
+        self.running = True
+
+    def alive(self) -> bool:
+        return self.running
+
+
+class FakeSweeper:
+    """The sweep scheduler as the serve app sees it: the next fire time (None with sweeps off) and stop."""
+
+    def __init__(self) -> None:
+        self.next = NEXT_SWEEP
+
+    def next_run(self) -> datetime | None:
+        return self.next
+
+    def stop(self) -> None:
+        pass
+
+
+@pytest.fixture
+def worker():
+    return FakeWorker()
+
+
+@pytest.fixture
+def sweeper():
+    return FakeSweeper()
+
+
+def build_serve_app(seed, worker, sweeper, allowed_hosts=(SERVE_HOST,)):
+    """The serve app over the seed's database, storing runs under ``my-cluster`` and answering ``allowed_hosts``."""
+    connect(seed.settings.db_path).close()  # create and migrate first, as `kubedelos serve` does at startup
+    settings = Settings(data_dir=seed.settings.data_dir, cluster_name=CONTEXT, allowed_hosts=list(allowed_hosts))
+    runner = ScanRunner(settings, CONTEXT, clock=seed.clock, fixed_cluster=True)
+    return create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=seed.clock)
+
+
+@pytest.fixture
+def serve_app(seed, worker, sweeper):
+    return build_serve_app(seed, worker, sweeper)
+
+
+@pytest.fixture
+def serve_client(serve_app):
+    """A client of the view-only serve app; it needs no session, only an allowed Host."""
+    with TestClient(serve_app, base_url=f"http://{SERVE_HOST}") as client:
         yield client

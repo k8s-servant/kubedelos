@@ -257,6 +257,24 @@ def test_service_uses_scan_level_for_cache(env, monkeypatch):
     assert repo.get_run(second.run_id)["pkg_types"] == "library,os"
 
 
+def test_run_scan_stores_the_cluster_name(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = _api()
+    monkeypatch.setattr(api, "current_context", lambda: "kind-x")
+    named = service.run_scan(settings.model_copy(update={"cluster_name": "my-cluster"}), api=api, repo=repo)
+    assert repo.get_run(named.run_id)["context"] == "my-cluster"
+    plain = service.run_scan(settings, api=api, repo=repo)
+    assert repo.get_run(plain.run_id)["context"] == "kind-x"
+
+
+def test_run_scan_stores_the_requester(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, requested_by="a@example.com")
+    assert repo.get_run(out.run_id)["requested_by"] == "a@example.com"
+
+
 def test_service_records_scope(env, monkeypatch):
     import json
 

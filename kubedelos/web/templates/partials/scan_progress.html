@@ -59,7 +59,7 @@
   {%- if job.href %}
     <p><a href="{{ job.href }}">see results</a>{% if job.run_number %} of run {{ job.run_number }}{% endif %}</p>
   {%- endif %}
-  {%- if job.cancellable %}
+  {%- if job.cancellable and not serve %}
     <form method="post" action="/scans/cancel">
       <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
       {%- if context_param %}<input type="hidden" name="context" value="{{ context_param }}">{% endif %}

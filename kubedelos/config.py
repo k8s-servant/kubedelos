@@ -7,6 +7,7 @@ import json
 from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import platformdirs
 from pydantic import Field, field_validator
@@ -22,6 +23,14 @@ def _default_cache_dir() -> Path:
 
 def _default_data_dir() -> Path:
     return Path(platformdirs.user_data_dir(APP_NAME))
+
+
+def host_name(host: str) -> str:
+    """The hostname of a Host header value: its port dropped, an IPv6 literal's brackets stripped, lowercased."""
+    if host.startswith("["):
+        name, closed, _ = host[1:].partition("]")
+        return name.lower() if closed else ""
+    return host.partition(":")[0].lower()
 
 
 class Settings(BaseSettings):
@@ -44,6 +53,43 @@ class Settings(BaseSettings):
     team_label: str = "kubedelos.io/team"
     # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.
     pkg_types: Annotated[tuple[str, ...], NoDecode] = ("library", "os")
+
+    cluster_name: str | None = None  # the name runs are stored under, instead of the kube context (set by serve)
+    sweep_schedule: str = "0 3 * * *"  # cron expression of the scheduled sweep
+    sweep_timezone: str = "UTC"
+    sweep_enabled: bool = True
+    retention_days: int = Field(default=180, ge=0)
+    allowed_hosts: Annotated[list[str], NoDecode] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
+
+    @field_validator("sweep_timezone")
+    @classmethod
+    def _known_time_zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown time zone {value!r}") from exc
+        return value
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _split_allowed_hosts(cls, value: Any) -> Any:
+        """Accept a JSON list or a comma-separated string (``a.example.com,b.example.com``, as a Helm chart sets it)."""
+        if not isinstance(value, str):
+            return value
+        if value.lstrip().startswith("["):
+            try:
+                return json.loads(value)
+            except ValueError:
+                pass  # "[::1],a.example.com" is a comma list that starts with an IPv6 literal
+        return [item.strip() for item in value.split(",") if item.strip()]
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _normalise_allowed_hosts(cls, value: list[str]) -> list[str]:
+        """Lowercase each host and drop its port and the brackets of an IPv6 literal, as a Host header is compared."""
+        hosts = [host.strip() for host in value]
+        # A bare IPv6 literal (``::1``) has no port to drop; host_name would read it as an empty host.
+        return [host.lower() if host.count(":") > 1 and "[" not in host else host_name(host) for host in hosts]
 
     @field_validator("namespace_selector", "selector", mode="before")
     @classmethod
