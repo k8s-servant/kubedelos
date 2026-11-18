@@ -151,3 +151,11 @@ def test_allowed_hosts_from_env_comma_list(monkeypatch):
     assert Settings().allowed_hosts == ["example.com", "::1"]
     monkeypatch.setenv("KUBEDELOS_ALLOWED_HOSTS", "[::1],a.example.com,")
     assert Settings().allowed_hosts == ["::1", "a.example.com"]
+
+
+def test_allowed_hosts_drop_a_port():
+    assert Settings(allowed_hosts=["Example.com:8080", "[::1]:8080", "::1"]).allowed_hosts == [
+        "example.com",
+        "::1",
+        "::1",
+    ]

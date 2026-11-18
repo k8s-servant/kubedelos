@@ -25,6 +25,14 @@ def _default_data_dir() -> Path:
     return Path(platformdirs.user_data_dir(APP_NAME))
 
 
+def host_name(host: str) -> str:
+    """The hostname of a Host header value: its port dropped, an IPv6 literal's brackets stripped, lowercased."""
+    if host.startswith("["):
+        name, closed, _ = host[1:].partition("]")
+        return name.lower() if closed else ""
+    return host.partition(":")[0].lower()
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="KUBEDELOS_")
 
@@ -78,8 +86,10 @@ class Settings(BaseSettings):
     @field_validator("allowed_hosts")
     @classmethod
     def _normalise_allowed_hosts(cls, value: list[str]) -> list[str]:
-        """Lowercase each host and drop the brackets of an IPv6 literal, as a Host header is compared."""
-        return [host.strip().lower().strip("[]") for host in value]
+        """Lowercase each host and drop its port and the brackets of an IPv6 literal, as a Host header is compared."""
+        hosts = [host.strip() for host in value]
+        # A bare IPv6 literal (``::1``) has no port to drop; host_name would read it as an empty host.
+        return [host.lower() if host.count(":") > 1 and "[" not in host else host_name(host) for host in hosts]
 
     @field_validator("namespace_selector", "selector", mode="before")
     @classmethod

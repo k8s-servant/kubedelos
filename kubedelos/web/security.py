@@ -22,6 +22,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 from fastapi import FastAPI, Request, Response
 from fastapi.responses import PlainTextResponse, RedirectResponse
 
+from kubedelos.config import host_name
 from kubedelos.web.pages import render
 
 CSRF_HEADER = "x-csrf-token"
@@ -174,14 +175,6 @@ def install(app: FastAPI, guard: Guard) -> None:
         # The path only: the query may hold the startup token. Percent-encoded, so it cannot forge log lines.
         logger.info("%s %s %d", request.method, _raw_path(request), response.status_code)
         return response
-
-
-def host_name(host: str) -> str:
-    """The hostname of a Host header value: its port dropped, an IPv6 literal's brackets stripped, lowercased."""
-    if host.startswith("["):
-        name, closed, _ = host[1:].partition("]")
-        return name.lower() if closed else ""
-    return host.partition(":")[0].lower()
 
 
 def _view_only(request: Request) -> Response:

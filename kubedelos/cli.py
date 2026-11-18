@@ -304,10 +304,13 @@ def _serve(settings: Settings, host: str, port: int) -> None:
     runner = ScanRunner(settings, name, fixed_cluster=True)
     worker = QueueWorker(settings, runner, clock=clock)
     sweeper = Sweeper(settings, worker.enqueue_sweep)
+    web_app = create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=clock)
+    shown = f"[{host}]" if ":" in host else host
+    typer.echo(f"kubedelos serve for cluster {_one_line(name)} on http://{shown}:{port}")
+    # Start the threads last, so a failure building the app leaves nothing running that could start a scan.
     worker.start()
     sweeper.start()
-    typer.echo(f"kubedelos serve for cluster {_one_line(name)} on http://{host}:{port}")
     next_sweep = sweeper.next_run()
     typer.echo(f"next sweep: {next_sweep.isoformat()}" if next_sweep else "sweeps are off")
     typer.echo("Press Ctrl-C to stop.")
-    server.serve(create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=clock), sock)
+    server.serve(web_app, sock)

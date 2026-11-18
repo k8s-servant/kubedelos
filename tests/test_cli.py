@@ -478,6 +478,24 @@ def test_serve_prints_address_and_next_sweep(serve_env):
     assert {"runner", "worker", "sweeper"} <= serve_env["app"].keys()
 
 
+def test_serve_brackets_an_ipv6_host_in_the_address(serve_env):
+    r = CliRunner().invoke(app, ["serve", "--host", "::", "--port", "9444"])
+    assert r.exit_code == 0, r.output
+    assert "on http://[::]:9444\n" in r.stdout
+
+
+def test_serve_starts_nothing_when_the_app_cannot_be_built(serve_env, monkeypatch):
+    from kubedelos import cli
+
+    def boom(settings, **kwargs):
+        raise RuntimeError("no app")
+
+    monkeypatch.setattr(cli, "create_serve_app", boom)
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code != 0
+    assert serve_env["started"] == []
+
+
 def test_serve_says_when_sweeps_are_off(serve_env, monkeypatch):
     monkeypatch.setenv("KUBEDELOS_SWEEP_ENABLED", "false")
     r = CliRunner().invoke(app, ["serve"])
