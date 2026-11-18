@@ -121,7 +121,7 @@ def test_pull_secrets_from_two_namespaces():
     assert list(pulls.auths_for([("web", "a"), ("ops", "b")], "one.example.com")) == ["one.example.com"]
 
 
-def test_server_error_and_transport_error_are_skipped_not_cached(caplog):
+def test_server_error_and_transport_error_are_skipped_and_cached_for_the_run(caplog):
     api = FakeKubeApi(
         secrets={("web", "ok"): _docker("web", "ok")},
         secret_status={("web", "busy"): 500, ("web", "slow"): 429},
@@ -137,7 +137,9 @@ def test_server_error_and_transport_error_are_skipped_not_cached(caplog):
     assert "HTTP 500" in caplog.text and "ReadTimeoutError" in caplog.text
     api.secrets[("web", "busy")] = _docker("web", "busy", "other.example.com")
     api.secret_status.clear()
-    assert list(pulls.auths_for([("web", "busy")], "other.example.com")) == ["other.example.com"]  # retried
+    assert pulls.auths_for([("web", "busy")], "other.example.com") == {}  # the failure stands for the rest of the run
+    again = PullSecrets(api, ["web"])  # a retry builds a new instance, so it gets another chance
+    assert list(again.auths_for([("web", "busy")], "other.example.com")) == ["other.example.com"]
 
 
 def test_plain_os_error_is_skipped():
@@ -166,3 +168,38 @@ def test_concurrent_workers_read_a_secret_once():
         t.join()
     assert api.secret_reads == [("web", "regcred")]
     assert len(got) == 2 and got[0] == got[1] != {}
+
+
+def test_failed_read_is_made_once_per_run():
+    api = FakeKubeApi(secret_errors={("web", "down"): ReadTimeoutError(None, "https://api.example.com", "timed out")})
+    pulls = PullSecrets(api, ["web"])
+    assert pulls.auths_for([("web", "down")], "one.example.com") == {}
+    assert pulls.auths_for([("web", "down")], "two.example.com") == {}
+    assert api.secret_reads == [("web", "down")]
+
+
+def test_a_slow_read_does_not_block_another_secret():
+    api = FakeKubeApi(secrets={("web", "a"): _docker("web", "a"), ("web", "b"): _docker("web", "b")})
+    real = api.read_secret
+    a_started, release_a = threading.Event(), threading.Event()
+
+    def gated(ns, name):
+        if name == "a":
+            a_started.set()
+            assert release_a.wait(5)
+        return real(ns, name)
+
+    api.read_secret = gated
+    pulls = PullSecrets(api, ["web"])
+    slow = threading.Thread(target=lambda: pulls.auths_for([("web", "a")], "registry.example.com"))
+    slow.start()
+    try:
+        assert a_started.wait(5)
+        done = []
+        fast = threading.Thread(target=lambda: done.append(pulls.auths_for([("web", "b")], "registry.example.com")))
+        fast.start()
+        fast.join(2)
+        assert done and done[0] != {}  # b came back while a was still being read
+    finally:
+        release_a.set()
+        slow.join(5)
