@@ -360,7 +360,7 @@ def test_ingress_and_allowed_hosts(render):
     assert rule["http"]["paths"] == [
         {"path": "/", "pathType": "Prefix", "backend": {"service": {"name": service, "port": {"number": 80}}}}
     ]
-    assert "kubedelos.example.com" in allowed_hosts(docs)
+    assert {"kubedelos.example.com"} <= set(allowed_hosts(docs))
 
 
 def test_ingress_and_httproute_are_off_by_default(render):
@@ -482,6 +482,11 @@ def test_allowed_hosts_include_localhost_for_port_forward(render):
 def test_notes_show_port_forward(notes):
     assert "kubectl port-forward svc/t-kubedelos 8080:80 -n kd" in notes()
     assert "http://localhost:8080" in notes()
+
+
+def test_notes_warn_about_safari_only_with_secure_cookies(notes):
+    assert "Safari drops Secure cookies" in notes()
+    assert "Safari" not in notes({"secureCookies": False})
 
 
 @pytest.mark.parametrize(

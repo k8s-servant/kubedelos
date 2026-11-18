@@ -5,6 +5,10 @@ kubedelos serve is installed as {{ $name }} in the {{ .Release.Namespace }} name
 Its UI is the Service {{ $name }}.{{ .Release.Namespace }}.svc, port 80.
 To reach it from your machine, run kubectl port-forward svc/{{ $name }} 8080:80 -n {{ .Release.Namespace }}
 and open http://localhost:8080. The NetworkPolicy does not block port-forward.
+{{- if .Values.secureCookies }}
+Safari drops Secure cookies on http://localhost, so forms there fail as expired; use another browser, or set
+secureCookies=false if you only reach the UI over plain HTTP.
+{{- end }}
 {{- if and .Values.networkPolicy.enabled (empty .Values.networkPolicy.ingressFrom) }}
 
 The NetworkPolicy admits no traffic yet. Name your proxy, gateway or Ingress controller in networkPolicy.ingressFrom.
