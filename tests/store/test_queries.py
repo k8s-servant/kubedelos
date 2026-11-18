@@ -950,6 +950,8 @@ def test_findings_export_has_every_row_of_the_view_in_its_order(db):
 def test_run_registry_hosts_lists_each_host_once(db):
     conn, repo = db
     run_id = _run(repo)
-    for ref in ("reg.example.com/a:1", "reg.example.com/b:1", "other.example.com/c:1"):
-        _add(repo, run_id, ref, "linux/amd64")
-    assert run_registry_hosts(conn, run_id) == {"reg.example.com", "other.example.com"}
+    for name, host in (("a", "reg.example.com"), ("b", "reg.example.com"), ("c", "other.example.com:5000")):
+        image = ImageRef(ref=f"{host}/{name}:1", repo=f"{host}/{name}", tag="1", digest=None)
+        item = InventoryItem(image=image, platform="linux/amd64")
+        repo.add_result(run_id, item, ImageResult(image=image, platform="linux/amd64", status="ok"))
+    assert run_registry_hosts(conn, run_id) == {"reg.example.com", "other.example.com:5000"}
