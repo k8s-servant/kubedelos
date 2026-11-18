@@ -26,3 +26,13 @@ updates:
       actions:
         patterns: ["*"]
     labels: ["dependencies", "area/ci"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies"]
