@@ -214,10 +214,17 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
 
     items: dict[tuple[str, str], InventoryItem] = {}
 
-    def add(image: ImageRef, platform: str, workload: Workload) -> None:
+    pull_namespaces = set(settings.pod_pull_secret_namespaces)
+
+    def add(image: ImageRef, platform: str, workload: Workload, pull_secrets: list[str] | None = None) -> None:
         item = items.setdefault((image.key, platform), InventoryItem(image=image, platform=platform))
         if workload not in item.workloads:
             item.workloads.append(workload)
+        if workload.namespace in pull_namespaces:
+            for secret_name in pull_secrets or []:
+                ref = (workload.namespace, secret_name)
+                if ref not in item.pull_secrets:
+                    item.pull_secrets.append(ref)
 
     for ns in namespaces:
         name = ns.metadata.name
@@ -243,6 +250,7 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
                     image,
                     platform,
                     Workload(namespace=name, kind=kind, name=workload_name, container=c.name, owner=owner, team=team),
+                    _pull_secret_names(pod.spec),
                 )
 
         templates = [("Deployment", d) for d in deployments if d.spec and d.spec.replicas == 0]
@@ -260,10 +268,17 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
     return kept, warnings
 
 
+def _pull_secret_names(spec) -> list[str]:
+    """The names in a pod spec's ``imagePullSecrets``; the Secrets themselves are not read here."""
+    return [ref.name for ref in (spec.image_pull_secrets if spec else None) or [] if ref.name]
+
+
 def _add_template(add, ns: str, kind: str, name: str, pod_spec, owner, team, platform: str) -> None:
+    pull_secrets = _pull_secret_names(pod_spec)
     for c in _spec_containers(pod_spec):
         add(
             parse_image_id(c.image, ""),
             platform,
             Workload(namespace=ns, kind=kind, name=name, container=c.name, owner=owner, team=team),
+            pull_secrets,
         )

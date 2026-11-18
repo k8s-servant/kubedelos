@@ -386,3 +386,40 @@ def test_parse_image_id_drops_a_malformed_or_superseded_image_id():
     assert parse_image_id("nginx:1", "sha256:abc").image_id is None
     digest = "sha256:" + "d" * 64
     assert parse_image_id(f"nginx@{digest}", "sha256:" + "e" * 64).image_id is None  # the spec digest wins
+
+
+def test_inventory_records_pull_secret_names_in_listed_namespaces(tmp_path):
+    api = FakeKubeApi(
+        namespaces=[namespace("web"), namespace("jobs")],
+        pods={
+            "web": [
+                pod("p1", "web", pull_secrets=["regcred", "other"]),
+                pod("p2", "web", pull_secrets=["regcred"]),
+            ],
+            "jobs": [pod("p3", "jobs", image="redis:7", pull_secrets=["jobcred"])],
+        },
+    )
+    items, _ = collect(api, Settings(pod_pull_secret_namespaces=["web"], secrets_dir=tmp_path))
+    by_image = {item.image.repo: item for item in items}
+    assert by_image["docker.io/library/nginx"].pull_secrets == [("web", "regcred"), ("web", "other")]
+    assert by_image["docker.io/library/redis"].pull_secrets == []
+    assert api.secret_reads == []  # collect only reads the names
+
+
+def test_pull_secrets_off_by_default():
+    api = FakeKubeApi(namespaces=[namespace("web")], pods={"web": [pod("p1", "web", pull_secrets=["regcred"])]})
+    items, _ = collect(api, Settings())
+    assert items[0].pull_secrets == []
+
+
+def test_templates_carry_pull_secrets_in_listed_namespaces(tmp_path):
+    api = FakeKubeApi(
+        namespaces=[namespace("web")],
+        deployments={"web": [deployment("idle", "web", "reg.example.com/idle:1", 0, pull_secrets=["regcred"])]},
+        cronjobs={"web": [cronjob("nightly", "web", "reg.example.com/nightly:1", pull_secrets=["cron-cred"])]},
+    )
+    items, _ = collect(api, Settings(pod_pull_secret_namespaces=["web"], secrets_dir=tmp_path))
+    assert {i.image.repo: i.pull_secrets for i in items} == {
+        "reg.example.com/idle": [("web", "regcred")],
+        "reg.example.com/nightly": [("web", "cron-cred")],
+    }

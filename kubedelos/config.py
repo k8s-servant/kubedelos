@@ -67,6 +67,9 @@ class Settings(BaseSettings):
     identity_header: str = "X-Auth-Request-Email"  # set by the sign-in proxy in front of serve
     secrets_dir: Path | None = None  # serve only: a private directory for the per-scan docker configs
     docker_configs: Annotated[list[Path], NoDecode] = []  # mounted docker config.json files with registry credentials
+    # Namespaces whose pods' imagePullSecrets kubedelos may read (names only here, contents at scan time). Namespace
+    # names, not secret values.
+    pod_pull_secret_namespaces: Annotated[list[str], NoDecode] = []
 
     @field_validator("sweep_timezone")
     @classmethod
@@ -87,11 +90,11 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _credentials_need_secrets_dir(self) -> Self:
-        if self.docker_configs and self.secrets_dir is None:
+        if (self.docker_configs or self.pod_pull_secret_namespaces) and self.secrets_dir is None:
             raise ValueError("KUBEDELOS_SECRETS_DIR is required for registry credentials")
         return self
 
-    @field_validator("allowed_hosts", "docker_configs", mode="before")
+    @field_validator("allowed_hosts", "docker_configs", "pod_pull_secret_namespaces", mode="before")
     @classmethod
     def _split_list(cls, value: Any) -> Any:
         """Accept a JSON list or a comma-separated string (``a.example.com,b.example.com``, as a Helm chart sets it)."""

@@ -171,6 +171,11 @@ MIGRATIONS: list[str] = [
     );
     CREATE INDEX idx_scan_request_state ON scan_request(state, id);
     """,
+    # 11: the (namespace, name) of the pull secrets a failed image's pods named, as JSON (NULL when none), so a retry
+    # can read them again. Names only; contents are read from the cluster at scan time and never stored.
+    """
+    ALTER TABLE image_result ADD COLUMN pull_secrets TEXT;
+    """,
 ]
 
 

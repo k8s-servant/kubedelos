@@ -94,9 +94,9 @@ def test_setting_sources_name_the_flag_the_environment_or_the_default():
 
 def test_no_setting_is_named_like_a_secret():
     # The Settings page lists every field; a credential must never become one.
-    # secrets_dir is only the path of a directory, not a value.
+    # secrets_dir is only the path of a directory and pod_pull_secret_namespaces a list of namespace names, not values.
     names = [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
-    assert names == ["secrets_dir"]
+    assert names == ["secrets_dir", "pod_pull_secret_namespaces"]
 
 
 def test_scope_ignores_repeated_values():
@@ -199,3 +199,14 @@ def test_docker_configs_from_env_comma_or_json(monkeypatch, tmp_path):
     assert Settings().docker_configs == [Path("/a/one.json"), Path("/b/two.json")]
     monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", '["/a/one.json"]')
     assert Settings().docker_configs == [Path("/a/one.json")]
+
+
+def test_pod_pull_secret_namespaces_default_env_and_secrets_dir(monkeypatch, tmp_path):
+    assert Settings().pod_pull_secret_namespaces == []
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
+        Settings(pod_pull_secret_namespaces=["web"])
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", "web, ops")
+    assert Settings().pod_pull_secret_namespaces == ["web", "ops"]
+    monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", '["web"]')
+    assert Settings().pod_pull_secret_namespaces == ["web"]

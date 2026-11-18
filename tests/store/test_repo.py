@@ -567,7 +567,7 @@ def test_start_run_stores_requested_by(tmp_path):
 def test_migration_10_adds_scan_request(tmp_path):
     conn = connect(tmp_path / "k.db")
     _OPEN.append(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     columns = [row["name"] for row in conn.execute("PRAGMA table_info(scan_request)")]
     assert columns == [
         "id", "kind", "trigger", "requested_by", "requested_at", "target_run_id", "overrides", "state", "run_id",
@@ -578,3 +578,38 @@ def test_migration_10_adds_scan_request(tmp_path):
     conn.execute(insert, ("queued",))
     with pytest.raises(sqlite3.IntegrityError):
         conn.execute(insert, ("done",))
+
+
+def test_failed_items_keep_pull_secret_names(tmp_path):
+    repo = _repo(tmp_path)
+    run = repo.start_run("a", "ui", "0.76.1", scan_level="os")
+    with_refs, without = _item("reg.io/app:2", digest=None), _item("reg.io/app:3", digest=None)
+    with_refs.pull_secrets = [("web", "regcred"), ("ops", "other")]
+    for item in (with_refs, without):
+        repo.add_result(run, item, _result(item, status="error", error_kind="auth", error="UNAUTHORIZED"))
+    stored = repo._conn.execute("SELECT ref, pull_secrets FROM image_result ORDER BY ref").fetchall()
+    assert [tuple(r) for r in stored] == [
+        ("reg.io/app:2", '[["web", "regcred"], ["ops", "other"]]'),
+        ("reg.io/app:3", None),
+    ]
+    assert [item.pull_secrets for _, item in repo.failed_items(run)] == [[("web", "regcred"), ("ops", "other")], []]
+
+
+def test_migration_11_adds_pull_secrets_to_old_results(tmp_path):
+    path = tmp_path / "old.db"
+    old = sqlite3.connect(path)
+    old.executescript(
+        "BEGIN;\n"
+        + "\n".join(f"{m}\nPRAGMA user_version = {i + 1};" for i, m in enumerate(MIGRATIONS[:10]))
+        + "\nCOMMIT;"
+    )
+    old.execute("INSERT INTO scan_run (started_at, status, trigger) VALUES ('2026-11-01T00:00:00+00:00', 'ok', 'cli')")
+    old.execute(
+        "INSERT INTO image_result (run_id, image_key, ref, repo, platform, status) VALUES (1, 'k', 'reg.io/a:1', 'reg.io/a', 'linux/amd64', 'error')"
+    )
+    old.commit()
+    old.close()
+    conn = connect(path)
+    _OPEN.append(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 11
+    assert conn.execute("SELECT pull_secrets FROM image_result").fetchone()[0] is None

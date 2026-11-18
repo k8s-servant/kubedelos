@@ -1,5 +1,7 @@
 """Hand-built Kubernetes objects and an in-memory KubeApi, so tests never touch a cluster."""
 
+import base64
+
 from kubernetes.client import (
     V1Container,
     V1ContainerStatus,
@@ -10,6 +12,7 @@ from kubernetes.client import (
     V1EphemeralContainer,
     V1JobSpec,
     V1JobTemplateSpec,
+    V1LocalObjectReference,
     V1Namespace,
     V1Node,
     V1NodeStatus,
@@ -20,6 +23,7 @@ from kubernetes.client import (
     V1PodSpec,
     V1PodStatus,
     V1PodTemplateSpec,
+    V1Secret,
 )
 from kubernetes.client.rest import ApiException
 
@@ -59,9 +63,12 @@ def pod(
     init: tuple[str, str, str] | None = None,  # (container name, image, imageID)
     ephemeral: tuple[str, str, str] | None = None,
     labels: dict | None = None,
+    pull_secrets: list[str] | None = None,
 ) -> V1Pod:
     refs = [V1OwnerReference(api_version="v1", kind=owner[0], name=owner[1], uid="u")] if owner else None
     spec = V1PodSpec(containers=[V1Container(name=container, image=image)], node_name=node_name)
+    if pull_secrets:
+        spec.image_pull_secrets = [V1LocalObjectReference(name=n) for n in pull_secrets]
     status = V1PodStatus(container_statuses=[_status(container, image, image_id)])
     if init:
         spec.init_containers = [V1Container(name=init[0], image=init[1])]
@@ -82,24 +89,34 @@ def _status(name: str, image: str, image_id: str) -> V1ContainerStatus:
     return V1ContainerStatus(name=name, image=image, image_id=image_id, ready=True, restart_count=0)
 
 
-def _template(image: str, container: str = "app") -> V1PodTemplateSpec:
-    return V1PodTemplateSpec(spec=V1PodSpec(containers=[V1Container(name=container, image=image)]))
-
-
-def deployment(name: str, ns: str, image: str, replicas: int) -> V1Deployment:
-    return V1Deployment(
-        metadata=V1ObjectMeta(name=name, namespace=ns),
-        spec=V1DeploymentSpec(replicas=replicas, selector={}, template=_template(image)),
+def _template(image: str, container: str = "app", pull_secrets: list[str] | None = None) -> V1PodTemplateSpec:
+    refs = [V1LocalObjectReference(name=n) for n in pull_secrets] if pull_secrets else None
+    return V1PodTemplateSpec(
+        spec=V1PodSpec(containers=[V1Container(name=container, image=image)], image_pull_secrets=refs)
     )
 
 
-def cronjob(name: str, ns: str, image: str) -> V1CronJob:
+def deployment(name: str, ns: str, image: str, replicas: int, pull_secrets: list[str] | None = None) -> V1Deployment:
+    return V1Deployment(
+        metadata=V1ObjectMeta(name=name, namespace=ns),
+        spec=V1DeploymentSpec(replicas=replicas, selector={}, template=_template(image, pull_secrets=pull_secrets)),
+    )
+
+
+def cronjob(name: str, ns: str, image: str, pull_secrets: list[str] | None = None) -> V1CronJob:
     return V1CronJob(
         metadata=V1ObjectMeta(name=name, namespace=ns),
         spec=V1CronJobSpec(
-            schedule="* * * * *", job_template=V1JobTemplateSpec(spec=V1JobSpec(template=_template(image)))
+            schedule="* * * * *",
+            job_template=V1JobTemplateSpec(spec=V1JobSpec(template=_template(image, pull_secrets=pull_secrets))),
         ),
     )
+
+
+def secret(name: str, ns: str, data: dict[str, bytes] | None = None, type: str = "kubernetes.io/dockerconfigjson"):
+    """A Secret; ``data`` values are given raw and stored base64, as the client library returns them."""
+    encoded = {k: base64.b64encode(v).decode() for k, v in data.items()} if data is not None else None
+    return V1Secret(metadata=V1ObjectMeta(name=name, namespace=ns), type=type, data=encoded)
 
 
 class FakeKubeApi:
@@ -116,6 +133,8 @@ class FakeKubeApi:
         forbidden_resources: set[tuple[str, str]] | None = None,  # (resource, namespace)
         nodes_forbidden: bool = False,
         bad_request: set[str] | None = None,  # list methods that answer HTTP 400, as for a selector they reject
+        secrets: dict[tuple[str, str], V1Secret] | None = None,  # (namespace, name) -> Secret
+        secret_status: dict[tuple[str, str], int] | None = None,  # (namespace, name) -> HTTP status to answer
     ) -> None:
         self.namespaces = namespaces or []
         self.pods = pods or {}
@@ -128,6 +147,9 @@ class FakeKubeApi:
         self.forbidden_resources = forbidden_resources or set()
         self.nodes_forbidden = nodes_forbidden
         self.bad_request = bad_request or set()
+        self.secrets = secrets or {}
+        self.secret_status = secret_status or {}
+        self.secret_reads: list[tuple[str, str]] = []
         self.selectors: list[tuple[str, str | None]] = []
 
     def _check(self, ns: str, resource: str) -> None:
@@ -171,6 +193,14 @@ class FakeKubeApi:
         if self.nodes_forbidden:
             raise ApiException(status=403, reason="Forbidden")
         return self.nodes
+
+    def read_secret(self, ns, name):
+        self.secret_reads.append((ns, name))
+        if (ns, name) in self.secret_status:
+            raise ApiException(status=self.secret_status[(ns, name)], reason="x")
+        if (ns, name) not in self.secrets:
+            raise ApiException(status=404, reason="Not Found")
+        return self.secrets[(ns, name)]
 
     def current_context(self) -> str:
         return "fake"
