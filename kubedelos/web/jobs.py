@@ -183,7 +183,8 @@ class ScanRunner:
             if target != self._context:
                 raise ValueError(f"this server scans only {self._context}")
             return target, self._settings.model_copy(update={**overrides, "context": self._settings.context})
-        return target, self._settings.model_copy(update={**overrides, "context": target})
+        # A laptop scan stores the kube-context's own name; KUBEDELOS_CLUSTER_NAME names only the one served cluster.
+        return target, self._settings.model_copy(update={**overrides, "context": target, "cluster_name": None})
 
     def _launch(
         self,

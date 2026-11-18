@@ -498,3 +498,26 @@ def test_closed_flips_on_shutdown(settings):
     assert runner.closed is False
     runner.shutdown()
     assert runner.closed is True
+
+
+def test_a_laptop_scan_stores_the_kube_contexts_name_even_with_a_cluster_name_set(tmp_path):
+    named = Settings(cluster_name="my-cluster", data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
+    scan = FakeScan()
+    runner = ScanRunner(named, "kind-other", scan=scan, retry=FakeScan(), clock=lambda: T0)
+    _RUNNERS.append(runner)
+    runner.start({})
+    assert scan.entered.wait(5)
+    assert scan.calls[0]["settings"].cluster_name is None
+    assert scan.calls[0]["settings"].context == "kind-other"
+    runner.shutdown()
+
+
+def test_fixed_cluster_passes_the_cluster_name_through(tmp_path):
+    named = Settings(context=None, cluster_name="my-cluster", data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
+    scan = FakeScan()
+    runner = ScanRunner(named, "my-cluster", fixed_cluster=True, scan=scan, retry=FakeScan(), clock=lambda: T0)
+    _RUNNERS.append(runner)
+    runner.start({})
+    assert scan.entered.wait(5)
+    assert scan.calls[0]["settings"].cluster_name == "my-cluster"
+    runner.shutdown()
