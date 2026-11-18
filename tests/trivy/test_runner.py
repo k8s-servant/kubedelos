@@ -821,9 +821,29 @@ def test_unwritable_secrets_dir_fails_only_that_image(tmp_path, monkeypatch):
     results = {}
     scan_many(
         [private, public], cache_dir=tmp_path / "c", trivy=FAKE_TRIVY, settings=settings,
-        on_result=lambda r: results.__setitem__(r.image.ref, r), cancel=threading.Event(), access=RegistryAccess(settings),
+        on_result=lambda r: results.__setitem__(r.image.ref, r), cancel=threading.Event(),
+        access=RegistryAccess(settings),
     )  # fmt: skip
     assert results["public.example/app:1"].status == "ok"
     failed = results["private.example/app:1"]
     assert (failed.status, failed.error_kind) == ("error", "unknown")
     assert "FileNotFoundError" in failed.error and "YTpi" not in failed.error
+
+
+def test_a_scan_side_error_is_not_labelled_a_credential_failure(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        runner,
+        "scan_image",
+        lambda trivy, image, platform, timeout, **kw: ImageResult(image=image, platform=platform, status="error"),
+    )
+
+    def broken(result):
+        raise RuntimeError("scan-side bug")
+
+    monkeypatch.setattr(runner, "_passing", broken)
+    with pytest.raises(RuntimeError, match="scan-side bug"):
+        scan_many(
+            _items(1), cache_dir=tmp_path / "c", trivy=FAKE_TRIVY,
+            settings=Settings(cache_dir=tmp_path, layer_cache=False), on_result=lambda r: None,
+            cancel=threading.Event(), access=RegistryAccess.none(),
+        )  # fmt: skip

@@ -117,8 +117,9 @@ def retry_failed(
 
     The refs, platforms and workloads come from the database, so the cluster is not read, except for the pull secrets
     of failed images: when ``pod_pull_secret_namespaces`` is set and one of them names any, the Secrets are read
-    again. The run's package types apply; ``settings`` gives the time limit and parallelism. Each new result replaces its failure, and the run is
-    recounted (``ok`` once nothing fails) and noted, also when the retry is cancelled or interrupted.
+    again. The run's package types apply; ``settings`` gives the time limit and parallelism. Each new result replaces
+    its failure, and the run is recounted (``ok`` once nothing fails) and noted, also when the retry is cancelled or
+    interrupted.
     """
     repo = repo if repo is not None else Repo(db.connect(settings.db_path))
     cancel = cancel if cancel is not None else threading.Event()
