@@ -49,6 +49,10 @@ else:
         fcntl.flock(fd, fcntl.LOCK_UN)
 
 
+class AlreadyServing(Exception):
+    """Another ``kubedelos serve`` holds the serve lock of this data directory."""
+
+
 def _lock_path(data_dir: Path, owner: str) -> Path:
     return Path(data_dir) / "runs" / f"{owner}.lock"
 
@@ -77,6 +81,27 @@ def hold(data_dir: Path) -> Iterator[str]:
         os.close(fd)
         with contextlib.suppress(OSError):
             path.unlink(missing_ok=True)  # Windows cannot delete an open file: do it once closed
+
+
+@contextlib.contextmanager
+def hold_serve(data_dir: Path) -> Iterator[None]:
+    """Hold the exclusive ``serve.lock`` of ``data_dir`` for the block, or raise ``AlreadyServing``.
+
+    The file is created if missing and never deleted: the OS drops the lock when the holder dies, and deleting the file
+    could let a second server lock a new file while the first still holds the old one.
+    """
+    data_dir = Path(data_dir)
+    data_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    fd = os.open(data_dir / "serve.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        if not _try_lock(fd):
+            raise AlreadyServing(f"another kubedelos serve uses {data_dir}")
+        try:
+            yield
+        finally:
+            _unlock(fd)
+    finally:
+        os.close(fd)
 
 
 def is_owned(data_dir: Path, owner: str) -> bool:

@@ -139,3 +139,46 @@ def test_lock_held_by_another_process_counts_as_live(tmp_path):
         proc.wait(timeout=10)
     assert (tmp_path / "runs" / f"{owner}.lock").exists()  # killed: its lock file is left behind
     assert _wait(lambda: not runlock.is_owned(tmp_path, owner))  # but nobody holds it
+
+
+def test_second_serve_lock_is_refused(tmp_path):
+    with (
+        runlock.hold_serve(tmp_path),
+        pytest.raises(runlock.AlreadyServing, match="another kubedelos serve uses"),
+        runlock.hold_serve(tmp_path),
+    ):
+        pass
+
+
+def test_serve_lock_is_released_on_exit(tmp_path):
+    with runlock.hold_serve(tmp_path):
+        pass
+    with runlock.hold_serve(tmp_path):
+        pass
+    assert (tmp_path / "serve.lock").exists()  # never deleted
+
+
+_SERVE_HOLDER = """
+import sys, time
+from pathlib import Path
+from kubedelos.store import runlock
+with runlock.hold_serve(Path(sys.argv[1])):
+    Path(sys.argv[2]).write_text('held')
+    time.sleep(60)
+"""
+
+
+def test_serve_lock_held_by_another_process(tmp_path):
+    # Like the run-lock test above, the holder signals through a file so no wait can block without a deadline.
+    out = tmp_path / "held.txt"
+    proc = subprocess.Popen([sys.executable, "-c", _SERVE_HOLDER, str(tmp_path), str(out)])
+    try:
+        assert _wait(lambda: out.exists() or proc.poll() is not None)
+        assert proc.poll() is None, "the holder process exited early"
+        with pytest.raises(runlock.AlreadyServing), runlock.hold_serve(tmp_path):
+            pass
+    finally:
+        proc.terminate()
+        proc.wait(timeout=10)
+    with runlock.hold_serve(tmp_path):  # the OS freed the lock with the process
+        pass
