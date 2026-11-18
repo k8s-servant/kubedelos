@@ -100,7 +100,7 @@ def new(
         "image": image,
         "namespace": namespace,
         "reason": "",
-        "owner": identity(request) or _os_user(),
+        "owner": identity(request) or ("" if request.app.state.serve else _os_user()),
         "expires": (today + timedelta(days=DEFAULT_DAYS)).isoformat(),
         "scope": "context",
     }

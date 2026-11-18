@@ -320,6 +320,11 @@ def test_accept_form_prefills_the_trusted_identity(make_serve_client):
     assert f'name="owner" value="{IDENTITY}"' in html
 
 
+def test_serve_accept_form_without_identity_leaves_the_owner_empty(serve_client):
+    html = serve_client.get("/accepted/new").text
+    assert 'name="owner" value=""' in html
+
+
 def test_empty_owner_becomes_the_identity(make_serve_client, seed):
     client = make_serve_client(trust_proxy_headers=True)
     response = signed_post(client, "/accepted", {**FORM, "owner": "  "}, identity=IDENTITY)
