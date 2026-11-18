@@ -116,3 +116,31 @@ def test_scope_ignores_repeated_values():
 )
 def test_exclude_image_hosts_are_normalised_like_image_names(pattern, expected):
     assert Settings(exclude_images=[pattern]).exclude_images == [expected]
+
+
+def test_sweep_timezone_must_be_a_known_zone():
+    with pytest.raises(ValidationError, match="sweep_timezone"):
+        Settings(sweep_timezone="Mars/Olympus")
+    assert Settings(sweep_timezone="Europe/Vilnius").sweep_timezone == "Europe/Vilnius"
+
+
+def test_allowed_hosts_normalised():
+    assert Settings(allowed_hosts=["Example.COM", "[::1]"]).allowed_hosts == ["example.com", "::1"]
+
+
+def test_allowed_hosts_from_env_json(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_ALLOWED_HOSTS", '["Example.com"]')
+    assert Settings().allowed_hosts == ["example.com"]
+
+
+def test_retention_days_not_negative():
+    with pytest.raises(ValidationError):
+        Settings(retention_days=-1)
+    assert Settings(retention_days=0).retention_days == 0
+
+
+def test_serve_defaults():
+    settings = Settings()
+    assert (settings.cluster_name, settings.sweep_schedule, settings.sweep_timezone) == (None, "0 3 * * *", "UTC")
+    assert settings.sweep_enabled is True and settings.retention_days == 180
+    assert settings.allowed_hosts == ["localhost", "127.0.0.1"]

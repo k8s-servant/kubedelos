@@ -555,3 +555,26 @@ def test_results_keep_how_long_each_image_took(tmp_path):
     repo.replace_result(row_id, ImageResult(image=image, platform="linux/amd64", status="ok", duration_s=95.0))
     assert conn.execute("SELECT duration_s FROM image_result").fetchone()[0] == 95.0
     conn.close()
+
+
+def test_start_run_stores_requested_by(tmp_path):
+    repo = _repo(tmp_path)
+    run_id = repo.start_run("my-cluster", "ui", "0.76.1", scan_level="os", requested_by="a@example.com")
+    assert repo.get_run(run_id)["requested_by"] == "a@example.com"
+    assert repo.get_run(repo.start_run("my-cluster", "cli", "0.76.1", scan_level="os"))["requested_by"] is None
+
+
+def test_migration_10_adds_scan_request(tmp_path):
+    conn = connect(tmp_path / "k.db")
+    _OPEN.append(conn)
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == 10
+    columns = [row["name"] for row in conn.execute("PRAGMA table_info(scan_request)")]
+    assert columns == [
+        "id", "kind", "trigger", "requested_by", "requested_at", "target_run_id", "overrides", "state", "run_id",
+    ]  # fmt: skip
+    insert = (
+        "INSERT INTO scan_request (kind, trigger, requested_at, overrides, state) VALUES ('scan', 'ui', 'now', '{}', ?)"
+    )
+    conn.execute(insert, ("queued",))
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute(insert, ("done",))

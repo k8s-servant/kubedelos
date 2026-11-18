@@ -7,6 +7,7 @@ import json
 from collections.abc import Collection, Mapping
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import platformdirs
 from pydantic import Field, field_validator
@@ -44,6 +45,28 @@ class Settings(BaseSettings):
     team_label: str = "kubedelos.io/team"
     # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.
     pkg_types: Annotated[tuple[str, ...], NoDecode] = ("library", "os")
+
+    cluster_name: str | None = None  # the name runs are stored under, instead of the kube context (set by serve)
+    sweep_schedule: str = "0 3 * * *"  # cron expression of the scheduled sweep
+    sweep_timezone: str = "UTC"
+    sweep_enabled: bool = True
+    retention_days: int = Field(default=180, ge=0)
+    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
+
+    @field_validator("sweep_timezone")
+    @classmethod
+    def _known_time_zone(cls, value: str) -> str:
+        try:
+            ZoneInfo(value)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise ValueError(f"unknown time zone {value!r}") from exc
+        return value
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _normalise_allowed_hosts(cls, value: list[str]) -> list[str]:
+        """Lowercase each host and drop the brackets of an IPv6 literal, as a Host header is compared."""
+        return [host.strip().lower().strip("[]") for host in value]
 
     @field_validator("namespace_selector", "selector", mode="before")
     @classmethod

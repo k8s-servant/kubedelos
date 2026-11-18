@@ -154,6 +154,23 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE image_result ADD COLUMN duration_s REAL;
     """,
+    # 10: who asked for each run (NULL for the CLI and the schedule), and the queue of scan requests that kubedelos
+    # serve works through one at a time.
+    """
+    ALTER TABLE scan_run ADD COLUMN requested_by TEXT;
+    CREATE TABLE scan_request (
+        id INTEGER PRIMARY KEY,
+        kind TEXT NOT NULL CHECK (kind IN ('scan', 'retry')),
+        trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'ui')),
+        requested_by TEXT,
+        requested_at TEXT NOT NULL,
+        target_run_id INTEGER REFERENCES scan_run(id),
+        overrides TEXT NOT NULL,
+        state TEXT NOT NULL CHECK (state IN ('queued', 'started', 'cancelled')),
+        run_id INTEGER REFERENCES scan_run(id)
+    );
+    CREATE INDEX idx_scan_request_state ON scan_request(state, id);
+    """,
 ]
 
 
