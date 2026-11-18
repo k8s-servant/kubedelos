@@ -2,7 +2,7 @@ import pytest
 from fakes import FakeKubeApi, cronjob, deployment, namespace, node, pod
 
 from kubedelos.config import Settings
-from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id
+from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id, parse_user_ref
 from kubedelos.models import ImageRef
 
 DIGEST = "sha256:" + "a" * 64
@@ -423,3 +423,14 @@ def test_templates_carry_pull_secrets_in_listed_namespaces(tmp_path):
         "reg.example.com/idle": [("web", "regcred")],
         "reg.example.com/nightly": [("web", "cron-cred")],
     }
+
+
+@pytest.mark.parametrize("image", ["", "-x", "a b", "reg.example.com/app@sha256:xyz", "reg.example.com/app@"])
+def test_parse_user_ref_rejects_what_would_scan_another_image(image):
+    assert parse_user_ref(image) is None
+
+
+def test_parse_user_ref_accepts_a_tag_and_a_digest():
+    digest = "sha256:" + "a" * 64
+    assert parse_user_ref("registry.example.com/team/app:1").ref == "registry.example.com/team/app:1"
+    assert parse_user_ref(f"registry.example.com/team/app@{digest}").digest == digest

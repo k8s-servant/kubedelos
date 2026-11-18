@@ -236,3 +236,16 @@ def test_secrets_dir_must_not_contain_docker_configs(tmp_path):
         data_dir=tmp_path / "d", cache_dir=tmp_path / "c", secrets_dir=secrets, docker_configs=[tmp_path / "c.json"]
     )
     assert ok.secrets_dir == secrets
+
+
+def test_cloud_identity_defaults_to_none_and_is_read_from_the_environment(monkeypatch):
+    assert Settings().cloud_provider == "none" and Settings().cloud_identity is None
+    monkeypatch.setenv("KUBEDELOS_CLOUD_PROVIDER", "azure")
+    monkeypatch.setenv("KUBEDELOS_CLOUD_IDENTITY", "client-id-123")
+    settings = Settings()
+    assert settings.cloud_provider == "azure" and settings.cloud_identity == "client-id-123"
+
+
+def test_cloud_provider_must_be_a_known_one():
+    with pytest.raises(ValidationError):
+        Settings(cloud_provider="oracle")

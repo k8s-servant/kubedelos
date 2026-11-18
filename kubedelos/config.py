@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     # names, not secret values.
     pod_pull_secret_namespaces: Annotated[list[str], NoDecode] = []
 
+    # The cloud identity the pod's Trivy uses for ACR, ECR and GAR hosts; the Settings page shows it. The identity is
+    # a client id or role name, never a token.
+    cloud_provider: Literal["azure", "aws", "gcp", "none"] = "none"
+    cloud_identity: str | None = None
+
     @field_validator("sweep_timezone")
     @classmethod
     def _known_time_zone(cls, value: str) -> str:

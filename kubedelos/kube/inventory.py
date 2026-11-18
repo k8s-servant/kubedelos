@@ -10,7 +10,7 @@ from kubernetes.client.rest import ApiException
 from kubedelos.config import Settings
 from kubedelos.kube import owners
 from kubedelos.kube.client import KubeApi
-from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest
+from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest, is_valid_ref
 
 DEFAULT_PLATFORM = "linux/amd64"
 _PREFIXES = ("docker-pullable://", "docker://")
@@ -75,6 +75,17 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
     tag = spec_tag or "latest"
     local_id = image_id if is_digest(image_id) else None  # a bare "sha256:..." is the node's local image ID
     return ImageRef(ref=f"{spec_repo}:{tag}", repo=spec_repo, tag=tag, image_id=local_id)
+
+
+def parse_user_ref(image: str) -> ImageRef | None:
+    """The ``ImageRef`` of an image a user typed, or None when it is not a plausible ref.
+
+    ``parse_image_id`` falls back to ``:latest`` for a malformed digest; for a typed ref that would check another image.
+    """
+    ref = parse_image_id(image, "")
+    if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
+        return None
+    return ref
 
 
 def _status_ids(pod) -> dict[str, str]:

@@ -26,8 +26,8 @@ from kubedelos import __version__
 from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
-from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import InventoryItem, is_valid_ref, registry_host
+from kubedelos.kube.inventory import parse_user_ref
+from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.scheduler import Sweeper, cron_error
@@ -147,9 +147,8 @@ def registry_test(
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
 ) -> None:
     """Check that kubedelos can read IMAGE with your current registry login, by scanning it once."""
-    ref = parse_image_id(image, "")
-    # parse_image_id falls back to :latest when a digest is malformed; for a user's ref that would scan another image.
-    if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
+    ref = parse_user_ref(image)
+    if ref is None:
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
         raise typer.Exit(2)
     if not _PLATFORM_RE.fullmatch(platform):

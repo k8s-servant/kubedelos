@@ -5,19 +5,31 @@ Each ``Settings`` field is listed with its value and its source (``config.settin
 form can still change the scope, parallel images and package types for one scan. Below the table: the database file,
 the data and cache directories, the Trivy in use and the log level.
 
-No credentials are shown: ``Settings`` holds none (a test keeps it that way), and registry logins stay in Docker's own
-config, which this page never reads.
+The Registries card says which cloud identity and which mounted Docker config Secrets (by name) the scans use, and
+which namespaces' pull secrets are read. In ``kubedelos serve`` it has a form, ``POST /settings/registry-test``, that
+scans one image with the same access a scan would get, one test at a time. No token is shown or read for display:
+``Settings`` holds none (a test keeps it that way), and a failed test shows Trivy's redacted cause only.
 """
 
 import os
+import threading
 from pathlib import Path
+from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
+from starlette.concurrency import run_in_threadpool
 
 from kubedelos.config import Settings, setting_sources
+from kubedelos.hints import login_hint
+from kubedelos.kube.inventory import parse_user_ref
+from kubedelos.models import InventoryItem, registry_host
+from kubedelos.registry.access import RegistryAccess
 from kubedelos.store.queries import newest_run
+from kubedelos.trivy.binary import ensure_trivy
+from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
+from kubedelos.trivy.runner import error_cause, scan_image
 from kubedelos.web.pages import open_db, render, shown_context
 
 router = APIRouter()
@@ -33,6 +45,46 @@ EMPTY_LISTS = {
     "exclude_namespaces": "none",
     "exclude_images": "none",
 }
+
+
+CLOUD_HOSTS = {  # the registry hosts Trivy uses the cloud identity for (checked in Trivy v0.76.1)
+    "azure": ["*.azurecr.io", "*.azurecr.cn"],
+    "gcp": ["gcr.io", "*.gcr.io", "*-docker.pkg.dev"],
+    "aws": ["<account>.dkr.ecr.<region>.amazonaws.com", "<account>.dkr.ecr.<region>.amazonaws.com.cn"],
+}
+DOCS = "https://github.com/k8s-servant/kubedelos/blob/main/docs/registries/"
+TEST_TIMEOUT_S = 120
+_LOCK = threading.Lock()  # one registry test at a time: each runs a Trivy
+_MAX_BODY = 64 * 1024
+
+
+def docs_page(host: str) -> str:
+    """The docs page for an authentication failure on ``host``: its cloud's, else the pull secrets one."""
+    name = host.split(":", 1)[0]
+    if name.endswith((".azurecr.io", ".azurecr.cn")):
+        page = "acr"
+    elif name == "gcr.io" or name.endswith((".gcr.io", "-docker.pkg.dev")):
+        page = "gar"
+    elif ".dkr.ecr." in name and name.endswith((".amazonaws.com", ".amazonaws.com.cn")):
+        page = "ecr"
+    else:
+        page = "pull-secrets"
+    return f"{DOCS}{page}.md"
+
+
+def _registries(settings: Settings, *, serve: bool) -> dict:
+    """What the Registries card shows; names and namespaces only, never a file's contents."""
+    provider = settings.cloud_provider
+    if provider == "none":
+        identity = "not configured" if serve else "none: your own cloud logins apply"
+    else:
+        identity = f"{provider}: {settings.cloud_identity or 'identity not set'}"
+    return {
+        "identity": identity,
+        "hosts": CLOUD_HOSTS.get(provider, []),
+        "secrets": [path.parent.name for path in settings.docker_configs],
+        "namespaces": ", ".join(settings.pod_pull_secret_namespaces) or "off",
+    }
 
 
 def shown_value(field: str, value: object) -> str:
@@ -80,6 +132,7 @@ def settings(request: Request) -> HTMLResponse:
     ctx = {
         "now": request.app.state.clock(),
         "run": newest,
+        "registries": _registries(current, serve=request.app.state.serve),
         "rows": _rows(current, request.app.state.flags),
         "files": [
             ("Database file", str(current.db_path)),
@@ -90,3 +143,63 @@ def settings(request: Request) -> HTMLResponse:
         ],
     }
     return render(request, "settings.html", ctx)
+
+
+def _result(request: Request, text: str, *, status: int = 200, **extra: object) -> HTMLResponse:
+    return render(request, "partials/registry_test.html", {"text": text, **extra}, status)
+
+
+@router.post("/settings/registry-test", response_class=HTMLResponse)
+async def registry_test(request: Request) -> Response:
+    if not request.app.state.serve:
+        return Response(status_code=404)
+    body = await request.body()  # the CSRF guard has read it already
+    return await run_in_threadpool(_registry_test, request, body)
+
+
+def _registry_test(request: Request, body: bytes) -> Response:
+    try:
+        fields = parse_qs(body[:_MAX_BODY].decode(), keep_blank_values=True, max_num_fields=100, errors="strict")
+    except ValueError:
+        return _result(request, "error: the form could not be read", status=400, failed=True)
+    image = fields.get("image", [""])[0].strip()
+    ref = parse_user_ref(image)
+    if ref is None:
+        shown = "".join(ch if ch.isprintable() else "?" for ch in image)[:200]
+        return _result(request, f"error: invalid image reference: {shown}", status=400, failed=True)
+    if not _LOCK.acquire(blocking=False):
+        return _result(request, "A test is already running", status=409, failed=True)
+    try:
+        settings: Settings = request.app.state.settings
+        host = registry_host(ref)
+        try:
+            trivy = ensure_trivy(settings)
+            with (
+                TrivyCache(trivy, settings.cache_dir, java_db=False) as cache,
+                RegistryAccess(settings).for_item(InventoryItem(image=ref, platform="linux/amd64")) as access,
+            ):
+                result = scan_image(
+                    trivy,
+                    ref,
+                    "linux/amd64",
+                    min(settings.scan_timeout_s, TEST_TIMEOUT_S),
+                    cache_dir=cache.dir,
+                    pkg_types=("os",),
+                    docker_config=access.docker_config,
+                )
+        except Exception as exc:  # the test must answer, whatever went wrong; only the type is shown
+            return _result(request, f"error: the test could not run: {type(exc).__name__}", status=500, failed=True)
+    finally:
+        _LOCK.release()
+    if result.status != "error":
+        return _result(request, f"ok: {ref.ref} is readable")
+    cause = error_cause(result.error)
+    if result.error_kind == "auth":
+        return _result(
+            request,
+            f"error: {ref.ref}: auth: {cause}",
+            failed=True,
+            hint=login_hint(host),
+            docs=docs_page(host),
+        )
+    return _result(request, f"error: {ref.ref}: {result.error_kind}: {cause}", failed=True)
