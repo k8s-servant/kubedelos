@@ -97,7 +97,7 @@ spec:
   parentRefs: [{name: eg, namespace: envoy-gateway-system}]
   hostnames: [kubedelos.example.com]
   rules:
-    - backendRefs: [{name: <release>-kubedelos, port: 80}]
+    - backendRefs: [{name: <release>-kubedelos, port: 80}]   # the Service name: <release>-kubedelos, or the release name if it contains kubedelos
 ---
 apiVersion: gateway.envoyproxy.io/v1alpha1
 kind: SecurityPolicy
@@ -111,6 +111,15 @@ spec:
       backendRefs: [{name: oauth2-proxy, namespace: auth, port: 4180}]
       headersToBackend: [X-Auth-Request-Email]
 ```
+
+No `http.path` is set, on purpose. Envoy Gateway then sends the authorization request to oauth2-proxy with the original
+request path (`api/v1alpha1/ext_auth_types.go`, field `Path`), for example `/scans`. oauth2-proxy handles that in its
+proxy mode (`Proxy` in `oauthproxy.go`, v7.15.6): an unauthenticated browser gets the sign-in page or a redirect to the
+identity provider, which Envoy passes to the client, and an authenticated request goes to the `static://200` upstream
+with `X-Auth-Request-Email` set on the response by `--set-xauthrequest`. The alternative, `pathOverride: /oauth2/auth`,
+is oauth2-proxy's auth-only endpoint (`AuthOnly`): it sets the same headers and returns 202, but answers an
+unauthenticated browser with a bare 401 and no sign-in, which is the wrong experience for a UI. I did not check that
+Envoy treats a 202 as "allowed", which is another reason to use the 200 upstream here.
 
 Two standard Gateway API rules are not shown: the Gateway's listener must allow routes from the `auth` and `kubedelos`
 namespaces (`allowedRoutes`), and the `SecurityPolicy` reaches a Service in another namespace only with a

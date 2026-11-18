@@ -16,15 +16,16 @@ helm install kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos \
   --set clusterName=my-cluster
 ```
 
-`clusterName` is required: it is the name the runs are stored under. The release is named `kubedelos` here, so the
-chart's objects are called `kubedelos-kubedelos` (the chart's full name is `<release>-kubedelos`); the examples below
-write `<release>-kubedelos`. The chart always runs one replica with a `Recreate` strategy, because SQLite allows only
+`clusterName` is required: it is the name the runs are stored under. The chart names its objects (Service,
+Deployment, PVC) `<release>-kubedelos`, or just the release name when that already contains `kubedelos`. The release is
+called `kubedelos` here, so its Service is `kubedelos`; the examples below write `<release>-kubedelos` for the general
+case, so use the name your release gets (`helm template` or `kubectl get svc -n kubedelos` shows it). The chart always runs one replica with a `Recreate` strategy, because SQLite allows only
 one writer; the replica count is not a value.
 
 Nothing is reachable from outside the cluster after the install. To look at the UI from your machine:
 
 ```bash
-kubectl port-forward svc/<release>-kubedelos 8080:80 -n kubedelos
+kubectl port-forward svc/kubedelos 8080:80 -n kubedelos
 ```
 
 and open `http://localhost:8080`. The first sweep runs at the next scheduled time (03:00 UTC by default). To scan
@@ -104,8 +105,8 @@ Wildcard hosts (`*.example.com`) are refused, because kubedelos compares the Hos
 enabled Ingress needs at least one host and an enabled HTTPRoute at least one `parentRefs` entry.
 
 Whichever you pick, also fill `networkPolicy.ingressFrom` with the pods that carry the traffic (the Ingress controller or
-the gateway's proxy pods). With the NetworkPolicy on and `ingressFrom` empty, nothing but the kubelet's probes reaches
-the pod.
+the gateway's proxy pods). With the NetworkPolicy on and `ingressFrom` empty, typically only the kubelet's probes reach the pod (node and
+`hostNetwork` traffic depend on your CNI).
 
 A worked example with a sign-in proxy: [oauth2-proxy behind Envoy Gateway](exposure-oauth2-proxy-envoy-gateway.md).
 

@@ -303,16 +303,8 @@ a docs page, not chart templates, so the chart has no proxy to keep up to date).
 
 Most of the work is the environment; kubedelos adds pull secrets.
 
-1. **Cloud identity:** the chart's `cloud.provider` preset (below) and Trivy's own providers. kubedelos has no code for
+1. **Cloud identity:** the chart's `cloud.provider` preset (PR 4, below) and Trivy's own providers. kubedelos has no code for
    it. The Registries part of the Settings page shows the detected identity: provider and client id, never a token.
-**Cloud presets (PR 4).** They ship with the registry login, not with the chart in PR 3: turning on workload identity
-before `registries.cloudHosts` and the environment scrubbing exist would let the pod's identity reach registries the
-operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
-- `azure`: the ServiceAccount annotation `azure.workload.identity/client-id` and the pod label
-  `azure.workload.identity/use: "true"`. The webhook then injects the variables Trivy needs.
-- `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
-- `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
-
 2. **Mounted Docker configs:** `registries.dockerConfigSecrets: [name, ...]` mounts each named
    `kubernetes.io/dockerconfigjson` Secret as a read-only file.
    - The kubelet does the reading, so kubedelos needs no Secret RBAC for this.
@@ -334,7 +326,7 @@ operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` 
    - The Secret contents live in memory for the scan only, and the Secret names are logged at debug level, never their
      contents.
 4. **Per scan.** `KUBEDELOS_SECRETS_DIR=/run/kubedelos` is an `emptyDir` with `medium: Memory` (size limit 16Mi), added
-   to the image and the chart in this PR, so per-scan Docker configs never reach node disk. One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
+   to the image and the chart in PR 4, so per-scan Docker configs never reach node disk. One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
    (the memory-backed volume; on a laptop, unset, so no file is written and the user's Docker login applies as today).
    `scan_image` already takes `docker_config`. It is deleted when that process ends, even on error or cancel. A SIGKILL
    or OOM kill skips that, so `serve` empties `KUBEDELOS_SECRETS_DIR` at start, and the volume is gone with the pod. Only `auths` entries
@@ -343,6 +335,14 @@ operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` 
    in namespaces the operator listed for that, and only when `podPullSecrets` is on", in the same PR. Its "credentials
    never touch disk" rule gains "except a per-scan Docker config on the memory-backed secrets volume". The README and a security note say what this permits.
 6. **Unchanged:** anonymous pulls of public images, and on a laptop the user's own Docker login.
+
+**Cloud presets (PR 4).** They ship with the registry login, not with the chart in PR 3: turning on workload identity
+before `registries.cloudHosts` and the environment scrubbing exist would let the pod's identity reach registries the
+operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
+- `azure`: the ServiceAccount annotation `azure.workload.identity/client-id` and the pod label
+  `azure.workload.identity/use: "true"`. The webhook then injects the variables Trivy needs.
+- `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
+- `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
 
 `kubedelos registry test` gains no new options. In `serve`, a "Test an image" box on the Settings page runs the same
 check with the same credentials a scan would use, and the same `cloudHosts` rule. It is a POST, so it needs an
