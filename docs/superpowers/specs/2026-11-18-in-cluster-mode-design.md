@@ -8,11 +8,11 @@ Covers #12 (serve, scheduler), #24 (scheduled sweeps and on-demand scans), #13 (
 
 kubedelos runs inside each cluster it watches. It sweeps the cluster on a schedule, keeps the history, and serves the
 same UI the laptop has. Sign-in is not kubedelos's job. How the UI is exposed and who signs users in is the operator's
-choice (decided by the user): any authenticating proxy that puts the user in a request header works, for example
+choice: any authenticating proxy that puts the user in a request header works, for example
 oauth2-proxy behind Envoy Gateway, an Ingress controller's external auth, or a service mesh. kubedelos only trusts that
 header when told to.
 
-Who uses it and for what (decided by the user):
+Who uses it and for what:
 - Most people **view** results: dashboard, findings, compare, reports.
 - **Sweeps run on a schedule.**
 - A signed-in user can also **start a scan now** and **make a report** (CSV and print-friendly HTML, as today).
@@ -38,7 +38,7 @@ Who uses it and for what (decided by the user):
   but name, and comparing it is correct.
 - More than one replica, Postgres, or an RWX volume.
 - Scanning other clusters from the pod. The pod scans its own cluster.
-- Air-gapped clusters (decided by the user). The pod needs egress to Trivy's DB registry and to the image registries;
+- Air-gapped clusters. The pod needs egress to Trivy's DB registry and to the image registries;
   a DB mirror setting can come later.
 - Changes to the laptop UI's behaviour, beyond what shared code needs.
 
@@ -47,8 +47,9 @@ Who uses it and for what (decided by the user):
 - Any code path that creates, changes or deletes cluster objects. kubedelos never starts Jobs or Pods.
 - Write actions available to someone the operator's proxy did not sign in.
 - A pod inside the cluster able to fake the identity header and start scans.
-- Registry tokens or pull-secret contents in SQLite, logs, error messages, the Settings page or a file that outlives
-  one scan.
+- Registry tokens or pull-secret contents in SQLite, logs, error messages, the Settings page, on node disk, or in a
+  file that outlives one scan.
+- The pod's cloud identity token sent to a registry the operator did not name.
 - Reading any Secret the user did not opt into.
 
 ## Constraints
@@ -83,6 +84,14 @@ Checked against the Trivy v0.76.1 source (`pkg/fanal/image/registry/`):
   an ordinary auth error.
 
 Limits that follow:
+- **Trivy sends the token to any matching host, so kubedelos limits which hosts get it.** Trivy exchanges the Entra
+  token (scope `https://management.azure.com/.default`) with whatever `*.azurecr.io` host an image ref names, and anyone
+  can create one. A workload author could run a pod from `attacker.azurecr.io/x` and have the scan send the pod's token
+  there. So `registries.cloudHosts` (exact hosts or `*` globs, empty by default) lists the registries that may receive
+  the cloud identity. For any image whose host is not on the list, kubedelos starts Trivy with the cloud-identity
+  environment removed (`AZURE_*`, `AWS_*` web-identity and `GOOGLE_*`/ADC variables, plus the projected token file
+  paths), so Trivy pulls it anonymously or with Docker-config credentials only. The "Test an image" box (section 7)
+  applies the same rule. With `cloud.provider` set and `cloudHosts` empty, the chart fails to render.
 - An ACR behind a custom domain is not recognised; pull secrets cover that case.
 - The identity needs `AcrPull` (or the cloud's equivalent). That is set up outside kubedelos, and the docs cover it.
 
@@ -94,27 +103,28 @@ Limits that follow:
   URL. The kube client uses the in-cluster config, as `kube/client.py` already does when there is no kubeconfig.
 - **Cluster name.** `KUBEDELOS_CLUSTER_NAME` names the cluster (for example `my-cluster`). Runs are stored under that
   name as their `context`, so pages, reports and exports show it instead of `in-cluster`. `serve` refuses to start
-  without it.
+  without it. Changing it later starts a new history under the new name; the old runs stay under the old one.
 - **Scheduler.** APScheduler `>=3.11,<4`, with a `BackgroundScheduler` started and stopped in the FastAPI lifespan.
   - **Schedule:** `KUBEDELOS_SWEEP_SCHEDULE` (a 5-field cron, default `0 3 * * *`) in `KUBEDELOS_SWEEP_TIMEZONE`
     (default `UTC`).
   - **Master switch:** `KUBEDELOS_SWEEP_ENABLED` (default `true`).
   - **Job settings:** `coalesce=True`, `max_instances=1`, `misfire_grace_time=3600`.
   - **What a sweep does:** it does not scan by itself. It adds a `schedule` request to the queue.
-  - **Sweeps skip the result cache** (decided with the user). A sweep rescans every image, as "Rescan every image"
+  - **Sweeps skip the result cache**. A sweep rescans every image, as "Rescan every image"
     does, so its findings match the current Trivy DB rather than a result up to 24 h old. The on-disk layer cache
     (`kubedelos/trivy/layers.py`) still applies, so an image whose layers were analysed before is only matched against
     the DB again, which keeps a full sweep fast.
 - **One process owns the data.** At start, `serve` takes an exclusive `flock` on `<data dir>/serve.lock`, held for its
   lifetime. A second `serve` on the same volume exits with a clear error.
-  - This replaces #12's DB lease (my call). `store/runlock.py` already uses `flock` to tell a live run from a stale
+  - This replaces #12's DB lease. `store/runlock.py` already uses `flock` to tell a live run from a stale
     one, and an RWO volume is mounted on one node only, so `flock` holds.
   - On start, `serve` closes stale `running` rows with the existing `close_stale_runs`.
 - **Health.** `GET /healthz` returns 200 once the DB is open and the scheduler is running. It skips the Host and
   identity checks, and the chart's probes use it.
 - **Shutdown.** On SIGTERM: stop the scheduler, cancel the running scan (as the laptop `shutdown` does), then exit. The
-  chart's `terminationGracePeriodSeconds` (default 60) covers it. A run cut off this way ends `cancelled`, and its
-  queued requests stay queued for the next start.
+  chart's `terminationGracePeriodSeconds` (default 60) covers it. A run cut off this way ends `cancelled`. Queued
+  requests stay queued for the next start. The request that was running stays `started` with no run linked, and the
+  next `serve` start marks it `cancelled` (`abandon_started`), after closing stale `running` runs.
 
 ### 2. The scan queue (#24)
 
@@ -136,22 +146,29 @@ scan_request(
 )
 ```
 
+- **States.** `queued` → `started` (claimed) → finished, which is `started` with `run_id` set, or `cancelled`
+  (cancelled while queued, or abandoned at start-up). A claim is one `BEGIN IMMEDIATE` transaction that reads the oldest
+  `queued` row and marks it `started`, so a request cancelled first is never started, and two claimers never get the
+  same row. Retention never deletes a run a queued request names, and deletes finished request rows past the retention
+  period.
+- **Sweeps carry `{"rescan": true}`.** A `schedule` request's overrides are `{"rescan": true}`: the saved settings,
+  without the result cache.
 - **Requester on the run.** `scan_run` gains a `requested_by` column (migration 10, together with the table above).
   `scan_run.trigger` is set to `schedule` or `ui`.
 - **Coalesced.** A `schedule` request is not added while another `schedule` request is still queued. A `ui` request with
   the same overrides as one already queued is not added either; the UI says it is already queued.
-- **Retries are queued too** (my call). A retry of failed images is a `retry` request for its run, so it never races
+- **Retries are queued too**. A retry of failed images is a `retry` request for its run, so it never races
   the queue worker for the one scan slot. A retry for a run that already has a queued retry is not added.
 - **Bounded.** At most 10 queued requests. Past that, the UI shows "the queue is full".
 - **Cancellable.** A queued request can be cancelled from the Scans page. The running scan is cancelled as today.
-- **Scope is narrow-only** (decided by the user). A `ui` scan may cover the configured scope or a subset of it (fewer
+- **Scope is narrow-only**. A `ui` scan may cover the configured scope or a subset of it (fewer
   namespaces, an extra label selector, more exclusions, a level the configured one includes). A request that reaches
   outside it, such as a namespace the configured scope leaves out, is rejected with a message naming what was outside.
   The check runs on the canonical overrides, which are also the "already queued" key.
 - **"Scan now".** It is a `ui` request with the saved settings, the same as pressing Scan with the form unchanged. It is
   not stored as a sweep.
 - **On the Scans page in `serve`:** the running scan, then the queue (trigger, requester, time, cancel), then the run
-  history with a "by" column. On the laptop, the page and `ScanBusy` stay as they are (my call: no queue on a laptop).
+  history with a "by" column. On the laptop, the page and `ScanBusy` stay as they are (no queue on a laptop).
 - **Shared code.** `web/jobs.py`'s `ScanRunner` keeps running one scan at a time. The queue worker calls it. The queue
   code lives in a new `kubedelos/store/queue.py` with its own tests.
 
@@ -162,7 +179,7 @@ scan_request(
   warnings, all in one transaction. The newest finished run of each scope is always kept, however old.
 - **Cache:** `image_cache` rows older than the cache TTL are deleted at the same time.
 - **Not touched:** accepted risks. They have their own expiry.
-- **Space:** no vacuum (my call). SQLite reuses the freed pages, so with steady retention the file stops growing. It
+- **Space:** no vacuum. SQLite reuses the freed pages, so with steady retention the file stops growing. It
   never shrinks, which is fine on a PVC, and laptop databases are untouched.
 
 ### 4. Identity and view-only mode
@@ -186,7 +203,12 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
 - **The trust boundary is the network, not kubedelos.** Trust is safe only when (a) the operator's proxy overwrites or
   strips any copy of the header a client sends, and (b) nothing but that proxy can reach the pod. kubedelos cannot check
   (a); the docs say so plainly, with what to check for common proxies. The chart enforces (b): with trust on it refuses
-  to render unless the NetworkPolicy is on and its `ingressFrom` names at least one source.
+  to render unless the NetworkPolicy is on and its `ingressFrom` names at least one source, and it also refuses any
+  entry that admits every pod (`{}`, an empty `podSelector` without a `namespaceSelector`, or an empty
+  `namespaceSelector`). Two bypasses remain and the docs name them: `kubectl port-forward` (anyone with that RBAC) and a
+  CNI that does not enforce NetworkPolicy. `NOTES.txt` repeats both when trust is on.
+- **The header value is untrusted text.** kubedelos strips control characters, caps it at 256 characters and treats
+  an empty result as no identity, before it is used for `requested_by`, an acceptance's owner or the access log.
 - **Hosts.** `KUBEDELOS_ALLOWED_HOSTS` (comma-separated) replaces the loopback Host check. The chart fills it from its
   own Ingress or HTTPRoute hostnames when those are used, plus `extraAllowedHosts` and the Service's DNS names.
 - **CSRF.** The Origin check stays, compared with the allowed hosts. The CSRF token is an HMAC of the identity value,
@@ -204,6 +226,8 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
   - User `65532:65532`, no shell tools needed at run time.
   - `KUBEDELOS_DATA_DIR=/data` and `KUBEDELOS_CACHE_DIR=/data/cache`, so the Trivy DBs and the layer cache sit on the PVC.
   - `TMPDIR=/tmp`, from an `emptyDir`.
+  - `KUBEDELOS_SECRETS_DIR=/run/kubedelos`, from an `emptyDir` with `medium: Memory` (size limit 16Mi), so per-scan
+    Docker configs never reach node disk.
   - The entrypoint is `kubedelos serve`.
 - **Root filesystem.** It works read-only; only `/data` and `/tmp` are written.
 - **Platforms.** `linux/amd64` and `linux/arm64`.
@@ -240,20 +264,21 @@ OCI chart at `oci://ghcr.io/k8s-servant/charts/kubedelos` from `release-please.y
 - `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
 - `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
 
-**Exposure is the operator's choice** (decided by the user). The chart forces no gateway, Ingress controller or auth
+**Exposure is the operator's choice**. The chart forces no gateway, Ingress controller or auth
 proxy. It offers two generic, optional templates, both off by default:
 - **`ingress`:** a plain `networking.k8s.io/v1` Ingress with `className`, `annotations` (for example an Ingress
   controller's external-auth annotations), `hosts` and `tls` as values.
 - **`httpRoute`:** a Gateway API HTTPRoute with `parentRefs`, `hostnames` and `annotations` as values.
 
 Anything else (an Envoy Gateway `SecurityPolicy`, oauth2-proxy, a mesh's auth policy, a LoadBalancer Service) the
-operator deploys alongside. The docs carry one worked example, oauth2-proxy behind Envoy Gateway with ext auth (my call:
+operator deploys alongside. The docs carry one worked example, oauth2-proxy behind Envoy Gateway with ext auth (
 a docs page, not chart templates, so the chart has no proxy to keep up to date). The example spells out
 `--set-xauthrequest`, `headersToBackend` naming the identity header, `failOpen: false` and a group restriction.
 
 **Guards and warnings:**
 - `auth.trustProxyHeaders: true` without `networkPolicy.enabled` and a non-empty `networkPolicy.ingressFrom` fails to
-  render, because any pod in the cluster could then claim to be anyone.
+  render, because any pod in the cluster could then claim to be anyone. So does an `ingressFrom` entry that admits every
+  pod (see section 4).
 - `ingress` or `httpRoute` on with trust off renders, and `NOTES.txt` says the UI is view-only and that anyone who can
   reach the host can read the whole vulnerability inventory unless the operator's proxy guards it.
 
@@ -268,26 +293,34 @@ Most of the work is the environment; kubedelos adds pull secrets.
    - The kubelet does the reading, so kubedelos needs no Secret RBAC for this.
    - kubedelos merges them into each scan's Docker config, the first secret winning on a host clash.
 3. **Pod pull secrets (opt-in):** `registries.podPullSecrets: false` by default. When on:
-   - RBAC is per namespace (decided by the user): `registries.podPullSecretNamespaces: [ns, ...]` makes the chart create
+   - RBAC is per namespace: `registries.podPullSecretNamespaces: [ns, ...]` makes the chart create
      a Role with `get` on `secrets` (never `list`) and a RoleBinding in each listed namespace, and nothing cluster-wide.
      The list is required when the option is on; an empty list fails to render. Pods in other namespaces get no pull
      secrets, and their images fall back to the mounted configs.
    - No `serviceaccounts` access is needed: the ServiceAccount admission controller already copies a ServiceAccount's
      `imagePullSecrets` into each pod's spec.
    - kubedelos reads only `KUBEDELOS_POD_PULL_SECRET_NAMESPACES` (the same list, set by the chart). For each image in
-     one of them, it reads the pod's `imagePullSecrets`, keeps the
-     `dockerconfigjson` entries for that image's host, and merges them over the mounted configs.
+     one of them, it reads the pod's `imagePullSecrets`. A Secret whose `type` is not `kubernetes.io/dockerconfigjson`
+     is dropped at once, unread and unlogged. From the rest it keeps only the `auths` entries for that image's host and
+     merges them over the mounted configs. The host match is also what limits where those credentials are sent.
+   - The security note says plainly what this permits: anyone who can create pods in a listed namespace can make
+     kubedelos read any `dockerconfigjson` Secret they can name there, and kubedelos sends its credentials only to the
+     host they are for. A test covers a pod that names a non-docker Secret.
    - The Secret contents live in memory for the scan only, and the Secret names are logged at debug level, never their
      contents.
-4. **Per scan.** One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `$TMPDIR`. `scan_image`
-   already takes `docker_config`. It is deleted when that process ends, even on error or cancel. Only `auths` entries
+4. **Per scan.** One temporary `DOCKER_CONFIG` directory per Trivy process, mode 0700 under `KUBEDELOS_SECRETS_DIR`
+   (the memory-backed volume; on a laptop, unset, so no file is written and the user's Docker login applies as today).
+   `scan_image` already takes `docker_config`. It is deleted when that process ends, even on error or cancel. A SIGKILL
+   or OOM kill skips that, so `serve` empties `KUBEDELOS_SECRETS_DIR` at start, and the volume is gone with the pod. Only `auths` entries
    are written; credential helpers in a mounted config are dropped, since the image has none.
 5. **Rule change.** AGENTS.md's "never read Secrets" becomes "never read Secrets, except the pull secrets a pod names,
-   in namespaces the operator listed for that, and only when `podPullSecrets` is on", in the same PR. The README and a security note say what this permits.
+   in namespaces the operator listed for that, and only when `podPullSecrets` is on", in the same PR. Its "credentials
+   never touch disk" rule gains "except a per-scan Docker config on the memory-backed secrets volume". The README and a security note say what this permits.
 6. **Unchanged:** anonymous pulls of public images, and on a laptop the user's own Docker login.
 
 `kubedelos registry test` gains no new options. In `serve`, a "Test an image" box on the Settings page runs the same
-check with the same credentials a scan would use. It is a POST, so it needs an identity.
+check with the same credentials a scan would use, and the same `cloudHosts` rule. It is a POST, so it needs an
+identity.
 
 ### 8. Settings page in `serve`
 
@@ -308,7 +341,8 @@ Nothing on it is editable. Changes go through Helm values.
 3. **Image and chart.** Dockerfile, chart, CI image build, smoke test, kind e2e that installs the chart and waits for a
    sweep. Release signing jobs go into `release-please.yml`. The exposure docs with the oauth2-proxy and Envoy Gateway
    example.
-4. **Registry login.** Mounted Docker configs, opt-in pod pull secrets, the temporary Docker config, the Settings
+4. **Registry login.** `registries.cloudHosts` and the cloud-identity environment scrubbing, mounted Docker configs,
+   opt-in pod pull secrets, the memory-backed temporary Docker config, the Settings
    Registries section, the AGENTS.md change, docs pages for ACR + workload identity, ECR, GAR and pull secrets.
    Tested against a `registry:2` with htpasswd in kind, plus a unit test with the Azure path mocked at the environment
    level. There is no ACR in CI, and the user's work registries are off limits.
@@ -325,7 +359,7 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
 - Whether Trivy reads a mounted Docker config before or after its cloud providers. The docs must say which wins for a
   host covered by both; check it in the Trivy source when writing the docs.
 
-## Calls I made (please check)
+## Decisions recorded here
 
 - `flock` on the volume instead of a DB lease.
 - No queue on the laptop; `ScanBusy` stays.
