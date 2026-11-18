@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -11,6 +12,7 @@ import pytest
 
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem
+from kubedelos.registry.access import RegistryAccess, ScanAccess
 from kubedelos.trivy import layers, runner
 from kubedelos.trivy.parse import parse_report
 from kubedelos.trivy.runner import error_cause, scan_image, scan_many
@@ -715,3 +717,81 @@ def test_error_text_keeps_lines_and_redacts_again():
     assert "secret" not in shown and "sig=abc" not in shown and "\x1b" not in shown
     assert error_text(None) == ""
     assert error_text("2026-11-16\tFATAL\tFatal error") == "2026-11-16 FATAL Fatal error"  # Trivy's tabs read as spaces
+
+
+class _RecordingAccess(RegistryAccess):
+    """Hands each image a fresh directory under ``root`` and remembers it."""
+
+    def __init__(self, root):
+        self.root, self.made = root, {}
+
+    def for_item(self, item):
+        from contextlib import contextmanager
+
+        @contextmanager
+        def cm():
+            directory = Path(tempfile.mkdtemp(prefix="cfg-", dir=self.root))
+            self.made[item.image.ref] = directory
+            try:
+                yield ScanAccess(directory)
+            finally:
+                directory.rmdir()
+
+        return cm()
+
+
+def test_scan_many_passes_access_to_each_image(tmp_path, monkeypatch):
+    seen = {}
+
+    def fake_scan_image(trivy, image, platform, timeout, **kw):
+        seen[image.ref] = kw["docker_config"]
+        return ImageResult(image=image, platform=platform, status="ok")
+
+    monkeypatch.setattr(runner, "scan_image", fake_scan_image)
+    access = _RecordingAccess(tmp_path)
+    scan_many(
+        _items(3), cache_dir=tmp_path / "c", trivy=FAKE_TRIVY, settings=Settings(cache_dir=tmp_path, layer_cache=False),
+        on_result=lambda r: None, cancel=threading.Event(), access=access,
+    )  # fmt: skip
+    assert seen == access.made and len(seen) == 3
+    assert list(tmp_path.glob("cfg-*")) == []
+
+
+def test_scan_many_uses_one_config_for_the_retry(tmp_path, monkeypatch):
+    configs = []
+
+    def fake_scan_image(trivy, image, platform, timeout, **kw):
+        configs.append(kw["docker_config"])
+        return ImageResult(image=image, platform=platform, status="error", error_kind="network", error="503")
+
+    monkeypatch.setattr(runner, "scan_image", fake_scan_image)
+    monkeypatch.setattr(runner, "_RETRY_DELAY_S", 0)
+    monkeypatch.setattr(runner, "_passing", lambda result: True)
+    scan_many(
+        _items(1), cache_dir=tmp_path / "c", trivy=FAKE_TRIVY, settings=Settings(cache_dir=tmp_path, layer_cache=False),
+        on_result=lambda r: None, cancel=threading.Event(), access=_RecordingAccess(tmp_path),
+    )  # fmt: skip
+    assert len(configs) == 2 and configs[0] == configs[1] and configs[0] is not None
+
+
+def test_temp_config_removed_when_scan_raises(tmp_path, monkeypatch):
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    mounted = tmp_path / "m.json"
+    mounted.write_text(json.dumps({"auths": {"registry.example": {"auth": "YTpi"}}}))
+    settings = Settings(cache_dir=tmp_path, layer_cache=False, secrets_dir=secrets, docker_configs=[mounted])
+    seen = []
+
+    def boom(trivy, image, platform, timeout, **kw):
+        seen.append(kw["docker_config"])
+        assert (kw["docker_config"] / "config.json").exists()
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(runner, "scan_image", boom)
+    results = []
+    scan_many(
+        _items(1), cache_dir=tmp_path / "c", trivy=FAKE_TRIVY, settings=settings,
+        on_result=results.append, cancel=threading.Event(), access=RegistryAccess(settings),
+    )  # fmt: skip
+    assert seen and results[0].status == "error"
+    assert list(secrets.iterdir()) == []

@@ -56,6 +56,20 @@ def test_registry_test_ok(fake_env):
     assert r.stdout.startswith("ok: docker.io/library/nginx:1.19 is readable")
 
 
+def test_registry_test_uses_mounted_configs(fake_env, monkeypatch):
+    secrets = fake_env / "secrets"
+    secrets.mkdir()
+    mounted = fake_env / "mounted.json"
+    mounted.write_text(json.dumps({"auths": {"registry.example": {"auth": "YTpi"}}}))
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(secrets))
+    monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", str(mounted))
+    r = _registry_test("registry.example/team/app:1")
+    assert r.exit_code == 0, r.output
+    used = json.loads((fake_env / "record.json").read_text())["FakeEnv"]["DOCKER_CONFIG"]
+    assert used is not None and used.startswith(str(secrets))
+    assert list(secrets.iterdir()) == []
+
+
 def test_registry_test_auth_failure_prints_hint(fake_env, monkeypatch):
     monkeypatch.setenv("FAKE_TRIVY_STDERR", "UNAUTHORIZED: authentication required")
     monkeypatch.setenv("FAKE_TRIVY_EXIT", "1")
@@ -405,6 +419,17 @@ def serve_env(fake_env, monkeypatch):
     monkeypatch.setattr(cli, "Sweeper", FakeSweeper)
     monkeypatch.setattr(cli, "create_serve_app", fake_create_serve_app)
     return calls
+
+
+def test_serve_clears_secrets_dir_at_start(serve_env, fake_env, monkeypatch):
+    secrets = fake_env / "secrets"
+    leftover = secrets / "docker-crashed"
+    leftover.mkdir(parents=True)
+    (leftover / "config.json").write_text("{}")
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(secrets))
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 0, r.output
+    assert secrets.is_dir() and list(secrets.iterdir()) == []
 
 
 def test_serve_requires_cluster_name(serve_env, monkeypatch):

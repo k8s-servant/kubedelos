@@ -27,7 +27,9 @@ from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import is_valid_ref, registry_host
+from kubedelos.models import InventoryItem, is_valid_ref, registry_host
+from kubedelos.registry import dockerconfig
+from kubedelos.registry.access import RegistryAccess
 from kubedelos.scheduler import Sweeper, cron_error
 from kubedelos.store import queue, runlock
 from kubedelos.store.db import connect
@@ -161,9 +163,18 @@ def registry_test(
         with _signals_as_interrupt():
             trivy = ensure_trivy(settings)
             # Only access is checked, so scan the smallest level and skip the Java DB.
-            with TrivyCache(trivy, settings.cache_dir, java_db=False) as cache:
+            with (
+                TrivyCache(trivy, settings.cache_dir, java_db=False) as cache,
+                RegistryAccess(settings).for_item(InventoryItem(image=ref, platform=platform)) as access,
+            ):
                 result = scan_image(
-                    trivy, ref, platform, settings.scan_timeout_s, cache_dir=cache.dir, pkg_types=("os",)
+                    trivy,
+                    ref,
+                    platform,
+                    settings.scan_timeout_s,
+                    cache_dir=cache.dir,
+                    pkg_types=("os",),
+                    docker_config=access.docker_config,
                 )
     except KeyboardInterrupt:
         typer.echo("cancelled", err=True)
@@ -227,6 +238,8 @@ def ui(
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
+    if settings.secrets_dir is not None:
+        dockerconfig.clear(settings.secrets_dir)  # configs a crashed scan left behind
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     token = secrets.token_urlsafe(32)
@@ -289,6 +302,8 @@ def _serve(settings: Settings, host: str, port: int) -> None:
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
+    if settings.secrets_dir is not None:
+        dockerconfig.clear(settings.secrets_dir)  # configs a crashed scan left behind
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     try:
