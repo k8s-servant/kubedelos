@@ -178,8 +178,31 @@ expect_registry() { # namespace outcome ("scanned" or "error auth"), then the ru
   fi
 }
 
-# The per-scan docker configs live in /run/kubedelos only while a scan runs; python is the only tool in the image.
-SECRETS_QUERY='import os; print(len(os.listdir("/run/kubedelos")))'
+# The per-scan docker configs live in /run/kubedelos only while a scan runs, and a new sweep may start at any minute, so
+# the directory is only judged while no scan_run is running (checked right before and right after listing it). Prints
+# the entry count seen in such a quiet moment; a directory that never reads empty within the window (a temp dir left
+# behind for good) prints its last count. Python is the only tool in the image.
+SECRETS_QUERY='
+import os, sqlite3, time
+
+def running():
+    db = sqlite3.connect("file:/data/kubedelos.db?mode=ro", uri=True)
+    try:
+        return db.execute("SELECT COUNT(*) FROM scan_run WHERE status = ?", ("running",)).fetchone()[0] > 0
+    finally:
+        db.close()
+
+left = -1
+for _ in range(90):
+    if not running():
+        names = os.listdir("/run/kubedelos")
+        if not running():
+            left = len(names)
+            if left == 0:
+                break
+    time.sleep(2)
+print(left)
+'
 
 deadline=$((SECONDS + POLL_SECONDS))
 while [ "$SECONDS" -lt "$deadline" ]; do
@@ -205,7 +228,7 @@ while [ "$SECONDS" -lt "$deadline" ]; do
             echo "secrets dir empty"
             exit 0
           fi
-          echo "/run/kubedelos holds $left entries after the sweep"
+          echo "/run/kubedelos was never empty while no scan ran (last count: $left, -1 means a scan was always running)"
         fi
         dump_state
         exit 1

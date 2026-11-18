@@ -170,7 +170,7 @@ jobs:
     # Trivy DB, hence the long timeout. kubectl and docker come with the runner image.
     name: e2e-chart
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
     env:
