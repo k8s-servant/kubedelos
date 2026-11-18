@@ -505,3 +505,148 @@ def test_exposure_needs_a_usable_shape(render_error, values, message):
 def test_httproute_without_hostnames_renders(render):
     route = kind(render({"httpRoute": {"enabled": True, "parentRefs": [{"name": "gw"}]}}), "HTTPRoute")
     assert "hostnames" not in route["spec"]
+
+
+PRESETS = [
+    ("azure", {"clientId": "1111-2222"}, "azure.workload.identity/client-id", "1111-2222"),
+    (
+        "aws",
+        {"roleArn": "arn:aws:iam::123456789012:role/kubedelos"},
+        "eks.amazonaws.com/role-arn",
+        "arn:aws:iam::123456789012:role/kubedelos",
+    ),
+    (
+        "gcp",
+        {"serviceAccount": "kd@my-project.iam.gserviceaccount.com"},
+        "iam.gke.io/gcp-service-account",
+        "kd@my-project.iam.gserviceaccount.com",
+    ),
+]
+
+
+@pytest.mark.parametrize(("provider", "identity", "annotation", "value"), PRESETS)
+def test_cloud_preset_annotates_the_service_account(render, provider, identity, annotation, value):
+    docs = render({"cloud": {"provider": provider, provider: identity}, "serviceAccount": {"annotations": {"a": "b"}}})
+    annotations = kind(docs, "ServiceAccount")["metadata"]["annotations"]
+    assert annotations == {"a": "b", annotation: value}
+    data = kind(docs, "ConfigMap")["data"]
+    assert data["KUBEDELOS_CLOUD_PROVIDER"] == provider
+    assert data["KUBEDELOS_CLOUD_IDENTITY"] == value
+    labels = kind(docs, "Deployment")["spec"]["template"]["metadata"]["labels"]
+    assert (labels.get("azure.workload.identity/use") == "true") is (provider == "azure")
+
+
+def test_preset_annotation_wins_over_service_account_annotations(render):
+    docs = render(
+        {
+            "cloud": {"provider": "azure", "azure": {"clientId": "new"}},
+            "serviceAccount": {"annotations": {"azure.workload.identity/client-id": "old"}},
+        }
+    )
+    assert kind(docs, "ServiceAccount")["metadata"]["annotations"] == {"azure.workload.identity/client-id": "new"}
+
+
+def test_cloud_provider_none_adds_nothing(render):
+    docs = render()
+    data = kind(docs, "ConfigMap")["data"]
+    assert data["KUBEDELOS_CLOUD_PROVIDER"] == "none"
+    assert "KUBEDELOS_CLOUD_IDENTITY" not in data
+    assert "annotations" not in kind(docs, "ServiceAccount")["metadata"]
+    assert "azure.workload.identity/use" not in kind(docs, "Deployment")["spec"]["template"]["metadata"]["labels"]
+
+
+@pytest.mark.parametrize(("provider", "key"), [("azure", "clientId"), ("aws", "roleArn"), ("gcp", "serviceAccount")])
+def test_cloud_provider_needs_its_identity(render_error, provider, key):
+    message = render_error({**BASE, "cloud": {"provider": provider}})
+    assert f"cloud.{provider}.{key}" in message
+
+
+def test_default_render_reads_no_secrets(render):
+    docs = render()
+    assert not [doc for doc in docs if doc["kind"] in ("Role", "RoleBinding")]
+    pod = kind(docs, "Deployment")["spec"]["template"]["spec"]
+    assert [v["name"] for v in pod["volumes"] if "secret" in v] == []
+    data = kind(docs, "ConfigMap")["data"]
+    assert data["KUBEDELOS_DOCKER_CONFIGS"] == "[]"
+    assert "KUBEDELOS_POD_PULL_SECRET_NAMESPACES" not in data
+    resources = [r for rule in kind(docs, "ClusterRole")["rules"] for r in rule["resources"]]
+    assert "secrets" not in resources
+
+
+def test_memory_volume_for_the_per_scan_secrets(render):
+    pod = kind(render(), "Deployment")["spec"]["template"]["spec"]
+    volume = next(v for v in pod["volumes"] if v["name"] == "secrets")
+    assert volume["emptyDir"] == {"medium": "Memory", "sizeLimit": "16Mi"}
+    mounts = {m["name"]: m for m in pod["containers"][0]["volumeMounts"]}
+    assert mounts["secrets"]["mountPath"] == "/run/kubedelos"
+
+
+def test_docker_config_secrets_are_mounted_in_order(render, monkeypatch):
+    docs = render({"registries": {"dockerConfigSecrets": ["reg-b", "reg-a"]}})
+    pod = kind(docs, "Deployment")["spec"]["template"]["spec"]
+    secrets = [v for v in pod["volumes"] if "secret" in v]
+    assert [v["secret"]["secretName"] for v in secrets] == ["reg-b", "reg-a"]
+    for volume in secrets:
+        assert volume["secret"]["items"] == [{"key": ".dockerconfigjson", "path": ".dockerconfigjson"}]
+        assert volume["secret"]["defaultMode"] == 0o400
+    mounts = {m["name"]: m for m in pod["containers"][0]["volumeMounts"]}
+    for volume, name in zip(secrets, ["reg-b", "reg-a"], strict=True):
+        assert mounts[volume["name"]]["mountPath"] == f"/etc/kubedelos/docker-configs/{name}"
+        assert mounts[volume["name"]]["readOnly"] is True
+    data = kind(docs, "ConfigMap")["data"]
+    assert json.loads(data["KUBEDELOS_DOCKER_CONFIGS"]) == [
+        "/etc/kubedelos/docker-configs/reg-b/.dockerconfigjson",
+        "/etc/kubedelos/docker-configs/reg-a/.dockerconfigjson",
+    ]
+    for key, value in data.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", "/run/kubedelos")
+    monkeypatch.setenv("KUBEDELOS_DATA_DIR", "/data")
+    monkeypatch.setenv("KUBEDELOS_CACHE_DIR", "/data/cache")
+    assert str(Settings().docker_configs[0]).endswith("reg-b/.dockerconfigjson")
+
+
+def test_pod_pull_secrets_grant_get_on_secrets_in_the_listed_namespaces_only(render, monkeypatch):
+    docs = render({"registries": {"podPullSecrets": True, "podPullSecretNamespaces": ["web", "jobs"]}})
+    roles = [doc for doc in docs if doc["kind"] == "Role"]
+    bindings = [doc for doc in docs if doc["kind"] == "RoleBinding"]
+    assert [r["metadata"]["namespace"] for r in roles] == ["web", "jobs"]
+    for role in roles:
+        assert role["rules"] == [{"apiGroups": [""], "resources": ["secrets"], "verbs": ["get"]}]
+    assert [b["metadata"]["namespace"] for b in bindings] == ["web", "jobs"]
+    for binding, role in zip(bindings, roles, strict=True):
+        assert binding["roleRef"] == {
+            "apiGroup": "rbac.authorization.k8s.io",
+            "kind": "Role",
+            "name": role["metadata"]["name"],
+        }
+        assert binding["subjects"] == [{"kind": "ServiceAccount", "name": "t-kubedelos", "namespace": "kd"}]
+    assert not [
+        doc for doc in docs if doc["kind"] == "ClusterRoleBinding" and doc["subjects"][0]["name"] != "t-kubedelos"
+    ]
+    resources = [r for rule in kind(docs, "ClusterRole")["rules"] for r in rule["resources"]]
+    assert "secrets" not in resources
+    data = kind(docs, "ConfigMap")["data"]
+    assert json.loads(data["KUBEDELOS_POD_PULL_SECRET_NAMESPACES"]) == ["web", "jobs"]
+    for key, value in data.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", "/run/kubedelos")
+    assert Settings().pod_pull_secret_namespaces == ["web", "jobs"]
+
+
+def test_pod_pull_secrets_need_namespaces(render_error):
+    message = render_error({**BASE, "registries": {"podPullSecrets": True}})
+    assert "registries.podPullSecretNamespaces" in message
+
+
+def test_pull_secret_namespaces_need_the_switch(render_error):
+    message = render_error({**BASE, "registries": {"podPullSecretNamespaces": ["web"]}})
+    assert "registries.podPullSecrets" in message
+
+
+def test_notes_name_the_pull_secret_namespaces(notes):
+    text = notes({"registries": {"podPullSecrets": True, "podPullSecretNamespaces": ["web", "jobs"]}})
+    assert "web, jobs" in text
+    assert "get" in text
+    assert "Secrets" in notes({"registries": {"podPullSecrets": True, "podPullSecretNamespaces": ["web"]}})
+    assert "pull secret" not in notes({}).lower()

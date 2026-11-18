@@ -10,7 +10,7 @@ VOLUME="kubedelos-smoke-data-$SUFFIX"
 CONTAINER="kubedelos-smoke-$SUFFIX"
 WORKDIR="$(mktemp -d)"
 TRIVY_DIR=/usr/local/lib/kubedelos/trivy
-RUN_OPTS=(--read-only --tmpfs /tmp --user 65532:65532 -v "$VOLUME:/data")
+RUN_OPTS=(--read-only --tmpfs /tmp --tmpfs /run/kubedelos:uid=65532,mode=0700 --user 65532:65532 -v "$VOLUME:/data")
 
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1 || true

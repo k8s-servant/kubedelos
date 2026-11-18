@@ -47,7 +47,25 @@ resources:
     memory: 2Gi
 
 serviceAccount:
-  annotations: {}
+  annotations: {} # the cloud preset's annotation is merged over these
+
+# Workload identity for scanning private registries on a cloud: the preset annotates the ServiceAccount (and, on Azure,
+# labels the pod), and the provider's id below is then required. The cloud side (federated credential, role trust,
+# IAM binding) is yours to set up.
+cloud:
+  provider: none # azure | aws | gcp | none
+  azure:
+    clientId: ""
+  aws:
+    roleArn: ""
+  gcp:
+    serviceAccount: "" # the Google service account email
+
+# Where kubedelos finds registry credentials. All of it is read-only.
+registries:
+  dockerConfigSecrets: [] # kubernetes.io/dockerconfigjson Secrets in the release namespace, mounted in order; the first match wins
+  podPullSecrets: false # read the imagePullSecrets of scanned pods from the namespaces below
+  podPullSecretNamespaces: [] # required when podPullSecrets is on; each gets a Role with get on secrets
 podAnnotations: {}
 podLabels: {}
 nodeSelector: {}

@@ -261,6 +261,70 @@
           "type": "object"
         }
       }
+    },
+    "cloud": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "enum": [
+            "azure",
+            "aws",
+            "gcp",
+            "none"
+          ]
+        },
+        "azure": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "clientId": {
+              "type": "string"
+            }
+          }
+        },
+        "aws": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "roleArn": {
+              "type": "string"
+            }
+          }
+        },
+        "gcp": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "serviceAccount": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    "registries": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dockerConfigSecrets": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "podPullSecrets": {
+          "type": "boolean"
+        },
+        "podPullSecretNamespaces": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
     }
   }
 }

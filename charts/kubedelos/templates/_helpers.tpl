@@ -50,3 +50,33 @@ extraAllowedHosts.
 {{- define "kubedelos.claimName" -}}
 {{- .Values.persistence.existingClaim | default (include "kubedelos.fullname" .) -}}
 {{- end -}}
+
+{{/*
+The ServiceAccount annotations as a YAML map: serviceAccount.annotations, merged under the cloud preset's own (the
+preset wins on a clash).
+*/}}
+{{- define "kubedelos.serviceAccountAnnotations" -}}
+{{- $a := deepCopy (.Values.serviceAccount.annotations | default dict) -}}
+{{- $c := .Values.cloud -}}
+{{- if eq $c.provider "azure" -}}{{- $_ := set $a "azure.workload.identity/client-id" $c.azure.clientId -}}{{- end -}}
+{{- if eq $c.provider "aws" -}}{{- $_ := set $a "eks.amazonaws.com/role-arn" $c.aws.roleArn -}}{{- end -}}
+{{- if eq $c.provider "gcp" -}}{{- $_ := set $a "iam.gke.io/gcp-service-account" $c.gcp.serviceAccount -}}{{- end -}}
+{{- toYaml $a -}}
+{{- end -}}
+
+{{/* The id value of the selected cloud preset, empty for none. */}}
+{{- define "kubedelos.cloudIdentity" -}}
+{{- $c := .Values.cloud -}}
+{{- if eq $c.provider "azure" -}}{{- $c.azure.clientId -}}{{- end -}}
+{{- if eq $c.provider "aws" -}}{{- $c.aws.roleArn -}}{{- end -}}
+{{- if eq $c.provider "gcp" -}}{{- $c.gcp.serviceAccount -}}{{- end -}}
+{{- end -}}
+
+{{/* The mounted dockerconfigjson files, as the JSON list KUBEDELOS_DOCKER_CONFIGS takes. */}}
+{{- define "kubedelos.dockerConfigPaths" -}}
+{{- $paths := list -}}
+{{- range .Values.registries.dockerConfigSecrets -}}
+{{- $paths = append $paths (printf "/etc/kubedelos/docker-configs/%s/.dockerconfigjson" .) -}}
+{{- end -}}
+{{- toJson $paths -}}
+{{- end -}}
