@@ -1,8 +1,9 @@
 # Container image for `kubedelos serve`: the wheel in a virtualenv plus the pinned Trivy, checksum-verified at build
 # time, so the running pod downloads nothing and writes only to /data and /tmp.
-ARG PYTHON_IMAGE=python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e
+# Literal digest (not an ARG) so Dependabot can bump it.
+FROM python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e AS base
 
-FROM ${PYTHON_IMAGE} AS builder
+FROM base AS builder
 WORKDIR /build
 COPY pyproject.toml LICENSE NOTICE README.pypi.md ./
 COPY kubedelos ./kubedelos
@@ -16,7 +17,7 @@ RUN KUBEDELOS_CACHE_DIR=/build/cache /opt/kubedelos/bin/kubedelos trivy install 
     && mkdir -p "/usr/local/lib/kubedelos/trivy/${version}" \
     && cp "/build/cache/trivy/${version}/trivy" "/usr/local/lib/kubedelos/trivy/${version}/trivy"
 
-FROM ${PYTHON_IMAGE}
+FROM base
 LABEL org.opencontainers.image.source="https://github.com/k8s-servant/kubedelos" \
       org.opencontainers.image.licenses="Apache-2.0"
 COPY --from=builder /opt/kubedelos /opt/kubedelos
