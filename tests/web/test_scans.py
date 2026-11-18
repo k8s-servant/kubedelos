@@ -15,7 +15,7 @@ import kubedelos.store.db
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.scan.service import Progress, ScanOutcome
-from kubedelos.store import runlock
+from kubedelos.store import queue, runlock
 from kubedelos.web import pages
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.routes import scans
@@ -754,3 +754,76 @@ def test_start_form_controls_share_one_row_height():
 
 def test_rescan_hint_fits_on_one_line():
     assert "off: uses the 24 h cache" in Path(pages.__file__).parent.joinpath("templates", "scans.html").read_text()
+
+
+# kubedelos serve: the queue card, the next sweep and who asked for each run
+
+
+def _queue_sweep(seed, at):
+    conn = kubedelos.store.db.connect(seed.settings.db_path)
+    try:
+        queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=at)
+    finally:
+        conn.close()
+
+
+def test_serve_scans_page_lists_the_queue_and_next_sweep(serve_client, seed):
+    seed.clock.now, seed.clock.step = datetime(2026, 1, 1, 12, 0, tzinfo=UTC), timedelta(0)
+    _queue_sweep(seed, datetime(2026, 1, 1, 11, 50, tzinfo=UTC))
+    html = serve_client.get("/scans").text
+    card = html.split('id="queue-title"', 1)[1].split("</section>", 1)[0]
+    assert "schedule" in card and "10 min ago" in card
+    assert "2026-01-02 03:00 UTC" in html
+    assert "<button" not in card  # cancelling a queued request comes later
+
+
+def test_serve_scans_page_with_an_empty_queue_and_sweeps_off(serve_client, sweeper):
+    sweeper.next = None
+    html = serve_client.get("/scans").text
+    assert 'id="queue-title"' in html and "Nothing is queued" in html
+    assert "sweeps are off" in html
+
+
+def test_serve_scans_page_offers_no_start_form(serve_client):
+    html = serve_client.get("/scans").text
+    assert 'action="/scans"' not in html and 'name="csrf_token"' not in html
+
+
+def test_serve_history_shows_requester(serve_client, seed):
+    asked = seed.repo.start_run(
+        seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com"
+    )
+    swept = seed.repo.start_run(seed.context, "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    old = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    for run_id in (asked, swept, old):
+        seed.repo.finish_run(run_id, "ok")
+    html = serve_client.get("/scans").text
+    assert '<th scope="col">By</th>' in html
+    by = {run_id: next(r for r in _rows(html) if f"Run {run_id}<" in r) for run_id in (asked, swept, old)}
+    assert "a@example.com" in by[asked]
+    assert "<td>schedule</td>" in by[swept]
+    assert "<td>\N{EN DASH}</td>" in by[old]
+
+
+def test_laptop_scans_page_has_no_queue(client, seed):
+    _run(seed)
+    html = client.get("/scans").text
+    assert 'id="queue-title"' not in html and "sweep" not in html
+    assert '<th scope="col">By</th>' not in html
+    assert 'action="/scans"' in html
+
+
+def test_serve_progress_offers_no_cancel(serve_client, serve_app):
+    scan = FakeScan()
+    runner = ScanRunner(serve_app.state.settings, "my-cluster", scan=scan, fixed_cluster=True)
+    serve_app.state.scans = runner
+    try:
+        runner.start({}, trigger="schedule")  # as the queue worker starts a sweep
+        assert scan.entered.wait(5)
+        scan.on_progress(Progress(total=4, done=1, errors=0, current="reg.example.com/app:1", phase="scanning"))
+        html = _progress(serve_client)
+        assert "Scanning my-cluster" in html
+        assert 'action="/scans/cancel"' not in html and 'name="csrf_token"' not in html
+    finally:
+        scan.release.set()
+        runner.shutdown(timeout=5)

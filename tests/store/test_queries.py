@@ -804,6 +804,14 @@ def test_run_history_pages_newest_first_with_total(db):
     assert run_history(conn, "none", 1) == ([], 0)
 
 
+def test_run_history_carries_the_trigger_and_requester(db):
+    conn, repo = db
+    repo.start_run("ctx", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com")
+    repo.start_run("ctx", "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    rows, _ = run_history(conn, "ctx", 1)
+    assert [(r.trigger, r.requested_by) for r in rows] == [("schedule", None), ("ui", "a@example.com")]
+
+
 def test_context_scans_gives_each_context_its_newest_result(db):
     conn, repo = db
     old = _run(repo, context="kind-lab")

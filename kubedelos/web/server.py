@@ -1,4 +1,4 @@
-"""The loopback socket and the uvicorn server behind ``kubedelos ui``.
+"""The listening socket and the uvicorn server behind ``kubedelos ui`` and ``kubedelos serve``.
 
 The socket is bound here, before the URL is printed, so a busy port is reported cleanly and the browser never opens
 on a dead address. uvicorn's own access log is off because it prints the full request target, ``?token=`` included.
@@ -6,6 +6,10 @@ When the server stops, ``serve`` shuts the app's scan runner down: a UI scan sti
 images in flight, and the process waits a few seconds for it to record its run as cancelled, then kills any Trivy still
 running, since Trivy runs in its own session and never sees the terminal's Ctrl-C. An ``atexit`` hook,
 registered once per served app and dropped after, covers an exit that skips that ``finally``.
+
+``kubedelos ui`` binds loopback only. ``kubedelos serve`` binds ``public``: its host literally, such as ``0.0.0.0`` or
+``::`` in a pod. There ``serve`` first stops the sweeper (no new sweep is queued) and the queue worker (no new scan
+starts), then the scan runner.
 """
 
 import atexit
@@ -33,9 +37,10 @@ def _probe(family: int, address: str, port: int) -> int:
         return probe.connect_ex((address, port))
 
 
-def bind(host: str, port: int) -> socket.socket:
-    """A listening socket on the loopback address for ``host``."""
-    family = socket.AF_INET6 if host == "::1" else socket.AF_INET
+def bind(host: str, port: int, *, public: bool = False) -> socket.socket:
+    """A listening socket on the loopback address for ``host``, or with ``public`` on ``host`` itself."""
+    address = host if public else LOOPBACK[host]
+    family = socket.AF_INET6 if ":" in address else socket.AF_INET
     sock = socket.socket(family, socket.SOCK_STREAM)
     try:
         # SO_REUSEADDR skips TIME_WAIT, so a restart works. On macOS/BSD it also lets this bind succeed beside a
@@ -43,9 +48,9 @@ def bind(host: str, port: int) -> socket.socket:
         # TIME_WAIT is); an answer, a timeout or any other error counts as in use.
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         probed = port and not sys.platform.startswith("linux")  # port 0 asks the OS for a free one
-        if probed and _probe(family, LOOPBACK[host], port) != errno.ECONNREFUSED:
+        if probed and _probe(family, address, port) != errno.ECONNREFUSED:
             raise PortInUse(port)
-        sock.bind((LOOPBACK[host], port))
+        sock.bind((address, port))
         sock.listen()
     except OSError as exc:
         sock.close()
@@ -64,7 +69,7 @@ def url(host: str, port: int, token: str) -> str:
 def serve(app: FastAPI, sock: socket.socket) -> None:
     """Run ``app`` on ``sock`` until Ctrl-C (uvicorn handles the signal).
 
-    Then stop the app's scan runner, if it has one.
+    Then stop the app's sweeper, queue worker and scan runner, in that order, each if it has one.
     """
     config = uvicorn.Config(app, workers=1, access_log=False, log_level="warning", lifespan="off")
     scans = getattr(app.state, "scans", None)
@@ -73,6 +78,9 @@ def serve(app: FastAPI, sock: socket.socket) -> None:
     try:
         uvicorn.Server(config).run(sockets=[sock])
     finally:
+        for part in ("sweeper", "worker"):
+            if (stoppable := getattr(app.state, part, None)) is not None:
+                stoppable.stop()
         if scans is not None:
             scans.shutdown()
             atexit.unregister(scans.shutdown)

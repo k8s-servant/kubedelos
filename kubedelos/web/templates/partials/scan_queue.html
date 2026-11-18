@@ -1,0 +1,30 @@
+{#- The queue card of the serve scans page: the requests waiting for the queue worker, oldest first, and when the next
+    scheduled sweep fires. View-only: cancelling a queued request is not offered yet. -#}
+  <section class="card" aria-labelledby="queue-title">
+    <h2 class="card-title" id="queue-title">Queue</h2>
+    <p class="hint">Next sweep: {{ next_sweep }}</p>
+  {%- if queue %}
+    <div class="table-wrap">
+      <table class="history">
+        <thead>
+          <tr>
+            <th scope="col">Trigger</th>
+            <th scope="col">Requested by</th>
+            <th scope="col">Requested</th>
+          </tr>
+        </thead>
+        <tbody>
+          {%- for item in queue %}
+          <tr>
+            <td><span class="chip">{{ item.trigger }}</span></td>
+            <td>{{ item.by }}</td>
+            <td>{{ item.requested }}</td>
+          </tr>
+          {%- endfor %}
+        </tbody>
+      </table>
+    </div>
+  {%- else %}
+    <p class="notice">Nothing is queued.</p>
+  {%- endif %}
+  </section>

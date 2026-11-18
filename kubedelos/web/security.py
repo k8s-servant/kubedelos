@@ -5,13 +5,18 @@ that: a Host check (DNS rebinding), a startup token exchanged for a session cook
 strict CSP with a per-response nonce. Cookies are not scoped to a port, so any server on another loopback port receives
 this cookie; its name carries the port so two instances do not clash. HttpOnly, the Host check and the Origin and CSRF
 checks still guard the routes. The access log never records query strings, because the startup token travels in one.
+
+``install_serve`` is the in-cluster counterpart for ``kubedelos serve``, which has no startup token or sessions yet: the
+same headers and access line, a Host check against the configured ``allowed_hosts`` (skipped for ``/healthz``, which
+the kubelet probes by pod IP), and a refusal of every method but GET and HEAD before any route runs, so that the queue
+worker stays the only thing that starts a scan.
 """
 
 import hashlib
 import hmac
 import logging
 import secrets
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Collection
 from urllib.parse import parse_qs, parse_qsl, quote, urlencode, urlsplit
 
 from fastapi import FastAPI, Request, Response
@@ -22,6 +27,8 @@ from kubedelos.web.pages import render
 CSRF_HEADER = "x-csrf-token"
 CSRF_FIELD = "csrf_token"
 SESSION_HINT = "Open the URL printed in the terminal where you started kubedelos ui."
+VIEW_ONLY_HINT = "This kubedelos is view-only. Signing in to start scans comes with KUBEDELOS_TRUST_PROXY_HEADERS."
+HEALTH_PATH = "/healthz"
 CSP = (
     "default-src 'self'; script-src 'self' 'nonce-{nonce}'; style-src 'self'; img-src 'self' data:; "
     "object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
@@ -120,7 +127,7 @@ def _forbidden(request: Request) -> Response:
     )
 
 
-def _set_headers(response: Response, nonce: str) -> None:
+def set_headers(response: Response, nonce: str) -> None:
     response.headers["Content-Security-Policy"] = CSP.format(nonce=nonce)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
@@ -163,7 +170,38 @@ def install(app: FastAPI, guard: Guard) -> None:
         else:
             request.state.csp_nonce = nonce
             response = await _check(request, guard, call_next)
-        _set_headers(response, nonce)
+        set_headers(response, nonce)
         # The path only: the query may hold the startup token. Percent-encoded, so it cannot forge log lines.
+        logger.info("%s %s %d", request.method, _raw_path(request), response.status_code)
+        return response
+
+
+def host_name(host: str) -> str:
+    """The hostname of a Host header value: its port dropped, an IPv6 literal's brackets stripped, lowercased."""
+    if host.startswith("["):
+        name, closed, _ = host[1:].partition("]")
+        return name.lower() if closed else ""
+    return host.partition(":")[0].lower()
+
+
+def _view_only(request: Request) -> Response:
+    return render(request, "error.html", {"title": "View-only", "message": VIEW_ONLY_HINT}, status=403)
+
+
+def install_serve(app: FastAPI, allowed_hosts: Collection[str]) -> None:
+    """Add the view-only middleware of ``kubedelos serve`` to ``app``. ``allowed_hosts`` are lowercased hostnames
+    without brackets, as ``Settings.allowed_hosts`` holds them. Every response gets the security headers."""
+    allowed = frozenset(allowed_hosts)
+
+    @app.middleware("http")
+    async def security(request: Request, call_next: Callable[[Request], Awaitable[Response]]) -> Response:
+        nonce = secrets.token_urlsafe(16)
+        host = request.headers.get("host", "")
+        if request.url.path != HEALTH_PATH and (not host or host_name(host) not in allowed):
+            response: Response = PlainTextResponse("invalid Host header", status_code=400)
+        else:
+            request.state.csp_nonce = nonce
+            response = _view_only(request) if request.method not in _SAFE_METHODS else await call_next(request)
+        set_headers(response, nonce)
         logger.info("%s %s %d", request.method, _raw_path(request), response.status_code)
         return response
