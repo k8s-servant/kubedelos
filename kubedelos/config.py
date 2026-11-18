@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     sweep_timezone: str = "UTC"
     sweep_enabled: bool = True
     retention_days: int = Field(default=180, ge=0)
-    allowed_hosts: list[str] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
+    allowed_hosts: Annotated[list[str], NoDecode] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
 
     @field_validator("sweep_timezone")
     @classmethod
@@ -61,6 +61,19 @@ class Settings(BaseSettings):
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"unknown time zone {value!r}") from exc
         return value
+
+    @field_validator("allowed_hosts", mode="before")
+    @classmethod
+    def _split_allowed_hosts(cls, value: Any) -> Any:
+        """Accept a JSON list or a comma-separated string (``a.example.com,b.example.com``, as a Helm chart sets it)."""
+        if not isinstance(value, str):
+            return value
+        if value.lstrip().startswith("["):
+            try:
+                return json.loads(value)
+            except ValueError:
+                pass  # "[::1],a.example.com" is a comma list that starts with an IPv6 literal
+        return [item.strip() for item in value.split(",") if item.strip()]
 
     @field_validator("allowed_hosts")
     @classmethod

@@ -144,3 +144,10 @@ def test_serve_defaults():
     assert (settings.cluster_name, settings.sweep_schedule, settings.sweep_timezone) == (None, "0 3 * * *", "UTC")
     assert settings.sweep_enabled is True and settings.retention_days == 180
     assert settings.allowed_hosts == ["localhost", "127.0.0.1"]
+
+
+def test_allowed_hosts_from_env_comma_list(monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_ALLOWED_HOSTS", "Example.com, [::1]")
+    assert Settings().allowed_hosts == ["example.com", "::1"]
+    monkeypatch.setenv("KUBEDELOS_ALLOWED_HOSTS", "[::1],a.example.com,")
+    assert Settings().allowed_hosts == ["::1", "a.example.com"]
