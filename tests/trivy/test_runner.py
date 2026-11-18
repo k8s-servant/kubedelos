@@ -779,7 +779,13 @@ def test_temp_config_removed_when_scan_raises(tmp_path, monkeypatch):
     secrets.mkdir()
     mounted = tmp_path / "m.json"
     mounted.write_text(json.dumps({"auths": {"registry.example": {"auth": "YTpi"}}}))
-    settings = Settings(cache_dir=tmp_path / "cache", layer_cache=False, secrets_dir=secrets, docker_configs=[mounted])
+    settings = Settings(
+        data_dir=tmp_path / "data",
+        cache_dir=tmp_path / "cache",
+        layer_cache=False,
+        secrets_dir=secrets,
+        docker_configs=[mounted],
+    )
     seen = []
 
     def boom(trivy, image, platform, timeout, **kw):
@@ -801,6 +807,7 @@ def test_unwritable_secrets_dir_fails_only_that_image(tmp_path, monkeypatch):
     mounted = tmp_path / "m.json"
     mounted.write_text(json.dumps({"auths": {"private.example": {"auth": "YTpi"}}}))
     settings = Settings(
+        data_dir=tmp_path / "data",
         cache_dir=tmp_path / "cache",
         layer_cache=False,
         parallelism=1,

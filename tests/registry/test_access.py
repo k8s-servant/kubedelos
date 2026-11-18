@@ -27,7 +27,7 @@ def _mounted(tmp_path, host=HOST, user="mounted"):
 def _settings(tmp_path, **kw):
     secrets = tmp_path / "secrets"
     secrets.mkdir(exist_ok=True)
-    return Settings(secrets_dir=secrets, **kw)
+    return Settings(secrets_dir=secrets, data_dir=tmp_path / "data", cache_dir=tmp_path / "cache", **kw)
 
 
 def _written(access):

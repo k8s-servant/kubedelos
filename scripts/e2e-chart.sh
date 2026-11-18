@@ -223,7 +223,11 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         # shellcheck disable=SC2086 # the fields are words on purpose
         if expect_registry e2e-mounted scanned $registry && expect_registry e2e-pull scanned $registry &&
           expect_registry e2e-unlisted "error auth" $registry && expect_registry e2e-opaque "error auth" $registry; then
-          left="$(kc -n kubedelos exec deploy/kd-kubedelos -- python -c "$SECRETS_QUERY")"
+          left="$(kc -n kubedelos exec deploy/kd-kubedelos -- python -c "$SECRETS_QUERY")" || {
+            echo "secrets dir check failed" >&2
+            dump_state
+            exit 1
+          }
           if [ "$left" = 0 ]; then
             echo "secrets dir empty"
             exit 0

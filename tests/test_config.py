@@ -189,7 +189,12 @@ def test_docker_configs_need_secrets_dir(tmp_path):
     assert Settings().docker_configs == [] and Settings().secrets_dir is None
     with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
         Settings(docker_configs=[tmp_path / "a.json"])
-    settings = Settings(docker_configs=[tmp_path / "a.json"], secrets_dir=tmp_path / "s")
+    settings = Settings(
+        docker_configs=[tmp_path / "a.json"],
+        secrets_dir=tmp_path / "s",
+        data_dir=tmp_path / "d",
+        cache_dir=tmp_path / "c",
+    )
     assert settings.docker_configs == [tmp_path / "a.json"]
 
 
@@ -205,8 +210,10 @@ def test_pod_pull_secret_namespaces_default_env_and_secrets_dir(monkeypatch, tmp
     assert Settings().pod_pull_secret_namespaces == []
     with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
         Settings(pod_pull_secret_namespaces=["web"])
-    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path / "s"))
     monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", "web, ops")
+    monkeypatch.setenv("KUBEDELOS_DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("KUBEDELOS_CACHE_DIR", str(tmp_path / "c"))
     assert Settings().pod_pull_secret_namespaces == ["web", "ops"]
     monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", '["web"]')
     assert Settings().pod_pull_secret_namespaces == ["web"]

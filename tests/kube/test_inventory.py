@@ -399,7 +399,15 @@ def test_inventory_records_pull_secret_names_in_listed_namespaces(tmp_path):
             "jobs": [pod("p3", "jobs", image="redis:7", pull_secrets=["jobcred"])],
         },
     )
-    items, _ = collect(api, Settings(pod_pull_secret_namespaces=["web"], secrets_dir=tmp_path))
+    items, _ = collect(
+        api,
+        Settings(
+            pod_pull_secret_namespaces=["web"],
+            secrets_dir=tmp_path / "s",
+            data_dir=tmp_path / "d",
+            cache_dir=tmp_path / "c",
+        ),
+    )
     by_image = {item.image.repo: item for item in items}
     assert by_image["docker.io/library/nginx"].pull_secrets == [("web", "regcred"), ("web", "other")]
     assert by_image["docker.io/library/redis"].pull_secrets == []
@@ -418,7 +426,15 @@ def test_templates_carry_pull_secrets_in_listed_namespaces(tmp_path):
         deployments={"web": [deployment("idle", "web", "reg.example.com/idle:1", 0, pull_secrets=["regcred"])]},
         cronjobs={"web": [cronjob("nightly", "web", "reg.example.com/nightly:1", pull_secrets=["cron-cred"])]},
     )
-    items, _ = collect(api, Settings(pod_pull_secret_namespaces=["web"], secrets_dir=tmp_path))
+    items, _ = collect(
+        api,
+        Settings(
+            pod_pull_secret_namespaces=["web"],
+            secrets_dir=tmp_path / "s",
+            data_dir=tmp_path / "d",
+            cache_dir=tmp_path / "c",
+        ),
+    )
     assert {i.image.repo: i.pull_secrets for i in items} == {
         "reg.example.com/idle": [("web", "regcred")],
         "reg.example.com/nightly": [("web", "cron-cred")],
