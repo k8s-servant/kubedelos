@@ -11,6 +11,7 @@ scans one image with the same access a scan would get, one test at a time. No to
 ``Settings`` holds none (a test keeps it that way), and a failed test shows Trivy's redacted cause only.
 """
 
+import logging
 import os
 import threading
 from pathlib import Path
@@ -22,7 +23,7 @@ from starlette.concurrency import run_in_threadpool
 
 from kubedelos.config import Settings, setting_sources
 from kubedelos.hints import login_hint
-from kubedelos.kube.inventory import parse_user_ref
+from kubedelos.kube.inventory import DEFAULT_PLATFORM, parse_user_ref
 from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.store.queries import newest_run
@@ -33,6 +34,7 @@ from kubedelos.trivy.runner import error_cause, scan_image
 from kubedelos.web.pages import open_db, render, shown_context
 
 router = APIRouter()
+logger = logging.getLogger("kubedelos.web")
 
 FLAGS = {"context": "--context", "kubeconfig": "--kubeconfig"}  # the settings `kubedelos ui` takes as flags
 FALLBACKS = {  # what an unset setting means
@@ -145,8 +147,9 @@ def settings(request: Request) -> HTMLResponse:
     return render(request, "settings.html", ctx)
 
 
-def _result(request: Request, text: str, *, status: int = 200, **extra: object) -> HTMLResponse:
-    return render(request, "partials/registry_test.html", {"text": text, **extra}, status)
+def _result(request: Request, text: str, **extra: object) -> HTMLResponse:
+    """The result box's content. Always 200: htmx swaps no 4xx or 5xx, and the text says what went wrong."""
+    return render(request, "partials/registry_test.html", {"text": text, **extra})
 
 
 @router.post("/settings/registry-test", response_class=HTMLResponse)
@@ -161,14 +164,14 @@ def _registry_test(request: Request, body: bytes) -> Response:
     try:
         fields = parse_qs(body[:_MAX_BODY].decode(), keep_blank_values=True, max_num_fields=100, errors="strict")
     except ValueError:
-        return _result(request, "error: the form could not be read", status=400, failed=True)
+        return _result(request, "error: the form could not be read", failed=True)
     image = fields.get("image", [""])[0].strip()
     ref = parse_user_ref(image)
     if ref is None:
         shown = "".join(ch if ch.isprintable() else "?" for ch in image)[:200]
-        return _result(request, f"error: invalid image reference: {shown}", status=400, failed=True)
+        return _result(request, f"error: invalid image reference: {shown}", failed=True)
     if not _LOCK.acquire(blocking=False):
-        return _result(request, "A test is already running", status=409, failed=True)
+        return _result(request, "A test is already running", failed=True)
     try:
         settings: Settings = request.app.state.settings
         host = registry_host(ref)
@@ -176,19 +179,22 @@ def _registry_test(request: Request, body: bytes) -> Response:
             trivy = ensure_trivy(settings)
             with (
                 TrivyCache(trivy, settings.cache_dir, java_db=False) as cache,
-                RegistryAccess(settings).for_item(InventoryItem(image=ref, platform="linux/amd64")) as access,
+                RegistryAccess(settings).for_item(InventoryItem(image=ref, platform=DEFAULT_PLATFORM)) as access,
             ):
                 result = scan_image(
                     trivy,
                     ref,
-                    "linux/amd64",
+                    DEFAULT_PLATFORM,
                     min(settings.scan_timeout_s, TEST_TIMEOUT_S),
                     cache_dir=cache.dir,
                     pkg_types=("os",),
                     docker_config=access.docker_config,
                 )
-        except Exception as exc:  # the test must answer, whatever went wrong; only the type is shown
-            return _result(request, f"error: the test could not run: {type(exc).__name__}", status=500, failed=True)
+        except Exception as exc:  # the test must answer, whatever went wrong
+            logger.warning("registry test of %s failed: %s", ref.ref, error_cause(str(exc)), exc_info=False)
+            # A RuntimeError is Trivy's own (its DB or cache); error_cause redacts it. Any other shows only its type.
+            why = error_cause(str(exc)) if isinstance(exc, RuntimeError) else type(exc).__name__
+            return _result(request, f"error: the test could not run: {why}", failed=True)
     finally:
         _LOCK.release()
     if result.status != "error":

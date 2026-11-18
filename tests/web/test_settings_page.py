@@ -200,7 +200,7 @@ def test_registry_test_needs_csrf(serve_client, scanned):
 @pytest.mark.parametrize("image", ["", "-x", "a b", f"{HOST}/a@sha256:nope"])
 def test_registry_test_rejects_bad_ref(serve_client, scanned, image):
     response = signed_post(serve_client, "/settings/registry-test", {"image": image})
-    assert response.status_code == 400 and "invalid image reference" in response.text and scanned.calls == []
+    assert response.status_code == 200 and "invalid image reference" in response.text and scanned.calls == []
 
 
 def test_registry_test_reports_a_readable_image(serve_client, scanned):
@@ -216,6 +216,7 @@ def test_registry_test_busy(serve_client, scanned):
         response = signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"})
     finally:
         settings_routes._LOCK.release()
+    assert response.status_code == 200  # htmx swaps only 2xx
     assert "A test is already running" in response.text and scanned.calls == []
 
 
@@ -262,3 +263,36 @@ def test_registry_test_other_errors_show_kind_and_cause(serve_client, scanned):
     )
     text = signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"}).text
     assert "not_found" in text and "nope" in text and "docs/registries" not in text
+
+
+def test_registry_test_shows_a_trivy_failure_cause_and_logs_it(serve_client, scanned, monkeypatch, caplog):
+    def fail(*args, **kwargs):
+        raise RuntimeError("download of the Trivy DB failed")
+
+    monkeypatch.setattr(settings_routes, "scan_image", fail)
+    with caplog.at_level("WARNING"):
+        response = signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"})
+    assert response.status_code == 200 and "download of the Trivy DB failed" in response.text
+    assert "download of the Trivy DB failed" in caplog.text
+
+
+def test_registry_test_hides_an_unexpected_error_but_the_type(serve_client, scanned, monkeypatch):
+    def fail(*args, **kwargs):
+        raise ValueError("internal-detail")
+
+    monkeypatch.setattr(settings_routes, "scan_image", fail)
+    response = signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"})
+    assert response.status_code == 200 and "ValueError" in response.text and "internal-detail" not in response.text
+
+
+def test_registry_test_scans_the_default_platform(serve_client, scanned, monkeypatch):
+    seen = []
+    monkeypatch.setattr(settings_routes, "DEFAULT_PLATFORM", "linux/arm64")
+
+    def fake(trivy, ref, platform, *args, **kwargs):
+        seen.append(platform)
+        return ImageResult(image=ref, platform=platform, status="ok")
+
+    monkeypatch.setattr(settings_routes, "scan_image", fake)
+    signed_post(serve_client, "/settings/registry-test", {"image": f"{HOST}/a:1"})
+    assert seen == ["linux/arm64"]
