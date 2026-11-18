@@ -1,7 +1,7 @@
 """The `kubedelos` command line, a Typer app.
 
-Scanning lives in the web UI (`kubedelos ui`), and later in the in-cluster schedule, not here: CI gating is left to
-plain Trivy. The CLI serves the UI and keeps two helpers, `trivy install` and `registry test`.
+Scanning lives in the web UI (`kubedelos ui`) and the in-cluster schedule (`kubedelos serve`), not here: CI gating is
+left to plain Trivy. The CLI serves the UI and keeps two helpers, `trivy install` and `registry test`.
 """
 
 import contextlib
@@ -14,6 +14,7 @@ import sys
 import threading
 import webbrowser
 from collections.abc import Iterator
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -27,15 +28,18 @@ from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_image_id
 from kubedelos.models import is_valid_ref, registry_host
-from kubedelos.store import runlock
+from kubedelos.scheduler import Sweeper, cron_error
+from kubedelos.store import queue, runlock
 from kubedelos.store.db import connect
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
 from kubedelos.web import server
-from kubedelos.web.app import create_app
+from kubedelos.web.app import create_app, create_serve_app
+from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import plural
+from kubedelos.web.worker import QueueWorker
 
 app = typer.Typer(
     help="Scan the container images running in a Kubernetes cluster with Trivy, from a local web UI.",
@@ -183,6 +187,16 @@ def registry_test(
     raise typer.Exit(2)
 
 
+def _log_access() -> None:
+    """With KUBEDELOS_LOG_LEVEL=info, print one access line per request on stderr."""
+    if os.environ.get("KUBEDELOS_LOG_LEVEL", "").lower() == "info":
+        handler = logging.StreamHandler(sys.stderr)
+        handler.setFormatter(logging.Formatter("%(message)s"))
+        web_log = logging.getLogger("kubedelos.web")
+        web_log.addHandler(handler)
+        web_log.setLevel(logging.INFO)
+
+
 @app.command()
 def ui(
     port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 9370,
@@ -224,12 +238,7 @@ def ui(
     except OSError as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
-    if os.environ.get("KUBEDELOS_LOG_LEVEL", "").lower() == "info":
-        handler = logging.StreamHandler(sys.stderr)
-        handler.setFormatter(logging.Formatter("%(message)s"))
-        web_log = logging.getLogger("kubedelos.web")
-        web_log.addHandler(handler)
-        web_log.setLevel(logging.INFO)
+    _log_access()
     address = server.url(host, port, token)
     typer.echo(f"kubedelos ui for context {name}: {address}")
     typer.echo("Press Ctrl-C to stop.")
@@ -237,3 +246,68 @@ def ui(
         webbrowser.open(address)
     flags = frozenset(k for k, v in {"context": context, "kubeconfig": kubeconfig}.items() if v is not None)
     server.serve(create_app(settings, context=name, token=token, port=port, flags=flags), sock)
+
+
+@app.command()
+def serve(
+    port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 8080,
+    host: Annotated[str, typer.Option(help="Address to listen on.")] = "0.0.0.0",  # noqa: S104 - in-cluster default
+    kubeconfig: Annotated[Path | None, typer.Option(help="Path to the kubeconfig file.")] = None,
+) -> None:
+    """Serve the view-only UI of one cluster and sweep it on a schedule (the in-cluster mode).
+
+    The cluster is named by KUBEDELOS_CLUSTER_NAME. Anyone who can reach the port can read every finding, so expose it
+    only through an authenticating proxy or keep it cluster-internal. Set KUBEDELOS_LOG_LEVEL=info to print an access
+    line per request on stderr.
+    """
+    settings = _load_settings(kubeconfig=kubeconfig)
+    if not settings.cluster_name:
+        typer.echo("error: KUBEDELOS_CLUSTER_NAME is required for kubedelos serve", err=True)
+        raise typer.Exit(2)
+    if problem := cron_error(settings.sweep_schedule, settings.sweep_timezone):
+        typer.echo(f"error: {problem}", err=True)
+        raise typer.Exit(2)
+    try:
+        with runlock.hold_serve(settings.data_dir):
+            _serve(settings, host, port)
+    except runlock.AlreadyServing as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+
+
+def _serve(settings: Settings, host: str, port: int) -> None:
+    """Start the queue worker and the sweeper, and serve until stopped; the caller holds the serve lock."""
+    name = settings.cluster_name or ""
+    try:
+        kube_client.load(settings)  # a bad kubeconfig fails here, not at the first sweep
+        conn = connect(settings.db_path)  # creates the database and runs the migrations
+        try:
+            stale = runlock.close_stale_runs(conn, settings.data_dir)
+            queue.abandon_started(conn)
+        finally:
+            conn.close()
+    except Exception as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    if stale:
+        typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
+    try:
+        sock = server.bind(host, port, public=True)
+    except server.PortInUse as exc:
+        typer.echo(f"error: port {port} is in use; pass --port", err=True)
+        raise typer.Exit(2) from exc
+    except OSError as exc:
+        typer.echo(f"error: {_flat(exc)}", err=True)
+        raise typer.Exit(2) from exc
+    _log_access()
+    clock = lambda: datetime.now(UTC)  # noqa: E731
+    runner = ScanRunner(settings, name, fixed_cluster=True)
+    worker = QueueWorker(settings, runner, clock=clock)
+    sweeper = Sweeper(settings, worker.enqueue_sweep)
+    worker.start()
+    sweeper.start()
+    typer.echo(f"kubedelos serve for cluster {_one_line(name)} on http://{host}:{port}")
+    next_sweep = sweeper.next_run()
+    typer.echo(f"next sweep: {next_sweep.isoformat()}" if next_sweep else "sweeps are off")
+    typer.echo("Press Ctrl-C to stop.")
+    server.serve(create_serve_app(settings, runner=runner, worker=worker, sweeper=sweeper, clock=clock), sock)

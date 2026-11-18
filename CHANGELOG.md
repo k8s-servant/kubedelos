@@ -4,6 +4,10 @@
 
 ### Features
 
+- `kubedelos serve` runs kubedelos in a cluster: a view-only UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`, that refuses every write. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory, so expose it only through an authenticating proxy or keep it cluster-internal.
+- Scheduled sweeps: `serve` queues a sweep on a cron schedule (`KUBEDELOS_SWEEP_SCHEDULE`, default `0 3 * * *`, in `KUBEDELOS_SWEEP_TIMEZONE`; `KUBEDELOS_SWEEP_ENABLED=false` turns it off) and a worker runs the queue one scan at a time. A sweep skips the 24-hour result cache, so findings match the current Trivy DB.
+- Retention: `serve` deletes runs older than `KUBEDELOS_RETENTION_DAYS` (default 180, `0` keeps all) and expired image-cache rows.
+- Scan queue: schema migration 10 adds the `scan_request` table that holds queued, started and cancelled requests.
 - Rescan every image: a box on the Scans form skips the 24-hour result cache for one scan, so every image is matched against the current Trivy DB. Fresh results still go into the cache.
 - A guide, [How a scan works](docs/how-scans-work.md), explains each step of a scan, the result cache, the Trivy DBs and the layer cache (what, where, why and how long), parallelism and time limits, failure kinds and retries, how to speed up a slow scan, and what is kept on disk.
 - Package skeleton with the `kubedelos` entrypoint.

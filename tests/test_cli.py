@@ -26,10 +26,10 @@ def test_kubedelos_is_the_only_console_script():
 
 
 def test_scanning_lives_in_the_ui_not_the_cli():
-    # Scans start from the UI (and, later, the in-cluster schedule); CI gating is left to plain Trivy.
+    # Scans start from the UI and the in-cluster schedule; CI gating is left to plain Trivy.
     commands = {c.name or c.callback.__name__ for c in app.registered_commands}
     groups = {g.name for g in app.registered_groups}
-    assert commands | groups == {"version", "ui", "trivy", "registry"}
+    assert commands | groups == {"version", "ui", "serve", "trivy", "registry"}
     r = CliRunner().invoke(app, ["scan"])
     assert r.exit_code == 2 and "No such command" in r.output
 
@@ -343,6 +343,176 @@ def test_ui_prints_no_note_without_stale_runs(ui_env):
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output
     assert "interrupted run" not in r.output
+
+
+@pytest.fixture
+def serve_env(fake_env, monkeypatch):
+    """Fake out kube, the socket, the server, the worker and the sweeper; record what ``serve`` hands them."""
+    from datetime import UTC, datetime
+
+    from kubedelos import cli
+    from kubedelos.web import server
+
+    monkeypatch.setenv("KUBEDELOS_CLUSTER_NAME", "my-cluster")
+    calls = {"bind": [], "served": [], "started": [], "fired": [], "app": {}, "at_serve": {}}
+    monkeypatch.setattr(cli.kube_client, "load", lambda settings: _FakeApi())
+
+    def fake_bind(host, port, *, public=False):
+        calls["bind"].append((host, port, public))
+        return "sock"
+
+    def fake_serve(app, sock):
+        from kubedelos.config import Settings
+        from kubedelos.store.db import connect
+
+        conn = connect(Settings().db_path)
+        try:
+            calls["at_serve"] = {
+                "runs": [r[0] for r in conn.execute("SELECT status FROM scan_run")],
+                "requests": [r[0] for r in conn.execute("SELECT state FROM scan_request")],
+            }
+        finally:
+            conn.close()
+        calls["served"].append((app, sock))
+
+    class FakeWorker:
+        def __init__(self, settings, runner, *, clock, poll_s=2.0):
+            self.runner = runner
+
+        def enqueue_sweep(self):
+            calls["fired"].append("sweep")
+
+        def start(self):
+            calls["started"].append("worker")
+
+    class FakeSweeper:
+        def __init__(self, settings, on_fire):
+            self.on_fire, self.enabled = on_fire, settings.sweep_enabled
+
+        def start(self):
+            calls["started"].append("sweeper")
+
+        def next_run(self):
+            return datetime(2026, 11, 19, 3, 0, tzinfo=UTC) if self.enabled else None
+
+    def fake_create_serve_app(settings, **kwargs):
+        calls["app"] = kwargs
+        return "the-app"
+
+    monkeypatch.setattr(server, "bind", fake_bind)
+    monkeypatch.setattr(server, "serve", fake_serve)
+    monkeypatch.setattr(cli, "QueueWorker", FakeWorker)
+    monkeypatch.setattr(cli, "Sweeper", FakeSweeper)
+    monkeypatch.setattr(cli, "create_serve_app", fake_create_serve_app)
+    return calls
+
+
+def test_serve_requires_cluster_name(serve_env, monkeypatch):
+    monkeypatch.delenv("KUBEDELOS_CLUSTER_NAME")
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_CLUSTER_NAME is required for kubedelos serve" in r.output
+    assert serve_env["served"] == []
+
+
+def test_serve_rejects_bad_cron(serve_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_SWEEP_SCHEDULE", "every day")
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 2
+    assert "error: KUBEDELOS_SWEEP_SCHEDULE" in r.output
+    assert serve_env["served"] == []
+
+
+def test_serve_rejects_bad_timezone(serve_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_SWEEP_TIMEZONE", "Mars/Olympus")
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 2
+    assert "KUBEDELOS_SWEEP_TIMEZONE" in r.output
+    assert serve_env["served"] == []
+
+
+def test_serve_refuses_a_second_instance(serve_env):
+    from kubedelos.config import Settings
+    from kubedelos.store import runlock
+
+    with runlock.hold_serve(Settings().data_dir):
+        r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 2
+    assert "error: another kubedelos serve" in r.output
+    assert serve_env["served"] == []
+
+
+def test_serve_startup_closes_stale_state(serve_env):
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    conn = connect(Settings().db_path)
+    try:
+        run_id = Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+        conn.execute(
+            "INSERT INTO scan_request (kind, trigger, requested_at, overrides, state) "
+            "VALUES ('scan', 'schedule', '2026-11-18T00:00:00+00:00', '{}', 'started')"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 0, r.output
+    assert "note: closed 1 interrupted run\n" in r.output
+    assert serve_env["at_serve"] == {"runs": ["failed"], "requests": ["cancelled"]}
+    conn = connect(Settings().db_path)
+    try:
+        assert Repo(conn).get_run(run_id)["status"] == "failed"
+    finally:
+        conn.close()
+
+
+def test_serve_prints_address_and_next_sweep(serve_env):
+    r = CliRunner().invoke(app, ["serve", "--port", "9444"])
+    assert r.exit_code == 0, r.output
+    assert "kubedelos serve for cluster my-cluster on http://0.0.0.0:9444\n" in r.stdout
+    assert "next sweep: 2026-11-19T03:00:00+00:00\n" in r.stdout
+    assert serve_env["started"] == ["worker", "sweeper"]
+    assert serve_env["served"] == [("the-app", "sock")]
+    assert {"runner", "worker", "sweeper"} <= serve_env["app"].keys()
+
+
+def test_serve_says_when_sweeps_are_off(serve_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_SWEEP_ENABLED", "false")
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 0, r.output
+    assert "sweeps are off\n" in r.stdout
+
+
+def test_serve_binds_public_by_default(serve_env):
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 0, r.output
+    assert serve_env["bind"] == [("0.0.0.0", 8080, True)]  # noqa: S104 - the in-cluster default
+
+
+def test_serve_port_in_use_exits_2(serve_env, monkeypatch):
+    from kubedelos.web import server
+
+    def busy(host, port, *, public=False):
+        raise server.PortInUse(port)
+
+    monkeypatch.setattr(server, "bind", busy)
+    r = CliRunner().invoke(app, ["serve", "--port", "9444"])
+    assert r.exit_code == 2
+    assert "error: port 9444 is in use; pass --port" in r.output
+
+
+def test_serve_bad_kubeconfig_exits_2(serve_env, monkeypatch):
+    from kubedelos import cli
+
+    def broken(settings):
+        raise RuntimeError("no such\nconfig")
+
+    monkeypatch.setattr(cli.kube_client, "load", broken)
+    r = CliRunner().invoke(app, ["serve"])
+    assert r.exit_code == 2
+    assert "error: no such config" in r.output
 
 
 # registry test (and anything else that scans from the CLI) turns SIGTERM and SIGHUP into Ctrl-C.
