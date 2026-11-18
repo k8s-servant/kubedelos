@@ -2,12 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `kubedelos serve` can scan private images: through the pod's cloud identity for the registries the operator lists,
+**Goal:** `kubedelos serve` can scan private images: through the pod's cloud identity (the `cloud.provider` presets),
 through mounted Docker config Secrets, and (opt-in) through the pull secrets a pod names, without credentials reaching
 SQLite, logs or node disk.
 
-**Architecture:** A new `kubedelos/registry/` package decides, per image, two things: whether Trivy keeps the cloud
-identity environment (`cloud.py`), and which Docker config `auths` it gets (`dockerconfig.py`, `pullsecrets.py`).
+**Architecture:** A new `kubedelos/registry/` package decides, per image, which Docker config `auths` Trivy gets
+(`dockerconfig.py`, `pullsecrets.py`). The cloud identity needs no code: the chart's presets set up the environment and
+Trivy's own providers use it, only for vendor-run registry hosts (spec, Approaches, Registry login).
 `access.py` combines them into a per-image context manager that `scan_many` enters around each image's attempts; it
 writes a 0700 temporary `DOCKER_CONFIG` under the memory-backed `KUBEDELOS_SECRETS_DIR` and removes it on exit. The
 chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles and the memory volume.
@@ -29,8 +30,6 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
   is ever written.
 - Only `auths` entries are written. `credHelpers`, `credsStore` and every other key of a mounted config are dropped.
 - A Secret whose `type` is not `kubernetes.io/dockerconfigjson` is dropped unread and unlogged.
-- `registries.cloudHosts` is empty by default; exact hosts or `fnmatch` globs, matched case-insensitively on the
-  registry host (port included when the ref has one). A lone `*` is refused.
 - Trivy is pinned (v0.76.1) with `--scanners vuln`. No new Trivy flags.
 - AGENTS.md conventions: TDD, one test file per module, ruff 120, module docstrings, placeholders only (`example.com`,
   `my-cluster`, `registry.example.com`), conventional lowercase commits, no attribution lines.
@@ -39,113 +38,43 @@ chart adds the `cloud.provider` presets, the Secret mounts, per-namespace Roles 
 
 ## Rulings made while planning (the spec did not decide these)
 
-1. **Scrubbing covers the metadata services, not only the variables.** Removing `AZURE_*`/`AWS_*`/`GOOGLE_*` does not
-   stop the SDKs falling back to the node's metadata service (Azure IMDS, EC2 IMDS, the GCE metadata server), which
-   would hand the *node's* identity to `attacker.azurecr.io` on a cluster where pods reach it. So for a host not on
-   `cloudHosts`, kubedelos also sets variables that make each SDK's metadata path fail fast (Task 1 verifies the exact
-   names against the SDK versions Trivy v0.76.1 vendors). Cost if wrong: the node identity could leak; the Task 1
-   verification step and its test exist to catch that.
-2. **Scrubbing is on in `serve` whatever `cloud.provider` says**, because a node identity exists without any preset.
-   `Settings.cloud_hosts` is `None` by default, which means "no rule" (the laptop: the user's own cloud logins keep
-   working, as today); `serve` turns `None` into `[]`. Cost if wrong: a laptop user who wants the rule sets
-   `KUBEDELOS_CLOUD_HOSTS`.
-3. **Pod pull secrets are enabled by a non-empty `KUBEDELOS_POD_PULL_SECRET_NAMESPACES`** (spec: kubedelos reads only
+1. **Pod pull secrets are enabled by a non-empty `KUBEDELOS_POD_PULL_SECRET_NAMESPACES`** (spec: kubedelos reads only
    that list). There is no separate boolean setting; the chart's `registries.podPullSecrets` only gates rendering.
-4. **Retries keep pull secrets.** The secret *names* an image's pods named are stored with each `image_result`
+2. **Retries keep pull secrets.** The secret *names* an image's pods named are stored with each `image_result`
    (migration 11, column `pull_secrets`, JSON `[[namespace, name], ...]`), so a retry of an auth failure reads the same
    Secrets. Contents are read again at retry time, never stored.
-5. **Precedence.** Mounted configs in the listed order, first wins per host; then pod pull secrets override them for the
+3. **Precedence.** Mounted configs in the listed order, first wins per host; then pod pull secrets override them for the
    image's host, first in (namespace, pod order) wins among several. Cloud identity vs Docker config is Trivy's call;
-   Task 8 documents it from the Trivy source.
-6. **A Docker config is written only when there is at least one `auths` entry for the image's host.** Otherwise
+   Task 7 documents it from the Trivy source.
+4. **A Docker config is written only when there is at least one `auths` entry for the image's host.** Otherwise
    `DOCKER_CONFIG` is left as it is.
-7. **"Test an image" (Settings page, serve only)** uses the mounted configs and the `cloudHosts` rule, not pod pull
+5. **"Test an image" (Settings page, serve only)** uses the cloud identity and the mounted configs, not pod pull
    secrets (there is no pod). One test at a time (a lock; a second request gets "a test is already running"); Trivy
    timeout `min(scan_timeout_s, 120)`. Read-only mode refuses it, as `install_serve` already refuses every POST.
-8. **The cloud identity shown on Settings** comes from `KUBEDELOS_CLOUD_PROVIDER` and `KUBEDELOS_CLOUD_IDENTITY`, which
+6. **The cloud identity shown on Settings** comes from `KUBEDELOS_CLOUD_PROVIDER` and `KUBEDELOS_CLOUD_IDENTITY`, which
    the chart sets from the preset values (client id, role ARN or GCP service account), never from a token.
-9. **Image ENV.** The Dockerfile sets `KUBEDELOS_SECRETS_DIR=/run/kubedelos` and creates that directory owned by
+7. **Image ENV.** The Dockerfile sets `KUBEDELOS_SECRETS_DIR=/run/kubedelos` and creates that directory owned by
    65532, so `docker run` without the chart still works; the chart mounts the memory volume over it.
 
 ## Review Focus
 
-1. **An ACR/ECR/GAR host not on `cloudHosts` on a node whose metadata service is reachable** → Trivy gets no identity:
-   the scrubbed environment both removes the identity variables and sets the metadata-disabling ones (Task 1 test
-   `test_scrubbed_env_disables_metadata_services`).
+1. **Two pods in different namespaces run the same image and name different pull secrets** → both Secrets are
+   tried in (namespace, pod order) for that image's host, the first that has an entry wins, and neither Secret's
+   entries for other hosts reach the written config (Task 2 `test_pull_secrets_from_two_namespaces`).
 2. **Docker Hub entries keyed `https://index.docker.io/v1/`, `index.docker.io`, `registry-1.docker.io` or `docker.io`**
-   in a mounted config → they apply to `docker.io/...` images and are written under the key Trivy looks up (Task 2
+   in a mounted config → they apply to `docker.io/...` images and are written under the key Trivy looks up (Task 1
    `test_docker_hub_keys_normalise`).
 3. **A scan cancelled, timed out, or killed by an exception mid-image** → its temporary config directory is gone
-   afterwards (Task 4 `test_temp_config_removed_when_scan_raises`).
+   afterwards (Task 3 `test_temp_config_removed_when_scan_raises`).
 4. **A pod naming a Secret that does not exist, is forbidden, or is not a dockerconfigjson** → the image is scanned with
-   what remains, a debug line names the Secret (never its content), and the run does not fail (Task 3
+   what remains, a debug line names the Secret (never its content), and the run does not fail (Task 2
    `test_missing_or_forbidden_secret_is_skipped`, `test_non_docker_secret_dropped_unread`).
 5. **A mounted config file that is missing, empty or not JSON** (a Secret of the wrong type, mid-rotation) → that file
-   is skipped with a warning naming the path, the others still apply (Task 2 `test_bad_mounted_config_skipped`).
+   is skipped with a warning naming the path, the others still apply (Task 1 `test_bad_mounted_config_skipped`).
 
 ---
 
-### Task 1: Cloud identity rule and the scrubbed environment
-
-**Files:**
-- Create: `kubedelos/registry/__init__.py`, `kubedelos/registry/cloud.py`
-- Modify: `kubedelos/config.py` (new settings), `kubedelos/trivy/runner.py` (`scan_image` takes `env`)
-- Test: `tests/registry/test_cloud.py`, `tests/test_config.py`, `tests/trivy/test_runner.py`
-
-**Interfaces:**
-- Produces:
-  - `Settings.cloud_hosts: list[str] | None = None` (comma list or JSON, like `allowed_hosts`; lowercased; `*` alone
-    refused with "cloud_hosts must name registries; a lone * matches every host").
-  - `Settings.cloud_provider: Literal["azure", "aws", "gcp", "none"] = "none"`, `Settings.cloud_identity: str | None`.
-  - `cloud.host_allowed(host: str, patterns: list[str] | None) -> bool`: `True` when `patterns is None` (no rule).
-  - `cloud.scrubbed_env(env: Mapping[str, str]) -> dict[str, str]`: a copy without the identity variables and with the
-    metadata-disabling variables set.
-  - `scan_image(..., env: Mapping[str, str] | None = None)`: the base environment instead of `os.environ`; the
-    `docker_config` override still applies on top.
-
-- [ ] **Step 1: Verify the variable names against Trivy v0.76.1.** Read Trivy v0.76.1's `go.mod` and
-  `pkg/fanal/image/registry/{azure,ecr,google}` for the SDK versions and the credential calls. Confirm in those SDK
-  versions, and record the answer (file and line) in the Task 1 commit message:
-  - Removed: every variable starting `AZURE_`, `AWS_`, `GOOGLE_`, `GCE_`, `CLOUDSDK_`, plus `IDENTITY_ENDPOINT`,
-    `IDENTITY_HEADER`, `IDENTITY_SERVER_THUMBPRINT`, `IMDS_ENDPOINT`, `MSI_ENDPOINT`, `MSI_SECRET`.
-  - Set (proposed): `AWS_EC2_METADATA_DISABLED=true`; `GCE_METADATA_HOST=127.0.0.1:9` (any refused port);
-    `IDENTITY_ENDPOINT=http://127.0.0.1:9/` with `IDENTITY_HEADER=kubedelos-disabled` (azidentity then picks the App
-    Service source and fails fast instead of calling IMDS).
-  If a proposed variable does not do this in the vendored version, use the one that does; if none exists for a cloud,
-  stop and report it (it changes the security note).
-- [ ] **Step 2: Write the failing tests.**
-
-```python
-def test_host_allowed_matches_globs_case_insensitively():
-    assert host_allowed("Team.AzureCR.io", ["team.azurecr.io"])
-    assert host_allowed("a.dkr.ecr.eu-west-1.amazonaws.com", ["*.dkr.ecr.eu-west-1.amazonaws.com"])
-    assert not host_allowed("attacker.azurecr.io", ["team.azurecr.io"])
-    assert not host_allowed("team.azurecr.io", [])
-    assert host_allowed("anything.example.com", None)  # no rule: the laptop
-
-def test_scrubbed_env_removes_identity_variables():
-    env = {"AZURE_CLIENT_ID": "x", "AZURE_FEDERATED_TOKEN_FILE": "/var/run/t", "AWS_ROLE_ARN": "r",
-           "AWS_WEB_IDENTITY_TOKEN_FILE": "/t", "GOOGLE_APPLICATION_CREDENTIALS": "/k", "PATH": "/bin", "HOME": "/h"}
-    out = scrubbed_env(env)
-    assert out["PATH"] == "/bin" and out["HOME"] == "/h"
-    assert not any(k.startswith(("AZURE_", "GOOGLE_")) or k in {"AWS_ROLE_ARN", "AWS_WEB_IDENTITY_TOKEN_FILE"} for k in out)
-
-def test_scrubbed_env_disables_metadata_services():
-    out = scrubbed_env({})
-    assert out["AWS_EC2_METADATA_DISABLED"] == "true"
-    assert out["GCE_METADATA_HOST"].startswith("127.0.0.1:")
-    assert out["IDENTITY_ENDPOINT"].startswith("http://127.0.0.1:")
-```
-
-  Plus in `tests/test_config.py`: `KUBEDELOS_CLOUD_HOSTS="A.azurecr.io, *.pkg.dev"` gives
-  `["a.azurecr.io", "*.pkg.dev"]`; `"*"` raises; unset gives `None`. In `tests/trivy/test_runner.py`: `scan_image`
-  with `env={"ONLY": "1"}` passes exactly that (plus `DOCKER_CONFIG` when given) to `_run_group`.
-- [ ] **Step 3: Run them, expect failures** (`.venv/bin/pytest tests/registry/test_cloud.py tests/test_config.py tests/trivy/test_runner.py -q`).
-- [ ] **Step 4: Implement** `cloud.py` (module docstring states the threat: Trivy sends the identity to any matching
-  host, and the SDKs fall back to the metadata service), the settings, and the `env` parameter.
-- [ ] **Step 5: Run the full suite and ruff; commit** `feat: scrub the cloud identity for registries not on cloud_hosts`.
-
-### Task 2: Docker configs: read, merge, write per scan
+### Task 1: Docker configs: read, merge, write per scan
 
 **Files:**
 - Create: `kubedelos/registry/dockerconfig.py`
@@ -155,7 +84,7 @@ def test_scrubbed_env_disables_metadata_services():
 **Interfaces:**
 - Produces:
   - `Settings.secrets_dir: Path | None = None`; `Settings.docker_configs: list[Path] = []` (JSON list or comma list).
-    A validator refuses `docker_configs` or `pod_pull_secret_namespaces` (Task 3) without `secrets_dir`:
+    A validator refuses `docker_configs` or `pod_pull_secret_namespaces` (Task 2) without `secrets_dir`:
     "KUBEDELOS_SECRETS_DIR is required for registry credentials".
   - `Auths = dict[str, dict[str, str]]` (normalised host → `{"auth": ...}` or `{"username": ..., "password": ...}`).
   - `parse(raw: bytes) -> Auths`: only `auths`; keys normalised by `normalise_host(key) -> str` (scheme, path and
@@ -182,7 +111,7 @@ def test_scrubbed_env_disables_metadata_services():
 - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run the suite and ruff; commit** `feat: merge mounted docker configs into a per-scan config`.
 
-### Task 3: Pod pull secrets: names in the inventory, contents at scan time
+### Task 2: Pod pull secrets: names in the inventory, contents at scan time
 
 **Files:**
 - Create: `kubedelos/registry/pullsecrets.py`
@@ -193,7 +122,7 @@ def test_scrubbed_env_disables_metadata_services():
   `tests/store/test_repo.py`
 
 **Interfaces:**
-- Consumes: `dockerconfig.parse`, `normalise_host`, `Auths` (Task 2).
+- Consumes: `dockerconfig.parse`, `normalise_host`, `for_host`, `Auths` (Task 1).
 - Produces:
   - `Settings.pod_pull_secret_namespaces: list[str] = []`.
   - `KubeApi.read_secret(ns: str, name: str) -> V1Secret` (`read_namespaced_secret` with `REQUEST_TIMEOUT`).
@@ -214,13 +143,13 @@ def test_scrubbed_env_disables_metadata_services():
   `test_non_docker_secret_dropped_unread` (a `V1Secret` of type `Opaque` whose `data` is a property that fails the
   test when read), `test_missing_or_forbidden_secret_is_skipped` (404 and 403; caplog at debug shows `web/regcred`
   and no content), `test_only_the_image_host_is_kept`, `test_secret_read_once_per_run`,
-  `test_unlisted_namespace_never_read`, `test_failed_items_keep_pull_secret_names` (round trip through the repo), and
+  `test_unlisted_namespace_never_read`, `test_pull_secrets_from_two_namespaces`, `test_failed_items_keep_pull_secret_names` (round trip through the repo), and
   the migration test the store tests already use for each migration.
 - [ ] **Step 2: Run, expect failures.**
 - [ ] **Step 3: Implement.** Keep `collect` reading only what it reads today plus `spec.image_pull_secrets`.
 - [ ] **Step 4: Run the suite and ruff; commit** `feat: read the pull secrets a pod names, in opted-in namespaces`.
 
-### Task 4: Wire access into scans, retries, `registry test` and `serve`
+### Task 3: Wire access into scans, retries, `registry test` and `serve`
 
 **Files:**
 - Create: `kubedelos/registry/access.py`
@@ -229,65 +158,65 @@ def test_scrubbed_env_disables_metadata_services():
 - Test: `tests/registry/test_access.py`, `tests/trivy/test_runner.py`, `tests/scan/test_service.py`, `tests/test_cli.py`
 
 **Interfaces:**
-- Consumes: Tasks 1–3.
+- Consumes: Tasks 1–2.
 - Produces:
-  - `@dataclass(frozen=True) class ScanAccess: docker_config: Path | None; env: Mapping[str, str] | None`.
+  - `@dataclass(frozen=True) class ScanAccess: docker_config: Path | None`.
   - `class RegistryAccess` with `__init__(self, settings: Settings, api: KubeApi | None = None)` (loads mounted configs
     once per run; builds `PullSecrets` when `api` and namespaces are given) and
-    `@contextmanager for_item(self, item: InventoryItem) -> Iterator[ScanAccess]`: `env` is `scrubbed_env(os.environ)`
-    when the host is not allowed, else `None`; `docker_config` is a `temp_config` when `secrets_dir` is set and the
+    `@contextmanager for_item(self, item: InventoryItem) -> Iterator[ScanAccess]`: `docker_config` is a `temp_config` when `secrets_dir` is set and the
     merged auths for the host are non-empty, else `None`.
-  - `RegistryAccess.none() -> RegistryAccess`: no rule, no configs (used where no settings apply, and in tests).
+  - `RegistryAccess.none() -> RegistryAccess`: no configs (used where no settings apply, and in tests).
   - `scan_many(..., access: RegistryAccess | None = None)`: `work` enters `access.for_item(item)` around both attempts
-    and passes `docker_config` and `env` to `scan_image`.
+    and passes `docker_config` to `scan_image` (its existing parameter).
   - `run_scan` builds `RegistryAccess(settings, api)`; `retry_failed` builds it with `kube_client.load(settings)` only
     when `settings.pod_pull_secret_namespaces` is set and a stored item has pull secrets (otherwise no API is loaded,
     keeping "the cluster is not read" for plain retries; update the docstring).
-  - `registry test` uses `RegistryAccess(settings).for_item(...)` for its one image.
-  - `_serve` sets `cloud_hosts = []` when it is `None` and calls `dockerconfig.clear(settings.secrets_dir)` before the
+  - `registry test` uses `RegistryAccess(settings).for_item(...)` for its one image (on a laptop: no secrets dir, so nothing changes).
+  - `_serve` calls `dockerconfig.clear(settings.secrets_dir)` before the
     worker starts, when `secrets_dir` is set.
 
-- [ ] **Step 1: Write the failing tests**: `test_for_item_scrubs_unlisted_host`, `test_for_item_keeps_env_for_listed_host`,
-  `test_pull_secret_overrides_mounted_config` (same host in both; the written config holds the pull secret's entry),
+- [ ] **Step 1: Write the failing tests**: `test_pull_secret_overrides_mounted_config` (same host in both; the written config holds the pull secret's entry),
   `test_no_file_without_secrets_dir`, `test_no_file_without_entries_for_host`, `test_temp_config_removed_when_scan_raises`
   (a `scan_image` stub that raises inside `scan_many`; the secrets dir is empty afterwards),
-  `test_scan_many_passes_access_to_each_image` (stubbed `scan_image` records `docker_config`/`env` per ref),
-  `test_serve_defaults_cloud_hosts_to_empty_and_clears_secrets_dir`, `test_registry_test_applies_cloud_hosts`.
+  `test_scan_many_passes_access_to_each_image` (stubbed `scan_image` records `docker_config` per ref),
+  `test_serve_clears_secrets_dir_at_start`, `test_registry_test_uses_mounted_configs`.
 - [ ] **Step 2: Run, expect failures.**
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run the full suite and ruff; commit** `feat: give each scan its registry credentials and cloud rule`.
+- [ ] **Step 4: Run the full suite and ruff; commit** `feat: give each scan its registry credentials`.
 
-### Task 5: Settings page: Registries section and "Test an image"
+### Task 4: Settings page: Registries section and "Test an image"
 
 **Files:**
-- Modify: `kubedelos/web/routes/settings.py`, `kubedelos/web/templates/settings.html`, `kubedelos/web/static/app.css`
+- Modify: `kubedelos/config.py` (`cloud_provider`, `cloud_identity`), `kubedelos/web/routes/settings.py`,
+  `kubedelos/web/templates/settings.html`, `kubedelos/web/static/app.css`
   (only if the existing classes do not cover it)
 - Create: `kubedelos/web/templates/partials/registry_test.html`
-- Test: `tests/web/test_settings_page.py`
+- Test: `tests/web/test_settings_page.py`, `tests/test_config.py`
 
 **Interfaces:**
-- Consumes: `RegistryAccess` (Task 4), `scan_image`, `TrivyCache`, `ensure_trivy`, `cli` helpers `error_cause` and
+- Consumes: `RegistryAccess` (Task 3), `scan_image`, `TrivyCache`, `ensure_trivy`, `cli` helpers `error_cause` and
   `login_hint` (move them only if importing from `cli` would be circular).
 - Produces:
-  - A "Registries" card, shown in both modes: cloud provider and identity (`cloud_provider`, `cloud_identity`), cloud
-    hosts (or "no rule: your own cloud logins apply" when `None`), mounted Docker config files (the Secret name is the
+  - `Settings.cloud_provider: Literal["azure", "aws", "gcp", "none"] = "none"`, `Settings.cloud_identity: str | None`.
+  - A "Registries" card, shown in both modes: cloud provider and identity (or "none: your own cloud logins apply" on
+    the laptop), the registry hosts Trivy uses that identity for (fixed text per provider, from the spec), mounted Docker config files (the Secret name is the
     parent directory name), pull-secret namespaces (or "off").
   - `POST /settings/registry-test` (serve only; 404 in `ui` mode), form field `image`, HTMX target the card's result
     area. Validates the ref as `registry test` does; one at a time via a module `threading.Lock` (busy → "A test is
     already running"); Trivy timeout `min(scan_timeout_s, 120)`; renders `ok: <ref> is readable`, or the error kind,
-    `error_cause`, and for `auth` the `login_hint` plus whether the host is on `cloudHosts`.
+    `error_cause`, and for `auth` the `login_hint` plus, for a cloud registry host, a pointer to the matching docs page.
 
 - [ ] **Step 1: Write the failing tests**: `test_registries_card_shows_identity_not_tokens` (env holds
   `AZURE_FEDERATED_TOKEN_FILE` pointing at a file containing `tok3n`; the page shows the client id and never `tok3n`),
   `test_registry_test_refused_in_read_only` (403 from `install_serve`), `test_registry_test_needs_csrf`,
-  `test_registry_test_rejects_bad_ref`, `test_registry_test_busy`, `test_registry_test_uses_cloud_rule` (stubbed
-  `scan_image` sees a scrubbed `env` for an unlisted host), `test_registry_test_absent_in_ui_mode`.
+  `test_registry_test_rejects_bad_ref`, `test_registry_test_busy`, `test_registry_test_uses_mounted_configs` (stubbed
+  `scan_image` gets the temporary `docker_config`), `test_registry_test_absent_in_ui_mode`.
 - [ ] **Step 2: Run, expect failures.**
 - [ ] **Step 3: Implement**, following the existing card and form markup (the Scans form is the model for HTMX + CSRF).
 - [ ] **Step 4: Run the suite and ruff, look at the page in a browser against a local `serve` on `kind-lab`; commit**
   `feat: show registry access on the settings page and test an image from it`.
 
-### Task 6: Chart and image: presets, mounts, Roles, memory volume
+### Task 5: Chart and image: presets, mounts, Roles, memory volume
 
 **Files:**
 - Modify: `charts/kubedelos/values.yaml`, `values.schema.json`, `templates/deployment.yaml`, `serviceaccount.yaml`,
@@ -304,7 +233,6 @@ def test_scrubbed_env_disables_metadata_services():
     aws: { roleArn: "" }
     gcp: { serviceAccount: "" }
   registries:
-    cloudHosts: [] # registries that may receive the cloud identity; required when cloud.provider is set
     dockerConfigSecrets: [] # kubernetes.io/dockerconfigjson Secrets in the release namespace, first wins
     podPullSecrets: false
     podPullSecretNamespaces: [] # required when podPullSecrets is on
@@ -313,7 +241,7 @@ def test_scrubbed_env_disables_metadata_services():
   - `azure`: SA annotation `azure.workload.identity/client-id: <clientId>`, pod label
     `azure.workload.identity/use: "true"`. `aws`: SA annotation `eks.amazonaws.com/role-arn`. `gcp`: SA annotation
     `iam.gke.io/gcp-service-account`. Merged with `serviceAccount.annotations` (the preset wins on a clash).
-  - ConfigMap: `KUBEDELOS_CLOUD_PROVIDER`, `KUBEDELOS_CLOUD_IDENTITY` (when set), `KUBEDELOS_CLOUD_HOSTS` (JSON),
+  - ConfigMap: `KUBEDELOS_CLOUD_PROVIDER`, `KUBEDELOS_CLOUD_IDENTITY` (when set),
     `KUBEDELOS_DOCKER_CONFIGS` (JSON list of `/etc/kubedelos/docker-configs/<name>/.dockerconfigjson`),
     `KUBEDELOS_POD_PULL_SECRET_NAMESPACES` (JSON, only when on).
   - Deployment: volume `secrets` (`emptyDir: {medium: Memory, sizeLimit: 16Mi}`) at `/run/kubedelos`; one read-only
@@ -321,8 +249,8 @@ def test_scrubbed_env_disables_metadata_services():
     `defaultMode: 0400`) at `/etc/kubedelos/docker-configs/<name>`. The pod's `fsGroup` 65532 makes 0440 readable.
   - `pullsecret-rbac.yaml`: per listed namespace a Role (`get` on `secrets`, no `resourceNames`, no `list`/`watch`) and
     a RoleBinding to the chart's ServiceAccount. Nothing cluster-wide.
-- Guards (`_validate.tpl`, each a clear `fail` message): `cloud.provider` not `none` with empty `cloudHosts`; the
-  provider's id value empty; a `cloudHosts` entry `*`; `podPullSecrets` on with empty namespaces; namespaces given with
+- Guards (`_validate.tpl`, each a clear `fail` message): the provider's id value empty when `cloud.provider` is
+  not `none`; `podPullSecrets` on with empty namespaces; namespaces given with
   `podPullSecrets` off.
 - Dockerfile: `ENV KUBEDELOS_SECRETS_DIR=/run/kubedelos`, `RUN mkdir /run/kubedelos && chown 65532:65532 /run/kubedelos
   && chmod 0700 /run/kubedelos`. The smoke test runs with `--read-only --tmpfs /run/kubedelos:uid=65532,mode=0700`.
@@ -337,7 +265,7 @@ def test_scrubbed_env_disables_metadata_services():
 - [ ] **Step 4: Run chart tests, `helm lint`, kubeconform on default and all-on, build the image and run
   `scripts/image-smoke.sh`; commit** `feat: add cloud identity presets and registry credentials to the chart`.
 
-### Task 7: kind e2e with a private `registry:2`
+### Task 6: kind e2e with a private `registry:2`
 
 **Files:**
 - Modify: `scripts/e2e-chart.sh`, `tests/e2e/test_kind_chart.py`, `charts/kubedelos/ci/e2e-values.yaml`
@@ -363,7 +291,7 @@ Scenarios, each a pod in its own namespace naming `10.96.200.50:5000/e2e/nginx:1
   `onboard-test` afterwards.**
 - [ ] **Step 4: Commit** `test: cover registry credentials in the kind e2e with a private registry`.
 
-### Task 8: Docs, AGENTS.md rule change, README, CHANGELOG, spec
+### Task 7: Docs, AGENTS.md rule change, README, CHANGELOG, spec
 
 **Files:**
 - Create: `docs/registries/acr.md`, `docs/registries/ecr.md`, `docs/registries/gar.md`, `docs/registries/pull-secrets.md`
@@ -372,12 +300,37 @@ Scenarios, each a pod in its own namespace naming `10.96.200.50:5000/e2e/nginx:1
 - [ ] **Step 1: Check in the Trivy v0.76.1 source** which wins for a host covered by both a cloud provider and a Docker
   config (spec "Left to the builder"), and what happens when the provider fails. Write the answer, with the source file,
   into each registry page and the spec.
-- [ ] **Step 2: Write the four pages.** Each: what to set in the chart, the cloud-side role (`AcrPull`, ECR read policy,
-  `roles/artifactregistry.reader`) as the operator's job, `cloudHosts`, how to check with the Settings page's "Test an
-  image", and the limits (custom-domain ACR needs a pull secret). `pull-secrets.md` carries the security note from spec
-  7.3 word for word in substance.
-- [ ] **Step 3: AGENTS.md:** replace the two rules exactly as spec 7.5 states them. README: a short "Private registries"
-  section linking the pages. `docs/in-cluster.md`: the new values, the memory volume, the metadata-service ruling.
-  CHANGELOG `## Unreleased`: one entry per user-visible change. Spec: record rulings 1, 2, 4 and 5 under "Decisions
-  recorded here".
-- [ ] **Step 4: Run pre-commit; commit** `docs: document registry login for acr, ecr, gar and pull secrets`.
+- [ ] **Step 2: Write the three cloud pages as setup guides** an operator can follow start to finish, with
+  placeholders only (`my-cluster`, `my-rg`, `myregistry`, `123456789012`, `my-project`). Each page has the same
+  sections: *What you need* (cluster feature flags), *1. Create the identity*, *2. Let it read the registry*,
+  *3. Link it to the kubedelos ServiceAccount* (the ServiceAccount is `<release>-kubedelos`, or the release name when it
+  contains `kubedelos`, in the release namespace), *4. Install or upgrade the chart* (the exact values), *5. Check it*
+  (the Settings page's Registries card and "Test an image", then a sweep), *Troubleshooting* (the auth errors you see
+  and their usual cause), *Limits*. The CLI commands are `az`, `aws`/`eksctl` and `gcloud`; check every flag against the
+  current docs of each CLI when writing (Microsoft Learn MCP for `az`).
+  - `acr.md` (AKS): cluster with `--enable-oidc-issuer --enable-workload-identity`; a user-assigned managed identity;
+    `AcrPull` on the registry (`az role assignment create --assignee-object-id ... --scope <acr id>`); a federated
+    credential for `system:serviceaccount:<ns>:<sa>` against the cluster's OIDC issuer; values `cloud.provider: azure`,
+    `cloud.azure.clientId`. Limits: an ACR behind a custom domain is not recognised by Trivy, so use a pull secret;
+    attaching the ACR to the cluster (`az aks update --attach-acr`) grants the *kubelet* identity, not kubedelos's, and
+    is not enough on its own.
+  - `ecr.md` (EKS): IRSA (an OIDC provider for the cluster and an IAM role whose trust policy names the
+    ServiceAccount, e.g. `eksctl create iamserviceaccount --role-only`), a policy with `ecr:GetAuthorizationToken`,
+    `ecr:BatchGetImage`, `ecr:GetDownloadUrlForLayer` (or `AmazonEC2ContainerRegistryReadOnly`); values
+    `cloud.provider: aws`, `cloud.aws.roleArn`. Note EKS Pod Identity as an alternative only if Trivy's AWS SDK
+    version supports its credential source (check `go.mod`); otherwise say IRSA is required.
+  - `gar.md` (GKE): Workload Identity Federation for GKE on the cluster and node pool; a Google service account with
+    `roles/artifactregistry.reader` (and `roles/storage.objectViewer` for legacy `gcr.io` buckets); the
+    `roles/iam.workloadIdentityUser` binding for `<project>.svc.id.goog[<ns>/<sa>]`; values `cloud.provider: gcp`,
+    `cloud.gcp.serviceAccount`.
+  - Each page states which hosts Trivy uses the identity for (from the spec), and that the identity never goes
+    anywhere else, so which registries kubedelos can read is decided by the role assignment in step 2.
+- [ ] **Step 3: Write `pull-secrets.md`**: mounted Docker config Secrets (create one with `kubectl create secret
+  docker-registry`, list it in `registries.dockerConfigSecrets`, no Secret RBAC needed) and opt-in pod pull secrets
+  (`registries.podPullSecrets`, the namespaces, the Roles it creates), the precedence from Step 1 and ruling 3, and the
+  security note from spec 7.3 in substance.
+- [ ] **Step 4: AGENTS.md:** replace the two rules exactly as spec 7.5 states them. README: a short "Private registries"
+  section linking the four pages. `docs/in-cluster.md`: replace the "not in the chart yet" paragraph, add the new values
+  and the memory volume. CHANGELOG `## Unreleased`: one entry per user-visible change. Spec: record rulings 2 and 3
+  under "Decisions recorded here".
+- [ ] **Step 5: Run pre-commit; commit** `docs: document registry login for acr, ecr, gar and pull secrets`.

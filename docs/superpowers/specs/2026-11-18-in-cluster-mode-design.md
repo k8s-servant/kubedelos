@@ -50,7 +50,7 @@ Who uses it and for what:
 - A pod inside the cluster able to fake the identity header, and so act under someone else's name.
 - Registry tokens or pull-secret contents in SQLite, logs, error messages, the Settings page, on node disk, or in a
   file that outlives one scan.
-- The pod's cloud identity token sent to a registry the operator did not name.
+- The pod's cloud identity token sent anywhere but the cloud vendor's own registry service.
 - Reading any Secret the user did not opt into.
 
 ## Constraints
@@ -85,14 +85,18 @@ Checked against the Trivy v0.76.1 source (`pkg/fanal/image/registry/`):
   an ordinary auth error.
 
 Limits that follow:
-- **Trivy sends the token to any matching host, so kubedelos limits which hosts get it.** Trivy exchanges the Entra
-  token (scope `https://management.azure.com/.default`) with whatever `*.azurecr.io` host an image ref names, and anyone
-  can create one. A workload author could run a pod from `attacker.azurecr.io/x` and have the scan send the pod's token
-  there. So `registries.cloudHosts` (exact hosts or `*` globs, empty by default) lists the registries that may receive
-  the cloud identity. For any image whose host is not on the list, kubedelos starts Trivy with the cloud-identity
-  environment removed (`AZURE_*`, `AWS_*` web-identity and `GOOGLE_*`/ADC variables, plus the projected token file
-  paths), so Trivy pulls it anonymously or with Docker-config credentials only. The "Test an image" box (section 7)
-  applies the same rule. With `cloud.provider` set and `cloudHosts` empty, the chart fails to render.
+- **The token only ever reaches the cloud vendor's registry service, so kubedelos adds no host allowlist.** Trivy uses
+  the cloud identity only for hosts its providers match, and every match is anchored: `*.azurecr.io` and `*.azurecr.cn`
+  (`azure/azure.go`), `gcr.io`, `*.gcr.io` and `*-docker.pkg.dev` (`google/google.go`), and the full-host ECR regex
+  `^[^.]+\.dkr[.-]ecr(?:-fips)?\.<region>\.(amazonaws.com|amazonaws.com.cn|...)$` (`ecr/ecr.go`). A lookalike such as
+  `evilazurecr.io` does not match. Anyone can create a registry under those domains, but not run the server behind
+  them, so a pod naming `attacker.azurecr.io/x` makes Trivy send the token to Microsoft's ACR service, which refuses it
+  for a registry outside the identity's tenant. The same holds when the SDKs fall back to the node's metadata service
+  (IMDS, EC2 instance metadata, the GCE metadata server): that identity also goes only to those hosts. Which registries
+  the identity can read is decided by its cloud role assignments (`AcrPull`, an ECR read policy,
+  `roles/artifactregistry.reader`), which the operator sets up outside kubedelos. An earlier draft of this spec had a
+  `registries.cloudHosts` allowlist and environment scrubbing for this; the check above against the Trivy v0.76.1
+  source showed they guard nothing, so they were dropped.
 - An ACR behind a custom domain is not recognised; pull secrets cover that case.
 - The identity needs `AcrPull` (or the cloud's equivalent). That is set up outside kubedelos, and the docs cover it.
 
@@ -336,16 +340,15 @@ Most of the work is the environment; kubedelos adds pull secrets.
    never touch disk" rule gains "except a per-scan Docker config on the memory-backed secrets volume". The README and a security note say what this permits.
 6. **Unchanged:** anonymous pulls of public images, and on a laptop the user's own Docker login.
 
-**Cloud presets (PR 4).** They ship with the registry login, not with the chart in PR 3: turning on workload identity
-before `registries.cloudHosts` and the environment scrubbing exist would let the pod's identity reach registries the
-operator did not name, which is an anti-goal. `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
+**Cloud presets (PR 4).** They ship with the registry login, so the identity, the Settings page that shows it and the
+docs that explain the cloud-side role arrive together. `cloud.provider`: `azure` | `aws` | `gcp` | `none`.
 - `azure`: the ServiceAccount annotation `azure.workload.identity/client-id` and the pod label
   `azure.workload.identity/use: "true"`. The webhook then injects the variables Trivy needs.
 - `aws`: `eks.amazonaws.com/role-arn` on the ServiceAccount.
 - `gcp`: `iam.gke.io/gcp-service-account` on the ServiceAccount.
 
 `kubedelos registry test` gains no new options. In `serve`, a "Test an image" box on the Settings page runs the same
-check with the same credentials a scan would use, and the same `cloudHosts` rule. It is a POST, so it needs an
+check with the same credentials a scan would use (the cloud identity and the mounted Docker configs). It is a POST, so it needs an
 identity.
 
 ### 8. Settings page in `serve`
@@ -369,8 +372,7 @@ Nothing on it is editable. Changes go through Helm values.
    sweep. Release signing jobs go into `release-please.yml`. The exposure docs with the oauth2-proxy and Envoy Gateway
    example.
 4. **Registry login.** The `cloud.provider` presets, the memory-backed secrets volume (`KUBEDELOS_SECRETS_DIR`),
-   `registries.cloudHosts` and the cloud-identity environment scrubbing, mounted Docker configs,
-   opt-in pod pull secrets, the memory-backed temporary Docker config, the Settings
+   mounted Docker configs, opt-in pod pull secrets, the memory-backed temporary Docker config, the Settings
    Registries section, the AGENTS.md change, docs pages for ACR + workload identity, ECR, GAR and pull secrets.
    Tested against a `registry:2` with htpasswd in kind, plus a unit test with the Azure path mocked at the environment
    level. There is no ACR in CI, and the user's work registries are off limits.
@@ -400,3 +402,5 @@ Each PR updates `CHANGELOG.md` under `## Unreleased` and the README.
 - Retries go through the queue.
 - No vacuum after pruning.
 - The settings stay read-only in the UI; Helm values are the only way to change them in-cluster.
+- No `registries.cloudHosts` allowlist and no cloud-environment scrubbing: Trivy's providers match only vendor-run
+  registry domains, so the identity cannot reach an attacker's server (see Approaches, Registry login).
