@@ -398,6 +398,15 @@ def test_serve_retry_twice_says_already_queued(serve_client, seed):
     assert len(_requests(seed)) == 1
 
 
+@pytest.mark.parametrize("field", [{}, {"context": "prod-eu"}])
+def test_serve_retry_of_another_context_is_refused(serve_client, seed, worker, field):
+    run_id = _retryable(seed, context="prod-eu")
+    data = {"timeout": "1800", "parallelism": "2", "kind": ["timeout"], **field}
+    response = signed_post(serve_client, f"/scans/{run_id}/retry", data)
+    assert response.status_code == 404
+    assert _requests(seed) == [] and worker.woken == 0
+
+
 def test_writable_failures_page_has_the_retry_form(serve_client, seed):
     run_id = _retryable(seed)
     assert f'action="/scans/{run_id}/retry"' in serve_client.get(f"/scans/{run_id}/failed").text

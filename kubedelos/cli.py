@@ -258,8 +258,7 @@ def serve(
 
     The cluster is named by KUBEDELOS_CLUSTER_NAME. Anyone who can reach the port can read every finding, so expose it
     only through an authenticating proxy or keep it cluster-internal. Writes are open unless KUBEDELOS_READ_ONLY=true.
-    Set KUBEDELOS_LOG_LEVEL=info to print an access
-    line per request on stderr.
+    Set KUBEDELOS_LOG_LEVEL=info to print an access line per request on stderr.
     """
     settings = _load_settings(kubeconfig=kubeconfig)
     if not settings.cluster_name:

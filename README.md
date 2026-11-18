@@ -173,8 +173,8 @@ schedule and keeps the results. Sweeps and scans go through a SQLite scan queue 
 the retention period are deleted. Only one `serve` can use a data directory; a second one exits 2.
 
 **Anyone who can reach `serve` can read the whole vulnerability inventory, and by default can also write.** Writes are
-open: anyone who reaches the UI can start a scan within the configured scope, retry or cancel a queued scan, and accept
-or revoke risks. Expose it only through an authenticating proxy, or keep it cluster-internal.
+open: anyone who reaches the UI can start a scan within the configured scope, retry failed images, cancel a queued scan
+or stop the running one (a scheduled sweep included), and accept or revoke risks. Expose it only through an authenticating proxy, or keep it cluster-internal.
 
 - `KUBEDELOS_READ_ONLY=true` turns writes off: every write gets a 403, and the pages hide their forms and show a notice.
 - UI scans go through the scan queue and can only narrow the configured scope (namespaces, exclusions, selectors). A

@@ -244,6 +244,9 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
     with open_db(request) as conn:
         context = shown_context(request, conn, wanted)
         try:
+            if request.app.state.serve and context != request.app.state.context:
+                # serve scans only its own cluster, so a run kept from another context can't be retried here.
+                raise RunNotShown(f"only runs of {request.app.state.context} can be retried here")
             run = run_label(conn, context, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
