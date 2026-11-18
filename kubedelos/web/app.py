@@ -1,7 +1,8 @@
 """The FastAPI applications behind ``kubedelos ui`` and ``kubedelos serve``.
 
-``create_app`` (the laptop UI) and ``create_serve_app`` (the in-cluster, view-only UI) share ``_build``, which wires the
-templates, the static files, the exception handlers and the page routers; each then adds its own security middleware.
+``create_app`` (the laptop UI) and ``create_serve_app`` (the in-cluster UI, optionally read-only) share ``_build``,
+which wires the templates, the static files, the exception handlers and the page routers; each then adds its own
+security middleware.
 The helpers the pages and the security middleware share (``open_db``, ``render``) live in ``kubedelos.web.pages``, so
 that this module can import the routes at the top level without an import cycle. The laptop app owns one
 ``ScanRunner`` for the scans page; the serve app is handed its runner, queue worker and sweeper already built, since
@@ -28,6 +29,7 @@ from kubedelos.analytics import ago, describe_pkg_types, describe_scope, is_stal
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.scheduler import Sweeper
+from kubedelos.web.identity import identity
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import UnknownContext, open_db, plural, render, shown_context
 from kubedelos.web.routes import (
@@ -44,7 +46,7 @@ from kubedelos.web.routes import (
     times,
 )
 from kubedelos.web.routes import settings as settings_page
-from kubedelos.web.security import Guard, install, install_serve
+from kubedelos.web.security import READ_ONLY_NOTICE, Guard, ServeGuard, install, install_serve
 from kubedelos.web.worker import QueueWorker
 
 _HERE = Path(__file__).parent
@@ -82,10 +84,14 @@ def static_url(name: str) -> str:
 _STATIC_VERSIONS: dict[str, str] = {}
 
 
-def _templates(csrf_token: Callable[[Request], str], *, serve: bool) -> Jinja2Templates:
+def _templates(
+    csrf_token: Callable[[Request], str], can_write: Callable[[Request], bool], *, serve: bool
+) -> Jinja2Templates:
     env = jinja2.Environment(loader=jinja2.FileSystemLoader(_HERE / "templates"), autoescape=True)
     env.globals["csrf_token"] = csrf_token
+    env.globals["can_write"] = can_write  # whether the page offers its forms: False only in read-only serve
     env.globals["serve"] = serve
+    env.globals["read_only_notice"] = READ_ONLY_NOTICE  # shown by base.html wherever can_write is False
     env.filters["safe_url"] = safe_url
     env.filters["plural"] = plural
     env.globals.update(
@@ -106,6 +112,7 @@ def _build(
     list_contexts: Callable[[], list[str]],
     clock: Callable[[], datetime],
     csrf_token: Callable[[Request], str],
+    can_write: Callable[[Request], bool],
     serve: bool,
     flags: frozenset[str] = frozenset(),
 ) -> FastAPI:
@@ -117,7 +124,7 @@ def _build(
     app.state.list_contexts = list_contexts
     app.state.clock = clock
     app.state.serve = serve
-    app.state.templates = _templates(csrf_token, serve=serve)
+    app.state.templates = _templates(csrf_token, can_write, serve=serve)
     app.mount("/static", StaticFiles(directory=_HERE / "static"), name="static")
 
     @app.exception_handler(RequestValidationError)
@@ -176,6 +183,7 @@ def create_app(
         list_contexts=list_contexts or (lambda: kube_client.list_contexts(settings)),
         clock=clock,
         csrf_token=csrf_token,
+        can_write=lambda request: True,
         serve=False,
         flags=flags,
     )
@@ -193,20 +201,31 @@ def create_serve_app(
     sweeper: Sweeper,
     clock: Callable[[], datetime] = _utcnow,
 ) -> FastAPI:
-    """Build the view-only UI of ``kubedelos serve``. Its one context is ``settings.cluster_name``; ``runner`` (built
-    with ``fixed_cluster=True``) runs what ``worker`` takes off the queue, and ``sweeper`` queues the scheduled sweeps.
-    Every non-GET request is refused, so no form posts and the CSRF token is empty."""
+    """Build the UI of ``kubedelos serve``. Its one context is ``settings.cluster_name``; ``runner`` (built with
+    ``fixed_cluster=True``) runs what ``worker`` takes off the queue, and ``sweeper`` queues the scheduled sweeps.
+    The forms carry a CSRF token bound to the request's cookie and signed-in name; read-only mode hides them."""
     name = settings.cluster_name or ""
+    guard = ServeGuard(
+        read_only=settings.read_only,
+        trust_proxy_headers=settings.trust_proxy_headers,
+        identity_header=settings.identity_header,
+    )
+
+    def csrf_token(request: Request) -> str:
+        return guard.csrf_token(request.state.csrf_cookie, identity(request))
+
     app = _build(
         settings,
         context=name,
         list_contexts=lambda: [name],
         clock=clock,
-        csrf_token=lambda request: "",
+        csrf_token=csrf_token,
+        can_write=lambda request: not guard.read_only,
         serve=True,
     )
+    app.state.serve_guard = guard
     app.state.scans = runner
     app.state.worker = worker
     app.state.sweeper = sweeper
-    install_serve(app, settings.allowed_hosts)
+    install_serve(app, settings.allowed_hosts, guard)
     return app

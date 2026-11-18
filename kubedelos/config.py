@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     sweep_enabled: bool = True
     retention_days: int = Field(default=180, ge=0)
     allowed_hosts: Annotated[list[str], NoDecode] = ["localhost", "127.0.0.1"]  # Host header values the UI answers to
+    read_only: bool = False  # serve only: refuse every write, so the UI is view-only
+    trust_proxy_headers: bool = False  # serve only: read the user's name from ``identity_header``
+    identity_header: str = "X-Auth-Request-Email"  # set by the sign-in proxy in front of serve
 
     @field_validator("sweep_timezone")
     @classmethod
@@ -68,6 +71,14 @@ class Settings(BaseSettings):
             ZoneInfo(value)
         except (ZoneInfoNotFoundError, ValueError) as exc:
             raise ValueError(f"unknown time zone {value!r}") from exc
+        return value
+
+    @field_validator("identity_header")
+    @classmethod
+    def _header_name(cls, value: str) -> str:
+        value = value.strip()
+        if not value or not all(char.isascii() and (char.isalnum() or char == "-") for char in value):
+            raise ValueError("must be an HTTP header name (letters, digits and hyphens)")
         return value
 
     @field_validator("allowed_hosts", mode="before")

@@ -1,6 +1,7 @@
 import hashlib
 import re
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import Request
@@ -10,6 +11,7 @@ import kubedelos.web
 import kubedelos.web.app as app_module
 from kubedelos.web.jobs import ScanRunner
 from kubedelos.web.pages import render
+from kubedelos.web.security import READ_ONLY_NOTICE, ServeGuard
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +45,8 @@ def test_serve_app_state(serve_app, worker, sweeper):
     assert serve_app.state.worker is worker and serve_app.state.sweeper is sweeper
     assert isinstance(serve_app.state.scans, ScanRunner)
     assert not hasattr(serve_app.state, "guard")
+    assert isinstance(serve_app.state.serve_guard, ServeGuard)
+    assert serve_app.state.serve_guard.read_only is False
 
 
 def test_serve_app_has_the_same_pages(app, serve_app):
@@ -53,6 +57,43 @@ def test_serve_app_has_the_same_pages(app, serve_app):
 def test_serve_app_renders_every_page(serve_client):
     for path in ("/", "/findings", "/namespaces", "/diff", "/reports", "/accepted", "/scans", "/settings", "/about"):
         assert serve_client.get(path).status_code == 200, path
+
+
+def test_serve_forms_carry_the_token(serve_client, serve_app):
+    html = serve_client.get("/scans").text
+    cookie = serve_client.cookies.get(ServeGuard.CSRF_COOKIE)
+    token = serve_app.state.serve_guard.csrf_token(cookie, None)
+    assert 'action="/scans"' in html
+    assert f'name="csrf_token" value="{token}"' in html
+
+
+class _RunningScan:
+    """A runner whose scan is running, so the progress readout would offer Cancel."""
+
+    def view(self):
+        fields = ("progress", "retry_of", "eta", "status", "run_id", "error")
+        return SimpleNamespace(state="running", context="my-cluster", **dict.fromkeys(fields))
+
+
+@pytest.mark.parametrize(("read_only", "shown"), [(True, False), (False, True)])
+def test_read_only_hides_the_scan_form_and_cancel(make_serve_client, read_only, shown):
+    client = make_serve_client(read_only=read_only)
+    client.app.state.scans = _RunningScan()
+    html = client.get("/scans").text
+    assert "Scanning my-cluster" in html
+    assert ('action="/scans"' in html) is shown
+    assert ('action="/scans/cancel"' in html) is shown
+    assert ('name="csrf_token"' in html) is shown
+
+
+def test_laptop_can_always_write(app, client):
+    @app.get("/_can_write")
+    def can_write(request: Request):
+        return PlainTextResponse(
+            app.state.templates.env.from_string("{{ can_write(request) }}").render(request=request)
+        )
+
+    assert client.get("/_can_write").text == "True"
 
 
 def test_serve_app_handles_bad_parameters(serve_client):
@@ -142,3 +183,14 @@ def test_the_400_page_keeps_the_shown_context(client, kube_contexts):
     assert 'href="/findings?context=prod-eu"' in response.text  # the nav stays on the cluster the page was for
     unknown = client.get("/namespaces", params={"context": "nowhere", "has": "SEVERE"})
     assert unknown.status_code == 400 and 'href="/findings"' in unknown.text  # an unknown one falls back
+
+
+@pytest.mark.parametrize("path", ["/", "/findings", "/scans", "/accepted"])
+def test_read_only_pages_show_the_notice(make_serve_client, path):
+    html = make_serve_client(read_only=True).get(path).text
+    assert '<p class="notice">View-only: this kubedelos is read-only.</p>' in html
+
+
+def test_writable_serve_and_laptop_never_show_the_notice(serve_client, client):
+    assert READ_ONLY_NOTICE not in serve_client.get("/").text
+    assert READ_ONLY_NOTICE not in client.get("/").text

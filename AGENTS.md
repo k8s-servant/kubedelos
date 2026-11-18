@@ -9,9 +9,10 @@ working in this repository. Human contributors: see [CONTRIBUTING.md](CONTRIBUTI
 kubedelos is a Kubernetes image vulnerability scanner with a local web UI and scheduled
 reports. It lists the container images running in a cluster (read-only), scans them with
 a pinned Trivy, and stores the findings in SQLite. There is one command, `kubedelos`;
-`kubedelos ui` serves the local UI, and scans start from there; `kubedelos serve` is the in-cluster mode
-(a view-only UI, a cron sweep and a scan queue). CI gating is a non-goal
-(plain Trivy covers it), so don't add CI-only features such as exit-code gates or SARIF.
+`kubedelos ui` serves the local UI, and scans start from there; `kubedelos serve` is the
+in-cluster mode (a UI that scans through the queue within the configured scope, a cron
+sweep, and an optional read-only mode). CI gating is a non-goal (plain Trivy covers it), so
+don't add CI-only features such as exit-code gates or SARIF.
 
 ## Commands
 

@@ -4,7 +4,11 @@
 
 ### Features
 
-- `kubedelos serve` runs kubedelos in a cluster: a view-only UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`, that refuses every write. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory, so expose it only through an authenticating proxy or keep it cluster-internal.
+- `kubedelos serve` runs kubedelos in a cluster: the UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory and, unless read-only, write, so expose it only through an authenticating proxy or keep it cluster-internal.
+- Writes in `kubedelos serve`: UI scans, retries and cancels go through the queue and stay within the configured scope (a scan can only narrow it). Writes need an allowed `Origin` and a CSRF token.
+- `KUBEDELOS_READ_ONLY=true` makes `serve` refuse every write; the pages hide their forms and show a notice.
+- `KUBEDELOS_TRUST_PROXY_HEADERS` and `KUBEDELOS_IDENTITY_HEADER` (default `X-Auth-Request-Email`) take the user's name from a trusted proxy header; the Scans page shows it in the By column (`schedule` or `anonymous` otherwise).
+- Risk acceptances default their owner to that name.
 - Scheduled sweeps: `serve` queues a sweep on a cron schedule (`KUBEDELOS_SWEEP_SCHEDULE`, default `0 3 * * *`, in `KUBEDELOS_SWEEP_TIMEZONE`; `KUBEDELOS_SWEEP_ENABLED=false` turns it off) and a worker runs the queue one scan at a time. A sweep skips the 24-hour result cache, so findings match the current Trivy DB.
 - Retention: `serve` deletes runs older than `KUBEDELOS_RETENTION_DAYS` (default 180, `0` keeps all) and expired image-cache rows.
 - Scan queue: schema migration 10 adds the `scan_request` table that holds queued, started and cancelled requests.

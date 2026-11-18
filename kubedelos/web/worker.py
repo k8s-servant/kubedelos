@@ -23,8 +23,7 @@ from pydantic import ValidationError
 
 from kubedelos.config import Settings
 from kubedelos.store import db, queue, retention
-from kubedelos.web.jobs import JobView, ScanBusy, ScanRunner
-from kubedelos.web.routes.scans import ACTIVE, FIELDS
+from kubedelos.web.jobs import ACTIVE, FIELDS, JobView, ScanBusy, ScanRunner
 
 logger = logging.getLogger("kubedelos.web")
 

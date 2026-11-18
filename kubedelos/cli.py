@@ -254,11 +254,11 @@ def serve(
     host: Annotated[str, typer.Option(help="Address to listen on.")] = "0.0.0.0",  # noqa: S104 - in-cluster default
     kubeconfig: Annotated[Path | None, typer.Option(help="Path to the kubeconfig file.")] = None,
 ) -> None:
-    """Serve the view-only UI of one cluster and sweep it on a schedule (the in-cluster mode).
+    """Serve the UI of one cluster and sweep it on a schedule (the in-cluster mode).
 
     The cluster is named by KUBEDELOS_CLUSTER_NAME. Anyone who can reach the port can read every finding, so expose it
-    only through an authenticating proxy or keep it cluster-internal. Set KUBEDELOS_LOG_LEVEL=info to print an access
-    line per request on stderr.
+    only through an authenticating proxy or keep it cluster-internal. Writes are open unless KUBEDELOS_READ_ONLY=true.
+    Set KUBEDELOS_LOG_LEVEL=info to print an access line per request on stderr.
     """
     settings = _load_settings(kubeconfig=kubeconfig)
     if not settings.cluster_name:

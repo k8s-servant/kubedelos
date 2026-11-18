@@ -1,3 +1,5 @@
+import hashlib
+import hmac
 import logging
 import re
 
@@ -7,8 +9,16 @@ from fastapi.responses import PlainTextResponse
 from fastapi.testclient import TestClient
 
 from kubedelos.web.pages import render
-from kubedelos.web.security import MAX_SESSIONS, Guard
-from tests.web.conftest import build_serve_app
+from kubedelos.web.security import MAX_SESSIONS, Guard, ServeGuard
+from tests.web.conftest import (
+    IDENTITY_HEADER,
+    SERVE_ORIGIN,
+    build_serve_app,
+    serve_cookie,
+    serve_headers,
+    serve_token,
+    signed_post,
+)
 
 HINT = "Open the URL printed in the terminal where you started kubedelos ui."
 CSP = (
@@ -268,7 +278,7 @@ def test_signed_out_page_does_not_show_the_context(anon):
     assert "my-cluster" not in response.text
 
 
-# kubedelos serve: view-only, behind an allowed Host
+# kubedelos serve: behind an allowed Host
 
 
 @pytest.mark.parametrize(
@@ -287,11 +297,11 @@ def test_serve_allows_ipv6_literal(seed, worker, sweeper):
         assert client.get("/", headers={"host": "[::1]:8080"}).status_code == 200
 
 
-def test_serve_refuses_writes(serve_client, seed):
+def test_serve_refuses_unsigned_writes(serve_client):
     response = serve_client.post("/scans", data={"namespaces": "a"})
     assert response.status_code == 403
-    assert "view-only" in response.text
-    assert "KUBEDELOS_TRUST_PROXY_HEADERS" in response.text
+    assert "<h1>Form expired</h1>" in response.text
+    assert "The form was out of date or came from another site. Reload the page and try again." in response.text
     assert serve_client.post("/scans/cancel").status_code == 403
 
 
@@ -307,10 +317,174 @@ def test_serve_logs_the_access_line(serve_client, caplog):
     assert "GET /scans 200" in caplog.text and "page=1" not in caplog.text
 
 
-def test_serve_csrf_token_is_empty(serve_app, serve_client):
+def test_serve_csrf_token_is_bound_to_the_cookie(serve_app, serve_client):
     @serve_app.get("/_csrf")
     def csrf(request: Request):
         template = serve_app.state.templates.env.from_string("[{{ csrf_token(request) }}]")
         return PlainTextResponse(template.render(request=request))
 
-    assert serve_client.get("/_csrf").text == "[]"
+    text = serve_client.get("/_csrf").text
+    cookie = serve_client.cookies.get(ServeGuard.CSRF_COOKIE)
+    assert text == f"[{serve_app.state.serve_guard.csrf_token(cookie, None)}]"
+
+
+# kubedelos serve: writes, CSRF and the signed-in name
+
+
+@pytest.fixture
+def serve(make_serve_client):
+    """A factory of serve clients answering ``kubedelos.example.com``."""
+    return lambda **options: make_serve_client(allowed_hosts=["kubedelos.example.com"], **options)
+
+
+def test_serve_guard_tokens():
+    guard = ServeGuard(read_only=False, trust_proxy_headers=True, identity_header=IDENTITY_HEADER)
+    expected = hmac.new(guard.csrf_secret, b"c\na@example.com", hashlib.sha256).hexdigest()
+    assert guard.csrf_token("c", "a@example.com") == expected
+    assert guard.csrf_token("c", None) == hmac.new(guard.csrf_secret, b"c\n", hashlib.sha256).hexdigest()
+    assert guard.check_csrf("c", "a@example.com", expected)
+    assert not guard.check_csrf(None, "a@example.com", expected)
+    assert not guard.check_csrf("c", None, expected)
+    assert not guard.check_csrf("c", "a@example.com", None)
+    assert not guard.check_csrf("c", "a@example.com", "\u00e9")
+
+
+def test_first_get_sets_the_csrf_cookie(serve):
+    client = serve()
+    first = client.get("/scans")
+    cookie = first.headers["set-cookie"]
+    assert cookie.startswith(f"{ServeGuard.CSRF_COOKIE}=")
+    attributes = {part.strip().lower() for part in cookie.split(";")[1:]}
+    assert attributes == {"httponly", "samesite=strict", "path=/"}
+    assert "set-cookie" not in client.get("/scans").headers
+
+
+def test_csrf_cookie_is_set_on_non_html_responses_too(serve):
+    response = serve().get("/healthz")
+    assert ServeGuard.CSRF_COOKIE in response.headers["set-cookie"]
+
+
+def test_invalid_host_sets_no_cookie(serve):
+    response = serve().get("/scans", headers={"host": "evil.example.org"})
+    assert response.status_code == 400 and "set-cookie" not in response.headers
+
+
+def test_anonymous_write_reaches_the_route(serve):
+    assert signed_post(serve(), "/scans/cancel", {}).status_code == 303
+
+
+def test_read_only_refuses_writes(serve):
+    response = signed_post(serve(read_only=True), "/scans/cancel", {})
+    assert response.status_code == 403
+    assert "this kubedelos is read-only" in response.text
+    assert "<h1>Read-only</h1>" in response.text
+
+
+@pytest.mark.parametrize("method", ["POST", "PUT", "DELETE"])
+def test_read_only_refuses_every_write_method(serve, method):
+    client = serve(read_only=True)
+    response = client.request(method, "/scans/cancel", headers=serve_headers(), follow_redirects=False)
+    assert response.status_code == 403
+    assert "this kubedelos is read-only" in response.text
+
+
+def test_post_without_cookie_is_refused(serve):
+    response = serve().post("/scans/cancel", data={"csrf_token": "x"}, headers=serve_headers(), follow_redirects=False)
+    assert response.status_code == 403
+    assert "<h1>Form expired</h1>" in response.text
+    assert "The form was out of date or came from another site. Reload the page and try again." in response.text
+    assert response.headers["content-security-policy"] == CSP.format(nonce=_nonce(response))
+
+
+def test_token_for_another_cookie_is_refused(serve):
+    client, other = serve(), serve()
+    token = serve_token(other)
+    serve_cookie(client)
+    response = client.post("/scans/cancel", data={"csrf_token": token}, headers=serve_headers(), follow_redirects=False)
+    assert response.status_code == 403
+
+
+def test_token_in_the_header_passes(serve):
+    client = serve()
+    headers = {**serve_headers(), "x-csrf-token": serve_token(client)}
+    assert client.post("/scans/cancel", headers=headers, follow_redirects=False).status_code == 303
+
+
+def test_token_for_another_identity_is_refused(serve):
+    client = serve(trust_proxy_headers=True)
+    token = serve_token(client, "a@example.com")
+    response = client.post(
+        "/scans/cancel", data={"csrf_token": token}, headers=serve_headers("b@example.com"), follow_redirects=False
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://evil.example.org",
+        "null",
+        "ftp://kubedelos.example.com",
+        "https://kubedelos.example.com:1@evil.example.org",
+    ],
+)
+def test_foreign_origin_is_refused(serve, origin):
+    response = signed_post(serve(), "/scans/cancel", {}, origin=origin)
+    assert response.status_code == 403
+    assert "<h1>Form expired</h1>" in response.text
+
+
+def test_missing_origin_falls_back_to_the_referer(serve):
+    client = serve()
+    data = {"csrf_token": serve_token(client)}
+    referer = {"referer": f"{SERVE_ORIGIN}/scans"}
+    assert client.post("/scans/cancel", data=data, headers=referer, follow_redirects=False).status_code == 303
+    assert client.post("/scans/cancel", data=data, follow_redirects=False).status_code == 403
+
+
+@pytest.mark.parametrize("origin", ["https://kubedelos.example.com:443", "http://KUBEDELOS.example.com"])
+def test_https_origin_with_port_passes(serve, origin):
+    assert signed_post(serve(), "/scans/cancel", {}, origin=origin).status_code == 303
+
+
+def test_header_ignored_without_trust(serve, caplog):
+    client = serve()
+    token = serve_token(client)  # as the page makes it: the untrusted header does not name the user
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        response = client.post(
+            "/scans/cancel", data={"csrf_token": token}, headers=serve_headers("a@example.com"), follow_redirects=False
+        )
+    assert response.status_code == 303
+    assert caplog.records[-1].getMessage().endswith(" -")
+    assert "a@example.com" not in caplog.text
+
+
+def test_access_log_names_the_identity(serve, caplog):
+    client = serve(trust_proxy_headers=True)
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        signed_post(client, "/scans/cancel", {}, identity="a@example.com")
+    assert caplog.records[-1].getMessage() == "POST /scans/cancel 303 a@example.com"
+
+
+def test_identity_is_cleaned_before_use(serve, caplog):
+    client = serve(trust_proxy_headers=True)
+    token = serve_token(client, "a@example.com[31m")  # the page makes it for the cleaned name
+    headers = serve_headers("a@example.com\x1b[31m")
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        response = client.post("/scans/cancel", data={"csrf_token": token}, headers=headers, follow_redirects=False)
+    assert response.status_code == 303
+    assert caplog.records[-1].getMessage() == "POST /scans/cancel 303 a@example.com[31m"
+    assert "\x1b" not in caplog.text
+
+
+def test_utf8_identity_header_is_decoded(serve, caplog):
+    client = serve(trust_proxy_headers=True)
+    name = "J\u016brat\u0117@example.com"
+    token = serve_token(client, name)
+    headers = [(b"origin", SERVE_ORIGIN.encode()), (IDENTITY_HEADER.lower().encode(), name.encode())]
+    with caplog.at_level(logging.INFO, logger="kubedelos.web"):
+        response = client.post(
+            "/scans/cancel", data={"csrf_token": token}, headers=dict(headers), follow_redirects=False
+        )
+    assert response.status_code == 303
+    assert caplog.records[-1].getMessage() == f"POST /scans/cancel 303 {name}"

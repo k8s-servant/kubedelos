@@ -10,7 +10,8 @@ The newest result run of a context, once it finished ``partial``, also offers a 
 (``POST /scans/{run_id}/retry``, with the CSRF token): the app's ``ScanRunner`` scans them again with the posted time
 limit and parallelism and puts the results into the same run (see ``kubedelos.scan.service.retry_failed``). It
 retries only the ticked kinds of failure: all but ``not_found`` at first (a missing tag stays missing until someone
-pushes it), or just the kind the page is narrowed to. The page lists the notes earlier retries left.
+pushes it), or just the kind the page is narrowed to. The page lists the notes earlier retries left. In
+``kubedelos serve`` the retry is queued for the worker instead, as ``POST /scans`` queues a scan.
 """
 
 import json
@@ -46,6 +47,7 @@ from kubedelos.web.pages import (
     context_param,
     link,
     open_db,
+    queue_ui_request,
     render,
     seconds_text,
     short_image,
@@ -242,6 +244,9 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
     with open_db(request) as conn:
         context = shown_context(request, conn, wanted)
         try:
+            if request.app.state.serve and context != request.app.state.context:
+                # serve scans only its own cluster, so a run kept from another context can't be retried here.
+                raise RunNotShown(f"only runs of {request.app.state.context} can be retried here")
             run = run_label(conn, context, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
@@ -264,6 +269,9 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
         valid = Settings.model_validate({**settings.model_dump(), "parallelism": sent["parallelism"].strip()})
     except ValidationError as exc:
         return page(f"Parallel images: {exc.errors()[0]['msg']}", 400)
+    if request.app.state.serve:
+        wanted = {"scan_timeout_s": timeout, "parallelism": valid.parallelism, "kinds": sorted(chosen)}
+        return queue_ui_request(request, kind="retry", overrides=wanted, target_run_id=run.id, on_error=page)
     try:
         request.app.state.scans.retry(
             run.id, {"scan_timeout_s": timeout, "parallelism": valid.parallelism}, context=context, kinds=set(chosen)

@@ -61,6 +61,9 @@
     <div class="main">
       <main>
         {% block run_line %}{% endblock %}
+        {%- if not can_write(request) %}
+        <p class="notice">{{ read_only_notice }}</p>
+        {%- endif %}
         {% block content %}{% endblock %}
       </main>
     </div>

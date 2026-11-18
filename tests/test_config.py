@@ -159,3 +159,17 @@ def test_allowed_hosts_drop_a_port():
         "::1",
         "::1",
     ]
+
+
+def test_serve_write_settings_default():
+    settings = Settings()
+    assert settings.read_only is False
+    assert settings.trust_proxy_headers is False
+    assert settings.identity_header == "X-Auth-Request-Email"
+
+
+def test_identity_header_must_be_a_header_name():
+    for bad in ("X Auth", ""):
+        with pytest.raises(ValidationError):
+            Settings(identity_header=bad)
+    assert Settings(identity_header="Remote-User").identity_header == "Remote-User"

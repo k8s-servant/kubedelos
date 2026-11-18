@@ -168,12 +168,22 @@ each UI scan starts. A scan still running in another process holds its lock and 
 
 ## kubedelos serve (in-cluster)
 
-`kubedelos serve` is the in-cluster mode: one process that serves a view-only UI of one cluster, sweeps it on a cron
+`kubedelos serve` is the in-cluster mode: one process that serves the UI of one cluster, sweeps it on a cron
 schedule and keeps the results. Sweeps and scans go through a SQLite scan queue and run one at a time. Runs older than
 the retention period are deleted. Only one `serve` can use a data directory; a second one exits 2.
 
-**Anyone who can reach `serve` can read the whole vulnerability inventory.** Expose it only through an authenticating
-proxy, or keep it cluster-internal. Writes (starting a scan, accepting a risk) are refused until sign-in lands.
+**Anyone who can reach `serve` can read the whole vulnerability inventory, and by default can also write.** Writes are
+open: anyone who reaches the UI can start a scan within the configured scope, retry failed images, cancel a queued scan
+or stop the running one (a scheduled sweep included), and accept or revoke risks. Expose it only through an authenticating proxy, or keep it cluster-internal.
+
+- `KUBEDELOS_READ_ONLY=true` turns writes off: every write gets a 403, and the pages hide their forms and show a notice.
+- UI scans go through the scan queue and can only narrow the configured scope (namespaces, exclusions, selectors). A
+  blank Namespaces field means the configured namespaces, and a scan cannot reach beyond them.
+- `KUBEDELOS_TRUST_PROXY_HEADERS=true` reads the user's name from the header named by `KUBEDELOS_IDENTITY_HEADER`
+  (default `X-Auth-Request-Email`). It shows in the By column of scans and becomes the owner of risk acceptances; without
+  it, scans show `anonymous`. Turn trust on only when the proxy overwrites that header on every request and nothing else
+  can reach the pod, because anyone who can set the header can claim any name.
+- Writes need an `Origin` naming an allowed host and a CSRF token tied to a per-browser cookie.
 
 Scheduled sweeps rescan every image: they skip the 24-hour result cache, so findings match the current Trivy DB, while
 the on-disk layer cache keeps them fast.
@@ -185,6 +195,9 @@ the on-disk layer cache keeps them fast.
 | `KUBEDELOS_SWEEP_TIMEZONE` | `UTC` (an IANA name such as `Europe/Vilnius`) |
 | `KUBEDELOS_SWEEP_ENABLED` | `true`; `false` turns the schedule off |
 | `KUBEDELOS_RETENTION_DAYS` | `180`; `0` keeps every run |
+| `KUBEDELOS_READ_ONLY` | `false`; `true` refuses every write |
+| `KUBEDELOS_TRUST_PROXY_HEADERS` | `false`; `true` reads the user's name from the identity header |
+| `KUBEDELOS_IDENTITY_HEADER` | `X-Auth-Request-Email` |
 | `KUBEDELOS_ALLOWED_HOSTS` | `localhost,127.0.0.1`: the `Host` header values the UI answers to (`/healthz` answers to any) |
 
 `--host` (default `0.0.0.0`), `--port` (default `8080`) and `--kubeconfig` are the flags. To try it on a laptop:
