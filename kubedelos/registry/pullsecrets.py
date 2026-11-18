@@ -9,6 +9,7 @@ Secret is read at most once per run, and contents never reach logs: a skipped se
 import base64
 import binascii
 import logging
+import threading
 from collections.abc import Collection
 
 from kubernetes.client.rest import ApiException
@@ -30,6 +31,7 @@ class PullSecrets:
         self._api = api
         self._namespaces = frozenset(namespaces)
         self._cache: dict[tuple[str, str], Auths] = {}
+        self._lock = threading.Lock()  # scan workers share one instance: a Secret is read once, not once per worker
 
     def auths_for(self, refs: list[tuple[str, str]], host: str) -> Auths:
         """The credentials for ``host`` from the first of ``refs`` that has any."""
@@ -42,12 +44,13 @@ class PullSecrets:
     def _read(self, ns: str, name: str) -> Auths:
         if ns not in self._namespaces:
             return {}
-        if (ns, name) not in self._cache:
-            auths = self._fetch(ns, name)
-            if auths is None:  # a failed read may be transient: skipped now, tried again on the next ask
-                return {}
-            self._cache[(ns, name)] = auths
-        return self._cache[(ns, name)]
+        with self._lock:
+            if (ns, name) not in self._cache:
+                auths = self._fetch(ns, name)
+                if auths is None:  # a failed read may be transient: skipped now, tried again on the next ask
+                    return {}
+                self._cache[(ns, name)] = auths
+            return self._cache[(ns, name)]
 
     def _fetch(self, ns: str, name: str) -> Auths | None:
         """The Secret's credentials, ``{}`` when it holds none, or ``None`` when it could not be read."""

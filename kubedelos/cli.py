@@ -238,8 +238,6 @@ def ui(
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
-    if settings.secrets_dir is not None:
-        dockerconfig.clear(settings.secrets_dir)  # configs a crashed scan left behind
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     token = secrets.token_urlsafe(32)

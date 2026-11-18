@@ -795,3 +795,31 @@ def test_temp_config_removed_when_scan_raises(tmp_path, monkeypatch):
     )  # fmt: skip
     assert seen and results[0].status == "error"
     assert list(secrets.iterdir()) == []
+
+
+def test_unwritable_secrets_dir_fails_only_that_image(tmp_path, monkeypatch):
+    mounted = tmp_path / "m.json"
+    mounted.write_text(json.dumps({"auths": {"private.example": {"auth": "YTpi"}}}))
+    settings = Settings(
+        cache_dir=tmp_path, layer_cache=False, parallelism=1, secrets_dir=tmp_path / "missing", docker_configs=[mounted]
+    )
+    private = InventoryItem(
+        image=ImageRef(ref="private.example/app:1", repo="private.example/app"), platform="linux/amd64"
+    )
+    public = InventoryItem(
+        image=ImageRef(ref="public.example/app:1", repo="public.example/app"), platform="linux/amd64"
+    )
+    monkeypatch.setattr(
+        runner,
+        "scan_image",
+        lambda trivy, image, platform, timeout, **kw: ImageResult(image=image, platform=platform, status="ok"),
+    )
+    results = {}
+    scan_many(
+        [private, public], cache_dir=tmp_path / "c", trivy=FAKE_TRIVY, settings=settings,
+        on_result=lambda r: results.__setitem__(r.image.ref, r), cancel=threading.Event(), access=RegistryAccess(settings),
+    )  # fmt: skip
+    assert results["public.example/app:1"].status == "ok"
+    failed = results["private.example/app:1"]
+    assert (failed.status, failed.error_kind) == ("error", "unknown")
+    assert "FileNotFoundError" in failed.error and "YTpi" not in failed.error

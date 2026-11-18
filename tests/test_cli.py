@@ -246,6 +246,16 @@ def ui_env(fake_env, monkeypatch):
     return calls
 
 
+def test_ui_leaves_the_secrets_dir_alone(ui_env, fake_env, monkeypatch):
+    secrets = fake_env / "secrets"
+    live = secrets / "docker-live"
+    live.mkdir(parents=True)
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(secrets))
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert live.is_dir()
+
+
 def test_ui_rejects_non_loopback_host(ui_env):
     r = CliRunner().invoke(app, ["ui", "--host", "0.0.0.0"])  # noqa: S104 - checks the rejection
     assert r.exit_code == 2

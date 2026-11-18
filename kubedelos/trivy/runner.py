@@ -414,11 +414,18 @@ def scan_many(
 
     def work(item: InventoryItem) -> ImageResult:
         started = time.monotonic()
-        with (
-            slots.take(item.image.repo) if slots else contextlib.nullcontext() as layer_dir,
-            access.for_item(item) as scan_access,
-        ):
-            result = attempts(item, layer_dir, scan_access.docker_config)
+        with slots.take(item.image.repo) if slots else contextlib.nullcontext() as layer_dir:
+            try:
+                with access.for_item(item) as scan_access:
+                    result = attempts(item, layer_dir, scan_access.docker_config)
+            except Exception as exc:  # the credential file could not be made: this image fails, the others go on
+                result = ImageResult(
+                    image=item.image,
+                    platform=item.platform,
+                    status="error",
+                    error_kind="unknown",
+                    error=_short(f"could not prepare registry credentials: {type(exc).__name__}"),
+                )
         return result.model_copy(update={"duration_s": round(time.monotonic() - started, 1)})
 
     def attempts(item: InventoryItem, layer_dir: Path | None, docker_config: Path | None) -> ImageResult:

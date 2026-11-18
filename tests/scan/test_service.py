@@ -603,4 +603,17 @@ def test_retry_loads_the_cluster_when_failed_images_have_pull_secrets(env, monke
     secrets.mkdir()
     retry = settings.model_copy(update={"secrets_dir": secrets, "pod_pull_secret_namespaces": ["default"]})
     service.retry_failed(retry, run_id, repo=repo)
-    assert len(loaded) == 1 and accesses[0] is not None
+    assert len(loaded) == 1 and len(accesses) == 1
+
+
+def test_retry_does_not_load_the_cluster_when_no_failed_image_has_pull_secrets(env, monkeypatch, tmp_path):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    loaded = []
+    monkeypatch.setattr(service.kube_client, "load", lambda s: loaded.append(s) or FakeKubeApi())
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    retry = settings.model_copy(update={"secrets_dir": secrets, "pod_pull_secret_namespaces": ["default"]})
+    service.retry_failed(retry, run_id, repo=repo)
+    assert loaded == []

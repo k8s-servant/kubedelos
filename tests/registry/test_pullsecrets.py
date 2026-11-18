@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 
 from kubernetes.client import V1ObjectMeta, V1Secret
 from urllib3.exceptions import ReadTimeoutError
@@ -141,3 +143,26 @@ def test_server_error_and_transport_error_are_skipped_not_cached(caplog):
 def test_plain_os_error_is_skipped():
     api = FakeKubeApi(secret_errors={("web", "a"): OSError("connection reset")})
     assert PullSecrets(api, ["web"]).auths_for([("web", "a")], "registry.example.com") == {}
+
+
+def test_concurrent_workers_read_a_secret_once():
+    api = FakeKubeApi(secrets={("web", "regcred"): _docker("web", "regcred")})
+    real = api.read_secret
+
+    def slow(ns, name):
+        time.sleep(0.2)
+        return real(ns, name)
+
+    api.read_secret = slow
+    pulls = PullSecrets(api, ["web"])
+    got = []
+    threads = [
+        threading.Thread(target=lambda: got.append(pulls.auths_for([("web", "regcred")], "registry.example.com")))
+        for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert api.secret_reads == [("web", "regcred")]
+    assert len(got) == 2 and got[0] == got[1] != {}
