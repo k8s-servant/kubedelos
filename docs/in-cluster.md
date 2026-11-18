@@ -183,8 +183,9 @@ The guard catches common mistakes. It is not a proof that only the proxy can rea
 ### Secure cookies
 
 `secureCookies` defaults to `true`: the CSRF cookie that protects writes carries the `Secure` attribute, so a browser
-sends it only over HTTPS. Chrome, Edge and Firefox also accept it on `http://localhost`, so `kubectl port-forward` keeps working there. Safari's
-behaviour is not guaranteed; if it drops the cookie, set `secureCookies: false` for plain-HTTP access.
+sends it only over HTTPS. Chrome, Edge and Firefox also accept it on `http://localhost`, so `kubectl port-forward` keeps
+working there. Safari drops it on `http://localhost`, so forms fail as expired; use another browser, or set
+`secureCookies: false` if you only reach the UI over plain HTTP.
 
 If your browser reaches the UI over plain HTTP on any other host (a cluster-internal name through a VPN, an Ingress with
 no TLS), the browser drops the cookie and every write fails its CSRF check. Terminate TLS in front of the UI, which is the
