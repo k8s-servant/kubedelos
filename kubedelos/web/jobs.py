@@ -4,7 +4,9 @@ A scan started from the UI runs :func:`kubedelos.scan.service.run_scan` on a dae
 failed images runs :func:`kubedelos.scan.service.retry_failed` in the same single slot), so the request that
 started it returns at once and the page polls :meth:`ScanRunner.view` for progress. ``run_scan`` opens its own kube
 API client and SQLite connection on that thread, so no sqlite object crosses threads. The scan always targets the
-UI's context, never the kubeconfig's current context at click time. Errors are shown through
+UI's context, never the kubeconfig's current context at click time. With ``fixed_cluster`` (``kubedelos serve``, in a
+pod) there is one cluster: the context is only its display name, every other context is refused, and the scan keeps
+``Settings.context`` (normally None, for the in-cluster config). Errors are shown through
 :func:`kubedelos.trivy.runner.error_cause`, which redacts credentials and keeps them to one line; a Kubernetes API
 error shows only its status and reason, never the response headers or body it carries.
 """
@@ -104,9 +106,11 @@ class ScanRunner:
         scan: Callable[..., ScanOutcome] = run_scan,
         retry: Callable[..., ScanOutcome] = retry_failed,
         clock: Callable[[], datetime] = _utcnow,
+        fixed_cluster: bool = False,
     ) -> None:
         self._settings = settings
         self._context = context
+        self._fixed = fixed_cluster
         self._scan = scan
         self._retry = retry
         self._clock = clock
@@ -114,18 +118,33 @@ class ScanRunner:
         self._job: _Job | None = None
         self._closed = False  # set by shutdown: the app is going away, so no new daemon scan may start
 
-    def start(self, overrides: dict, context: str | None = None, *, rescan: bool = False) -> None:
+    def start(
+        self,
+        overrides: dict,
+        context: str | None = None,
+        *,
+        rescan: bool = False,
+        trigger: str = "ui",
+        requested_by: str | None = None,
+    ) -> None:
         """Start a scan of ``context`` (the UI's startup context by default) with ``overrides`` applied; ``rescan``
-        skips the result cache. The caller checks that ``context`` is one the kubeconfig has.
+        skips the result cache. ``trigger`` and ``requested_by`` are recorded on the run. The caller checks that
+        ``context`` is one the kubeconfig has.
 
-        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down, and ``ValueError`` for another
+        context on a fixed cluster.
         """
-        target = context or self._context
-        # The context goes last so an override can never point the scan at another cluster.
-        scan_settings = self._settings.model_copy(update={**overrides, "context": target})
+        target, scan_settings = self._target(overrides, context)
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
-            return self._scan(scan_settings, trigger="ui", on_progress=on_progress, cancel=cancel, rescan=rescan)
+            return self._scan(
+                scan_settings,
+                trigger=trigger,
+                on_progress=on_progress,
+                cancel=cancel,
+                rescan=rescan,
+                requested_by=requested_by,
+            )
 
         self._launch(target, work)
 
@@ -136,15 +155,26 @@ class ScanRunner:
         ``overrides`` (the time limit and parallelism) applied. The caller checks that the run is the context's
         newest; ``retry_failed`` checks the rest.
 
-        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down.
+        Raises :class:`ScanBusy` if a scan is active or the runner has been shut down, and ``ValueError`` for another
+        context on a fixed cluster.
         """
-        target = context or self._context
-        retry_settings = self._settings.model_copy(update={**overrides, "context": target})
+        target, retry_settings = self._target(overrides, context)
 
         def work(on_progress: Callable[[Progress], None], cancel: threading.Event) -> ScanOutcome:
             return self._retry(retry_settings, run_id=run_id, on_progress=on_progress, cancel=cancel, kinds=kinds)
 
         self._launch(target, work, retry_of=run_id)
+
+    def _target(self, overrides: dict, context: str | None) -> tuple[str, Settings]:
+        """The display context and the settings to scan with. The context goes last, so an override can never point
+        the scan at another cluster; on a fixed cluster that is the configured ``Settings.context``.
+        """
+        target = context or self._context
+        if self._fixed:
+            if target != self._context:
+                raise ValueError(f"this server scans only {self._context}")
+            return target, self._settings.model_copy(update={**overrides, "context": self._settings.context})
+        return target, self._settings.model_copy(update={**overrides, "context": target})
 
     def _launch(
         self,

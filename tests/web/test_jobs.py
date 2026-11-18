@@ -425,3 +425,54 @@ def test_retry_is_refused_while_a_scan_runs(settings):
     assert runner.view().retry_of is None
     scan.release.set()
     _wait_for(runner, "finished")
+
+
+def _fixed_runner(tmp_path, scan):
+    fixed = Settings(context=None, data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
+    runner = ScanRunner(fixed, "my-cluster", fixed_cluster=True, scan=scan, retry=FakeScan(), clock=lambda: T0)
+    _RUNNERS.append(runner)
+    return runner
+
+
+def test_fixed_cluster_keeps_the_kubeconfig_context(tmp_path):
+    scan = FakeScan()
+    runner = _fixed_runner(tmp_path, scan)
+    runner.start({"context": "someone-else"})
+    assert scan.entered.wait(5)
+    assert scan.calls[0]["settings"].context is None  # in a pod: the in-cluster config, not a kubeconfig context
+    assert runner.view().context == "my-cluster"  # the display name
+    runner.shutdown()
+
+
+def test_fixed_cluster_refuses_another_context(tmp_path):
+    scan = FakeScan()
+    runner = _fixed_runner(tmp_path, scan)
+    with pytest.raises(ValueError):
+        runner.start({}, context="other")
+    with pytest.raises(ValueError):
+        runner.retry(7, {}, context="other")
+    assert scan.calls == [] and runner.view() is None
+    runner.start({}, context="my-cluster")  # its own name is fine
+    assert scan.entered.wait(5)
+    runner.shutdown()
+
+
+def test_fixed_cluster_retry_keeps_the_kubeconfig_context(tmp_path):
+    retry = FakeScan()
+    fixed = Settings(context=None, data_dir=tmp_path / "data", cache_dir=tmp_path / "cache")
+    runner = ScanRunner(fixed, "my-cluster", fixed_cluster=True, scan=FakeScan(), retry=retry, clock=lambda: T0)
+    _RUNNERS.append(runner)
+    runner.retry(7, {"parallelism": 2, "context": "elsewhere"})
+    assert retry.entered.wait(5)
+    assert retry.calls[0]["settings"].context is None and retry.calls[0]["settings"].parallelism == 2
+    runner.shutdown()
+
+
+def test_start_passes_trigger_and_requester(settings):
+    scan = FakeScan()
+    runner = _runner(settings, scan)
+    runner.start({}, rescan=True, trigger="schedule", requested_by="a@example.com")
+    assert scan.entered.wait(5)
+    call = scan.calls[0]
+    assert (call["trigger"], call["requested_by"], call["rescan"]) == ("schedule", "a@example.com", True)
+    runner.shutdown()
