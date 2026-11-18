@@ -228,7 +228,7 @@ Applies to `serve` only. `kubedelos ui` keeps its loopback, token and session mo
   the token is bound to a per-browser cookie (`kubedelos_csrf`, random, `HttpOnly`, `SameSite=Strict`, set on the
   first page) and, when there is one, to the identity: an HMAC of both, keyed by a secret made at start-up. A restart
   makes old forms fail once; the page reloads with a fresh one. `KUBEDELOS_SECURE_COOKIES` (default `false`; chart value
-  `secureCookies`, default `true`) adds `Secure` to that cookie. Browsers accept `Secure` cookies on `http://localhost`,
+  `secureCookies`, default `true`) adds `Secure` to that cookie. Chrome, Edge and Firefox accept `Secure` cookies on `http://localhost`,
   so `kubectl port-forward` still works; a browser that reaches the UI over plain HTTP on another host drops the cookie,
   so writes fail, and the operator then terminates TLS or sets `secureCookies: false`.
 - **CSP and the other security headers stay as they are.** The access log adds the identity value (it is the user's

@@ -5,5 +5,4 @@ scope:
   namespaces: [web]
 sweep:
   schedule: "* * * * *"
-extraAllowedHosts: [localhost]
 secureCookies: false

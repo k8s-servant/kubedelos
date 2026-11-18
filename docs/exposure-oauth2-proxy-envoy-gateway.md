@@ -116,10 +116,10 @@ No `http.path` is set, on purpose. Envoy Gateway then sends the authorization re
 request path (`api/v1alpha1/ext_auth_types.go`, field `Path`), for example `/scans`. oauth2-proxy handles that in its
 proxy mode (`Proxy` in `oauthproxy.go`, v7.15.6): an unauthenticated browser gets the sign-in page or a redirect to the
 identity provider, which Envoy passes to the client, and an authenticated request goes to the `static://200` upstream
-with `X-Auth-Request-Email` set on the response by `--set-xauthrequest`. The alternative, `pathOverride: /oauth2/auth`,
+with `X-Auth-Request-Email` set on the response by `--set-xauthrequest`. The alternative, `http.path: /oauth2/auth`,
 is oauth2-proxy's auth-only endpoint (`AuthOnly`): it sets the same headers and returns 202, but answers an
-unauthenticated browser with a bare 401 and no sign-in, which is the wrong experience for a UI. I did not check that
-Envoy treats a 202 as "allowed", which is another reason to use the 200 upstream here.
+unauthenticated browser with a bare 401 and no sign-in, which is the wrong experience for a UI. The example uses proxy
+mode's 200, so it does not depend on how Envoy treats a 202.
 
 Two standard Gateway API rules are not shown: the Gateway's listener must allow routes from the `auth` and `kubedelos`
 namespaces (`allowedRoutes`), and the `SecurityPolicy` reaches a Service in another namespace only with a
@@ -155,15 +155,16 @@ hostname to the allowed hosts itself and `extraAllowedHosts` is not needed.
 
 1. Open `https://kubedelos.example.com/` in a private window. You should be sent to sign in, and after it the Scans page
    should show your email in the By column once you start a scan.
-2. Send a forged header through the Gateway with a valid session cookie, and see that the By column shows your own
-   email, not the forged one:
+2. Send a forged header through the Gateway with a valid session cookie. The new-acceptance form prefills its Owner
+   field from the identity header the proxy set, so it must show your own email and not the forged one:
 
    ```bash
    curl -s -b 'cookie from your browser' -H 'X-Auth-Request-Email: someone-else@example.com' \
-     https://kubedelos.example.com/scans | grep -c someone-else
+     https://kubedelos.example.com/accepted/new > form.html
+   grep -c someone-else form.html      # must print 0
+   grep -c 'name="owner" value="you@example.com"' form.html   # must print 1 (your signed-in email)
    ```
 
-   It must print `0`.
 3. From another pod in the cluster, call the kubedelos Service directly with the header. It must time out, because the
    NetworkPolicy admits only the Envoy proxy pods:
 

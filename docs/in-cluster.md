@@ -19,8 +19,9 @@ helm install kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos \
 `clusterName` is required: it is the name the runs are stored under. The chart names its objects (Service,
 Deployment, PVC) `<release>-kubedelos`, or just the release name when that already contains `kubedelos`. The release is
 called `kubedelos` here, so its Service is `kubedelos`; the examples below write `<release>-kubedelos` for the general
-case, so use the name your release gets (`helm template` or `kubectl get svc -n kubedelos` shows it). The chart always runs one replica with a `Recreate` strategy, because SQLite allows only
-one writer; the replica count is not a value.
+case, so use the name your release gets (`helm template` or `kubectl get svc -n kubedelos` shows it).
+The chart always runs one replica with a `Recreate` strategy, because SQLite allows only one writer; the replica
+count is not a value.
 
 Nothing is reachable from outside the cluster after the install. To look at the UI from your machine:
 
@@ -64,7 +65,7 @@ The chart rejects keys it does not know (`values.schema.json`).
 | `persistence.size` | `10Gi` | Size of the volume (ReadWriteOnce). |
 | `persistence.storageClassName` | `""` | Empty uses the cluster default class. |
 | `persistence.existingClaim` | `""` | Use this claim instead of creating one. |
-| `resources` | 100m CPU and 512Mi memory requested, 2Gi memory limit | |
+| `resources` | 100m CPU and 512Mi memory requested, 2Gi memory limit | With `scan.parallelism` 4, the 2Gi limit can be tight for large or Java images (several Trivy processes plus the Java DB). If scans are OOM-killed, raise `resources.limits.memory` or lower `scan.parallelism`. |
 | `serviceAccount.annotations` | `{}` | |
 | `podAnnotations`, `podLabels`, `nodeSelector`, `tolerations`, `affinity` | empty | Passed to the pod. |
 | `networkPolicy.enabled` | `true` | Render the NetworkPolicy. |
@@ -72,7 +73,7 @@ The chart rejects keys it does not know (`values.schema.json`).
 | `networkPolicy.egress` | `[]` | Raw egress rules. Empty leaves egress open, because registries and the Trivy DB mirror can be anywhere. |
 | `ingress.enabled` | `false` | Render an Ingress. |
 | `ingress.className`, `ingress.annotations` | empty | |
-| `ingress.hosts` | `[]` | `networking.k8s.io/v1` host entries (`host`, `paths`). At least one when enabled. |
+| `ingress.hosts` | `[]` | `networking.k8s.io/v1` host entries (`host` only; the chart routes `/`). At least one when enabled. |
 | `ingress.tls` | `[]` | |
 | `httpRoute.enabled` | `false` | Render a Gateway API HTTPRoute. |
 | `httpRoute.parentRefs` | `[]` | The Gateway to attach to. At least one when enabled. |
@@ -182,7 +183,8 @@ The guard catches common mistakes. It is not a proof that only the proxy can rea
 ### Secure cookies
 
 `secureCookies` defaults to `true`: the CSRF cookie that protects writes carries the `Secure` attribute, so a browser
-sends it only over HTTPS. Browsers also accept it on `http://localhost`, so `kubectl port-forward` keeps working.
+sends it only over HTTPS. Chrome, Edge and Firefox also accept it on `http://localhost`, so `kubectl port-forward` keeps working there. Safari's
+behaviour is not guaranteed; if it drops the cookie, set `secureCookies: false` for plain-HTTP access.
 
 If your browser reaches the UI over plain HTTP on any other host (a cluster-internal name through a VPN, an Ingress with
 no TLS), the browser drops the cookie and every write fails its CSRF check. Terminate TLS in front of the UI, which is the
