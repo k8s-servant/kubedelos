@@ -190,7 +190,7 @@ the on-disk layer cache keeps them fast.
 `--host` (default `0.0.0.0`), `--port` (default `8080`) and `--kubeconfig` are the flags. To try it on a laptop:
 
 ```bash
-KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=kind-lab KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' \
+KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=my-context KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' \
   kubedelos serve --host 127.0.0.1 --port 9371
 ```
 
