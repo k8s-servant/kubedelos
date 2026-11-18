@@ -34,6 +34,7 @@ data:
   {{- with include "kubedelos.cloudIdentity" . }}
   KUBEDELOS_CLOUD_IDENTITY: {{ . | quote }}
   {{- end }}
+  KUBEDELOS_SECRETS_DIR: /run/kubedelos # the memory volume the deployment mounts
   KUBEDELOS_DOCKER_CONFIGS: {{ include "kubedelos.dockerConfigPaths" . | quote }}
   {{- if .Values.registries.podPullSecrets }}
   KUBEDELOS_POD_PULL_SECRET_NAMESPACES: {{ .Values.registries.podPullSecretNamespaces | toJson | quote }}

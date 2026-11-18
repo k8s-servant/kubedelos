@@ -153,3 +153,12 @@ def test_clear_warns_and_goes_on_when_an_entry_cannot_be_removed(tmp_path, monke
 def test_temp_config_directory_has_the_fixed_prefix(tmp_path):
     with dockerconfig.temp_config(tmp_path, {}) as directory:
         assert directory.name.startswith("kubedelos-docker-")
+
+
+def test_parse_a_recursion_error_is_a_value_error(monkeypatch):
+    def deep(raw):  # some Python builds overflow on a deeply nested document, others parse it
+        raise RecursionError("maximum recursion depth exceeded")
+
+    monkeypatch.setattr(dockerconfig.json, "loads", deep)
+    with pytest.raises(ValueError, match="not valid JSON"):
+        dockerconfig.parse(b"[[[")

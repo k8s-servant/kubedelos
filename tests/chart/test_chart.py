@@ -650,3 +650,41 @@ def test_notes_name_the_pull_secret_namespaces(notes):
     assert "get" in text
     assert "Secrets" in notes({"registries": {"podPullSecrets": True, "podPullSecretNamespaces": ["web"]}})
     assert "pull secret" not in notes({}).lower()
+
+
+def test_azure_pod_label_is_not_duplicated_by_pod_labels(tmp_path):
+    values = {**BASE, "cloud": {"provider": "azure", "azure": {"clientId": "1"}}}
+    values["podLabels"] = {"azure.workload.identity/use": "true", "team": "sec"}
+    result = _run(values, tmp_path)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.count("azure.workload.identity/use:") == 1  # a duplicate key is invalid for strict decoders
+    labels = kind([d for d in yaml.safe_load_all(result.stdout) if d], "Deployment")["spec"]["template"]["metadata"][
+        "labels"
+    ]
+    assert labels["azure.workload.identity/use"] == "true" and labels["team"] == "sec"
+    assert labels["app.kubernetes.io/name"]  # the selector labels stay
+
+
+@pytest.mark.parametrize(
+    ("registries", "message"),
+    [
+        ({"dockerConfigSecrets": ["a", "a"]}, "dockerConfigSecrets"),
+        ({"dockerConfigSecrets": ["Bad/Name"]}, "dockerConfigSecrets"),
+        ({"dockerConfigSecrets": ["UPPER"]}, "dockerConfigSecrets"),
+        ({"podPullSecrets": True, "podPullSecretNamespaces": ["web", "web"]}, "podPullSecretNamespaces"),
+        ({"podPullSecrets": True, "podPullSecretNamespaces": ["Web"]}, "podPullSecretNamespaces"),
+        ({"podPullSecrets": True, "podPullSecretNamespaces": ["a.b"]}, "podPullSecretNamespaces"),
+        ({"podPullSecrets": True, "podPullSecretNamespaces": ["x" * 64]}, "podPullSecretNamespaces"),
+    ],
+)
+def test_schema_rejects_duplicate_or_malformed_registry_names(render_error, registries, message):
+    assert message in render_error({**BASE, "registries": registries})
+
+
+def test_schema_accepts_dotted_secret_names(render):
+    docs = render({"registries": {"dockerConfigSecrets": ["reg.example-1"]}})
+    assert kind(docs, "Deployment")
+
+
+def test_configmap_names_the_secrets_dir_the_chart_mounts(render):
+    assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_SECRETS_DIR"] == "/run/kubedelos"

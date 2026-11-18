@@ -22,13 +22,12 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "kubedelos.selectorLabels" . | nindent 8 }}
+        {{- $labels := fromYaml (include "kubedelos.selectorLabels" .) }}
         {{- if eq .Values.cloud.provider "azure" }}
-        azure.workload.identity/use: "true"
+        {{- $_ := set $labels "azure.workload.identity/use" "true" }}
         {{- end }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
-        {{- end }}
+        {{- $labels = mergeOverwrite $labels (deepCopy (.Values.podLabels | default dict)) }}
+        {{- toYaml $labels | nindent 8 }}
     spec:
       serviceAccountName: {{ include "kubedelos.fullname" . }}
       automountServiceAccountToken: true # kubedelos reads the cluster through it

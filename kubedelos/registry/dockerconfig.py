@@ -48,7 +48,7 @@ def parse(raw: bytes) -> Auths:
     """
     try:
         document = json.loads(raw)
-    except ValueError:
+    except (ValueError, RecursionError):  # a deeply nested document overflows the parser
         raise ValueError("not valid JSON") from None
     if not isinstance(document, dict):
         raise ValueError("not a JSON object")

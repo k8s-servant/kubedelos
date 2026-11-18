@@ -309,9 +309,12 @@
       "properties": {
         "dockerConfigSecrets": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 253,
+            "pattern": "^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$"
           }
         },
         "podPullSecrets": {
@@ -319,9 +322,12 @@
         },
         "podPullSecretNamespaces": {
           "type": "array",
+          "uniqueItems": true,
           "items": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "maxLength": 63,
+            "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
           }
         }
       }
