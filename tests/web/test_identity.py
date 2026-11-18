@@ -7,6 +7,10 @@ def test_clean_identity_strips_control_characters():
     assert clean_identity("a@example.com\r\nX-Evil: 1") == "a@example.comX-Evil: 1"
 
 
+def test_clean_identity_strips_line_and_paragraph_separators():
+    assert clean_identity("a@example.com\u2028X\u2029Y") == "a@example.comXY"
+
+
 def test_clean_identity_caps_length():
     assert len(clean_identity("a" * 10_000)) == 256
 
