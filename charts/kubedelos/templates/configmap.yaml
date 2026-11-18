@@ -1,0 +1,32 @@
+{{- /* Every value is a string: lists are JSON (as Settings reads them), booleans and numbers are quoted. */ -}}
+{{- $clusterName := required "clusterName is required: set it to the name this cluster's runs are stored under" .Values.clusterName -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "kubedelos.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "kubedelos.labels" . | nindent 4 }}
+data:
+  KUBEDELOS_CLUSTER_NAME: {{ $clusterName | quote }}
+  KUBEDELOS_NAMESPACES: {{ .Values.scope.namespaces | toJson | quote }}
+  KUBEDELOS_EXCLUDE_NAMESPACES: {{ .Values.scope.excludeNamespaces | toJson | quote }}
+  KUBEDELOS_EXCLUDE_IMAGES: {{ .Values.scope.excludeImages | toJson | quote }}
+  {{- with .Values.scope.namespaceSelector }}
+  KUBEDELOS_NAMESPACE_SELECTOR: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.scope.selector }}
+  KUBEDELOS_SELECTOR: {{ . | quote }}
+  {{- end }}
+  KUBEDELOS_SWEEP_ENABLED: {{ .Values.sweep.enabled | toString | quote }}
+  KUBEDELOS_SWEEP_SCHEDULE: {{ .Values.sweep.schedule | quote }}
+  KUBEDELOS_SWEEP_TIMEZONE: {{ .Values.sweep.timezone | quote }}
+  KUBEDELOS_RETENTION_DAYS: {{ .Values.retentionDays | int64 | toString | quote }}
+  KUBEDELOS_PARALLELISM: {{ .Values.scan.parallelism | int64 | toString | quote }}
+  KUBEDELOS_SCAN_TIMEOUT_S: {{ .Values.scan.timeoutSeconds | int64 | toString | quote }}
+  KUBEDELOS_READ_ONLY: {{ .Values.readOnly | toString | quote }}
+  KUBEDELOS_TRUST_PROXY_HEADERS: {{ .Values.auth.trustProxyHeaders | toString | quote }}
+  KUBEDELOS_IDENTITY_HEADER: {{ .Values.auth.identityHeader | quote }}
+  KUBEDELOS_SECURE_COOKIES: {{ .Values.secureCookies | toString | quote }}
+  KUBEDELOS_ALLOWED_HOSTS: {{ include "kubedelos.allowedHosts" . | quote }}
+  KUBEDELOS_LOG_LEVEL: {{ .Values.logLevel | quote }}

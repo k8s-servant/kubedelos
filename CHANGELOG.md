@@ -4,6 +4,7 @@
 
 ### Features
 
+- Helm chart `charts/kubedelos` installs `kubedelos serve`: one hardened replica (Recreate, non-root, read-only root filesystem), a PVC, a Service, a ConfigMap of `KUBEDELOS_*` settings and a read-only ClusterRole; `clusterName` is required and a values schema rejects unknown keys.
 - Container image: a multi-arch `Dockerfile` (python alpine, pinned by digest) bundles the pinned Trivy, checksum-verified at build time, so the pod downloads nothing. It runs `kubedelos serve` as user 65532 and writes only `/data` and `/tmp`; `scripts/image-smoke.sh IMAGE` checks it.
 - `kubedelos serve` runs kubedelos in a cluster: the UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory and, unless read-only, write, so expose it only through an authenticating proxy or keep it cluster-internal.
 - Writes in `kubedelos serve`: UI scans, retries and cancels go through the queue and stay within the configured scope (a scan can only narrow it). Writes need an allowed `Origin` and a CSRF token.
