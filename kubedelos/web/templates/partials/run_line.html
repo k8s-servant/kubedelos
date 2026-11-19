@@ -1,4 +1,4 @@
-{#- The page head: the page title and, when there is a run, chips that name it, then the gaps callout.
+{#- The page head: the page title and, when there is a run, chips that name it, then the gaps and attack-surface callouts.
     Needs: page_title, run (or None), pinned, now. -#}
 <div class="page-head">
   <h1>{{ page_title }}</h1>
@@ -27,4 +27,17 @@
     {%- endfor %}
   </ul>
 </details>
+{% endif %}
+{% if run %}
+{%- set facts = (run.fact_sources or {}) | dictsort | selectattr("1", "in", ("forbidden", "partial", "error")) | list %}
+{% if facts %}
+<details class="callout">
+  <summary><span class="caution" aria-hidden="true">⚠</span> attack-surface facts incomplete: {{ facts | length }} {{ facts | length | plural("source", "sources") }} could not be fully read</summary>
+  <ul>
+    {%- for name, state in facts %}
+    <li>{{ name | replace("_", " ") }}: {{ state }}</li>
+    {%- endfor %}
+  </ul>
+</details>
+{% endif %}
 {% endif %}

@@ -31,6 +31,8 @@ data:
   KUBEDELOS_ALLOWED_HOSTS: {{ include "kubedelos.allowedHosts" . | quote }}
   KUBEDELOS_LOG_LEVEL: {{ .Values.logLevel | quote }}
   KUBEDELOS_CLOUD_PROVIDER: {{ .Values.cloud.provider | quote }}
+  # The chart grants no RBAC for the attack-surface lists yet (a follow-up issue), so it stays off.
+  KUBEDELOS_ATTACK_SURFACE: "false"
   {{- with include "kubedelos.cloudIdentity" . }}
   KUBEDELOS_CLOUD_IDENTITY: {{ . | quote }}
   {{- end }}

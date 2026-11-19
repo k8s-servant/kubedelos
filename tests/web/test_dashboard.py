@@ -240,6 +240,38 @@ def test_gaps_mark_incomplete(client, seed):
         assert "⚠" in _tile(html, label)
 
 
+def test_run_line_notes_incomplete_fact_sources(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    seed.repo.set_fact_sources(
+        run_id,
+        {
+            "pod_security": "ok",
+            "network_policies": "partial",
+            "services": "forbidden",
+            "rbac": "error",
+            "ingresses": "off",
+        },
+    )
+    html = client.get("/").text
+    assert "attack-surface facts incomplete: 3 sources could not be fully read" in html
+    assert "network policies: partial" in html
+    assert "services: forbidden" in html
+    assert "rbac: error" in html
+    assert "ingresses: off" not in html and "pod security: ok" not in html
+    assert html.count('<details class="callout">') == 1
+
+
+def test_run_line_quiet_when_sources_off_or_missing(client, seed):
+    off_run = _run(seed)
+    _add(seed, off_run, "a", ["CRITICAL"])
+    seed.repo.set_fact_sources(off_run, {"pod_security": "ok", "services": "off", "rbac": "off"})
+    assert "attack-surface facts" not in client.get("/").text
+
+    _run(seed)  # an older-style run with no fact_sources at all is now the latest
+    assert "attack-surface facts" not in client.get("/").text
+
+
 def test_no_gaps_no_caution(client, seed):
     run_id = _run(seed)
     _add(seed, run_id, "a", ["CRITICAL"])
