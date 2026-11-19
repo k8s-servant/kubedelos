@@ -352,6 +352,7 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
         httproutes = None if tallies["httproutes"].failures else routes
         rbac, rbac_status = RbacIndex.load(api, scanned_names)
 
+    seen: set[tuple[str, str, str]] = set()  # every workload whose facts were derived
     failed: set[tuple[str, str, str]] = set()  # (namespace, kind, name) of the workloads whose facts failed
 
     def add(
@@ -388,6 +389,7 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
         def facts_for(workload, spec, container, labels, name=name, lists=lists) -> WorkloadFacts:
             # Facts never fail a scan: whatever goes wrong deriving them, the workload gets unknown facts instead.
             service_account = getattr(spec, "service_account_name", None) or "default"
+            seen.add((workload.namespace, workload.kind, workload.name))
             try:
                 return WorkloadFacts(
                     pod=fact_builders.pod_security(spec, container, lists.sa_automount),
@@ -434,7 +436,8 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             template = cj.spec.job_template.spec.template
             _add_template(add, facts_for, name, "CronJob", cj.metadata.name, template, owner, team, fallback)
 
-    fact_sources = {"pod_security": "ok"}
+    pod_security = "ok" if not failed else "error" if failed >= seen else "partial"
+    fact_sources = {"pod_security": pod_security}
     for source, tally in tallies.items():
         fact_sources[source] = tally.status if attack_surface else "off"
         if warning := tally.warning():

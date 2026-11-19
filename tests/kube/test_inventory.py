@@ -663,6 +663,16 @@ def test_host_port_without_a_service_is_external():
     assert (exposure.level, exposure.host_ports) == ("external", (8080,))
 
 
+def test_pod_security_source_is_error_when_every_workload_failed(monkeypatch):
+    def broken(*_args):
+        raise KeyError("boom")
+
+    monkeypatch.setattr(fact_builders, "network", broken)
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [_web_pod("p", "a")]})
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["pod_security"] == "error"
+
+
 def test_a_failing_fact_builder_never_fails_the_scan(monkeypatch, caplog):
     real = fact_builders.network
 
@@ -687,6 +697,7 @@ def test_a_failing_fact_builder_never_fails_the_scan(monkeypatch, caplog):
         ("attack-surface: could not derive facts for 2 workload(s); their facts are unknown", False)
     ]
     assert "a/Deployment/bad" in caplog.text and "KeyError" in caplog.text
+    assert inv.fact_sources["pod_security"] == "partial"
     good = _facts_of(inv, "a", "Deployment", "front")
     assert good.network.ingress_isolated is False and good.rights.status == "ok"
     for kind, name in (("Deployment", "bad"), ("CronJob", "job")):

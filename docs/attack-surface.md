@@ -77,7 +77,7 @@ and none of the selecting policies allows everyone in (or out). `null` means the
 | --- | --- |
 | `cluster_admin` | the `cluster-admin` ClusterRole through a ClusterRoleBinding, or `*` on every verb, resource and group in a ClusterRole bound by a ClusterRoleBinding. A RoleBinding to `cluster-admin` sets the namespaced flags below for its namespace, never `cluster_admin` |
 | `reads_secrets`, `reads_secrets_scope` | `get`, `list`, `watch` or `*` on `secrets` (scope: `cluster`, or the namespaces) |
-| `creates_workloads` | `create` on pods, deployments, statefulsets, daemonsets, replicasets, replicationcontrollers, jobs or cronjobs |
+| `creates_workloads` | `create`, `update`, `patch` or `*` on pods, deployments, statefulsets, daemonsets, replicasets, replicationcontrollers, jobs or cronjobs |
 | `pod_exec` | `create` or `get` on `pods/exec`, `pods/attach`, `pods/portforward` or `nodes/proxy`, or `patch`/`update` on `pods/ephemeralcontainers` |
 | `escalates` | `escalate`, `bind` or `impersonate`; `create`, `update` or `patch` on roles, clusterroles, rolebindings or clusterrolebindings; `create` on `serviceaccounts/token` |
 | `wildcard` | `*` as a verb or a resource |
@@ -103,13 +103,15 @@ kubedelos never reports a fact as safe when it could not look.
   namespaces are true and `read_only_root_fs` is false. The lists (capabilities, `hostPath` volumes, `secret_refs`,
   `host_ports`) are empty, because there is nothing to put in them.
 - `rights.status` is `ok` when every Role and binding was listed, `partial` when only some were (or a bound Role was not
-  listed), `unknown` when none were, and `off` when the facts are switched off. In a partial view the rights found are
-  real but may be incomplete, and finding none means unknown, not none.
+  listed), `unknown` when none were or when no binding list (ClusterRoleBindings or RoleBindings) could be read, even if
+  Roles were, and `off` when the facts are switched off. In a partial view the rights found are real but may be
+  incomplete, and finding none means unknown, not none.
 
 Each run also records the status of every fact source in `scan_run.fact_sources`, a JSON object with the keys
 `pod_security`, `services`, `ingresses`, `httproutes`, `network_policies`, `service_accounts` and `rbac`. A source is
 `ok`, `absent` (only `httproutes`: the CRD is not installed), `partial`, `forbidden`, `error`, or `off`. A run that
-could not read a source adds a warning, and the run line in the UI notes the incomplete facts.
+could not read a source adds a warning, and the run line in the UI notes the incomplete facts. `pod_security` is
+`partial` when deriving the facts failed for some workloads and `error` when it failed for all of them.
 
 ## Known blind spots
 

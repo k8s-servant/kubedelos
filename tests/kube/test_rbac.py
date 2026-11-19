@@ -211,6 +211,23 @@ def test_creates_workloads_resources(resource):
     assert _rights(api).creates_workloads
 
 
+@pytest.mark.parametrize(
+    ("verb", "resource", "expected"),
+    [
+        ("patch", "deployments", True),
+        ("update", "cronjobs", True),
+        ("*", "pods", True),
+        ("get", "deployments", False),
+    ],
+)
+def test_creates_workloads_verbs(verb, resource, expected):
+    api = FakeKubeApi(
+        roles={"web": [role("maker", "web", [([""], [resource], [verb], None)])]},
+        role_bindings={"web": [role_binding("make", "web", "Role", "maker", SA)]},
+    )
+    assert _rights(api).creates_workloads is expected
+
+
 def test_creates_workloads_ignores_api_group():
     api = FakeKubeApi(
         roles={"web": [role("deployer", "web", [(["apps"], ["deployments"], ["create"], None)])]},
@@ -386,6 +403,26 @@ def test_nothing_listable_is_unknown():
     api = FakeKubeApi(forbidden_resources=ALL_CLUSTER_WIDE | {("roles", "web"), ("rolebindings", "web")})
     index, status = RbacIndex.load(api, ["web"])
     assert status == "forbidden"
+    assert index.rights("web", "sa").status == "unknown"
+
+
+def test_only_cluster_roles_listable_is_unknown():
+    # Roles alone say nothing about who is bound to them: no binding list succeeded.
+    api = FakeKubeApi(
+        forbidden_resources=(ALL_CLUSTER_WIDE - {("clusterroles", "*")}) | {("roles", "web"), ("rolebindings", "web")}
+    )
+    index, status = RbacIndex.load(api, ["web"])
+    assert status == "forbidden"
+    assert index.rights("web", "sa").status == "unknown"
+
+
+def test_only_cluster_roles_listable_with_a_server_error_is_error():
+    api = FakeKubeApi(
+        forbidden_resources=(ALL_CLUSTER_WIDE - {("clusterroles", "*")}) | {("roles", "web"), ("rolebindings", "web")},
+        missing={"list_cluster_role_bindings"},
+    )
+    index, status = RbacIndex.load(api, ["web"])
+    assert status == "error"
     assert index.rights("web", "sa").status == "unknown"
 
 

@@ -18,6 +18,8 @@ from kubedelos.models import Rights
 
 CLUSTER_ADMIN = "cluster-admin"
 _READ = {"get", "list", "watch", "*"}
+# Changing a pod template or a pod's image runs arbitrary pods just as creating one does.
+_WRITE = {"create", "update", "patch", "*"}
 _WORKLOADS = {
     "pods",
     "deployments",
@@ -102,7 +104,7 @@ class _Acc:
             self.cluster_admin = True
         if _verbs(rule, _READ) and _resources(rule, {"secrets"}) and ("" in groups or "*" in groups):
             self._secrets(ns)
-        if _verbs(rule, {"create"}) and _resources(rule, _WORKLOADS):
+        if _verbs(rule, _WRITE) and _resources(rule, _WORKLOADS):
             self.creates_workloads = True
         if _hits(rule, _EXEC_SINKS):
             self.pod_exec = True
@@ -147,11 +149,10 @@ def _applies(binding, ns: str, service_account: str, binding_ns: str | None = No
 
 
 class _Lister:
-    """Calls list methods, remembering whether any succeeded and whether any failure was other than 403. A transport
+    """Calls list methods, remembering whether any failed and whether any failure was other than 403. A transport
     error (urllib3 ``HTTPError``, such as a connection reset) counts as a non-403 failure."""
 
     def __init__(self) -> None:
-        self.read = False
         self.failed = False
         self.errored = False
 
@@ -165,7 +166,6 @@ class _Lister:
         except HTTPError:
             self.failed = self.errored = True
             return None
-        self.read = True
         return objs
 
 
@@ -193,19 +193,23 @@ class RbacIndex:
     @classmethod
     def load(cls, api: KubeApi, namespaces: list[str]) -> tuple["RbacIndex", str]:
         """List every Role and binding the scan may see; the second value is the ``rbac`` fact source status:
-        ok (everything listed cluster-wide), partial (some lists), forbidden or error (none)."""
+        ok (everything listed cluster-wide), partial (some binding lists), forbidden or error (no binding list)."""
         lister = _Lister()
         cluster_roles = lister(api.list_cluster_roles)
         cluster_role_bindings = lister(api.list_cluster_role_bindings)
         roles = lister(api.list_roles, None)
         role_bindings = lister(api.list_role_bindings, None)
+        bindings_read = cluster_role_bindings is not None or role_bindings is not None
         if not lister.failed:
             return cls("ok", cluster_roles, cluster_role_bindings, roles, role_bindings), "ok"
         if roles is None:
             roles = [r for ns in dict.fromkeys(namespaces) for r in lister(api.list_roles, ns) or []]
         if role_bindings is None:
-            role_bindings = [b for ns in dict.fromkeys(namespaces) for b in lister(api.list_role_bindings, ns) or []]
-        status = "partial" if lister.read else "error" if lister.errored else "forbidden"
+            listed = [lister(api.list_role_bindings, ns) for ns in dict.fromkeys(namespaces)]
+            bindings_read = bindings_read or any(b is not None for b in listed)
+            role_bindings = [b for batch in listed for b in batch or []]
+        # Roles alone say nothing about who holds them: without any binding list there is nothing to go on.
+        status = "partial" if bindings_read else "error" if lister.errored else "forbidden"
         return cls(status, cluster_roles, cluster_role_bindings, roles, role_bindings), status
 
     def rights(self, ns: str, service_account: str) -> Rights:
