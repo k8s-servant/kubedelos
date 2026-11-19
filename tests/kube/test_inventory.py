@@ -13,9 +13,10 @@ from fakes import (
     service,
     service_account,
 )
-from kubernetes.client import V1ObjectMeta, V1SecurityContext
+from kubernetes.client import V1ContainerPort, V1ObjectMeta, V1SecurityContext
 
 from kubedelos.config import Settings
+from kubedelos.kube import facts as fact_builders
 from kubedelos.kube.inventory import InventoryWarning, collect, collect_inventory, parse_image_id, parse_user_ref
 from kubedelos.models import ImageRef, Workload
 
@@ -620,7 +621,82 @@ def test_httproute_crd_absent_is_absent_without_warning():
     inv = collect_inventory(api, Settings())
     assert inv.fact_sources["httproutes"] == "absent"
     assert inv.warnings == []
-    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "cluster"
+    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "cluster"  # routes [], not unknown
+
+
+@pytest.mark.parametrize(
+    ("method", "source", "resource"),
+    [
+        ("list_services", "services", "services"),
+        ("list_ingresses", "ingresses", "ingresses"),
+        ("list_network_policies", "network_policies", "networkpolicies"),
+        ("list_service_accounts", "service_accounts", "serviceaccounts"),
+    ],
+)
+def test_not_found_on_a_core_list_is_an_error_not_absent(method, source, resource):
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "x"})]},
+        services={"a": [service("x", "a", {"app": "x"})]},
+        missing={method},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources[source] == "error"
+    assert [w.text for w in inv.warnings] == [
+        f"attack-surface: cannot list {resource} in 1 namespace (error); their facts are unknown"
+    ]
+    facts = _facts_of(inv, "a", "Deployment", "front")
+    if source == "services":
+        assert facts.exposure.level == "unknown"
+    if source == "network_policies":
+        assert facts.network.ingress_isolated is None
+    if source == "service_accounts":
+        assert facts.pod.automount_token is None
+
+
+def test_host_port_without_a_service_is_external():
+    p = _web_pod("p", "a")
+    p.spec.containers[0].ports = [V1ContainerPort(container_port=80, host_port=8080)]
+    inv = collect_inventory(api := FakeKubeApi(namespaces=[namespace("a")], pods={"a": [p]}), Settings())
+    assert api.calls  # the run went through
+    exposure = _facts_of(inv, "a", "Deployment", "front").exposure
+    assert (exposure.level, exposure.host_ports) == ("external", (8080,))
+
+
+def test_a_failing_fact_builder_never_fails_the_scan(monkeypatch, caplog):
+    real = fact_builders.network
+
+    def flaky(labels, policies):
+        if labels.get("app") == "bad":
+            raise KeyError("boom")
+        return real(labels, policies)
+
+    monkeypatch.setattr(fact_builders, "network", flaky)
+    bad = [pod(f"b{i}", "a", owner=("ReplicaSet", "bad-5d9"), labels={"app": "bad", "pod-template-hash": "5d9"})
+           for i in range(2)]  # fmt: skip
+    cj = cronjob("job", "a", "busybox:1")
+    cj.spec.job_template.spec.template.metadata = V1ObjectMeta(labels={"app": "bad"})
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "good"}), *bad]},
+        cronjobs={"a": [cj]},
+    )
+    with caplog.at_level("DEBUG", logger="kubedelos.kube.inventory"):
+        inv = collect_inventory(api, Settings())
+    assert [(w.text, w.coverage) for w in inv.warnings] == [
+        ("attack-surface: could not derive facts for 2 workload(s); their facts are unknown", False)
+    ]
+    assert "a/Deployment/bad" in caplog.text and "KeyError" in caplog.text
+    good = _facts_of(inv, "a", "Deployment", "front")
+    assert good.network.ingress_isolated is False and good.rights.status == "ok"
+    for kind, name in (("Deployment", "bad"), ("CronJob", "job")):
+        f = _facts_of(inv, "a", kind, name)
+        assert f.exposure.level == "unknown"
+        assert (f.network.ingress_isolated, f.network.egress_isolated) == (None, None)
+        assert f.rights.status == "unknown"
+        assert (f.pod.runs_as_root, f.pod.automount_token) == (None, None)
+        assert f.pod.privileged and f.pod.allow_privilege_escalation and not f.pod.read_only_root_fs
+        assert f.pod.host_network and f.pod.host_pid and f.pod.host_ipc
 
 
 def test_forbidden_httproutes_keep_exposure_unknown_and_warn():

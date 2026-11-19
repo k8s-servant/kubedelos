@@ -132,6 +132,7 @@ class Exposure(BaseModel):
     services: tuple[ExposedService, ...] = ()
     external_ips: tuple[str, ...] = ()
     hosts: tuple[str, ...] = ()
+    host_ports: tuple[int, ...] = ()  # the container's hostPorts: reachable on the node's IP
 
 
 class Network(BaseModel):

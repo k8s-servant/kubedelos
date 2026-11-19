@@ -1,5 +1,6 @@
 """Collect the container images running in a cluster, with their workloads and owners."""
 
+import logging
 from collections import Counter
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -22,6 +23,8 @@ from kubedelos.models import (
     is_digest,
     is_valid_ref,
 )
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_PLATFORM = "linux/amd64"
 _PREFIXES = ("docker-pullable://", "docker://")
@@ -191,14 +194,15 @@ def _list_or_warn(list_fn, resource: str, ns: str, warnings: list[InventoryWarni
         return []
 
 
-def _list_fact(list_fn, ns: str) -> tuple[list | None, str]:
+def _list_fact(list_fn, ns: str, may_be_absent: bool = False) -> tuple[list | None, str]:
     """List one namespace's ``list_fn`` for the attack-surface facts. Returns ``(result, outcome)``: ``ok``; ``absent``
-    (HTTP 404, the kind is not installed, so ``[]``); or ``forbidden`` or ``error`` with a result of None. A failed list
-    only makes facts unknown, so no API or transport error escapes."""
+    (HTTP 404 from a kind that ``may_be_absent``, a CRD that is not installed, so ``[]``); or ``forbidden`` or ``error``
+    with a result of None. A 404 from a built-in kind is an ``error``: it says nothing about what is there. A failed
+    list only makes facts unknown, so no API or transport error escapes."""
     try:
         return list_fn(ns), "ok"
     except ApiException as exc:
-        if exc.status == 404:
+        if exc.status == 404 and may_be_absent:
             return [], "absent"
         return None, "forbidden" if _is_forbidden(exc) else "error"
     except HTTPError:
@@ -340,13 +344,15 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
     if attack_surface:
         # A route may point at a Service in another namespace, so every namespace's routes come first.
         routes: list[dict] = []
-        route_lists = [_list_fact(api.list_httproutes, name) for name in scanned_names]
+        route_lists = [_list_fact(api.list_httproutes, name, may_be_absent=True) for name in scanned_names]
         for found, outcome in route_lists:
             tallies["httproutes"].record(outcome)
             routes += found or []
         # One unread namespace could hold a route that exposes anything: unknown, not "no routes".
         httproutes = None if tallies["httproutes"].failures else routes
         rbac, rbac_status = RbacIndex.load(api, scanned_names)
+
+    failed: set[tuple[str, str, str]] = set()  # (namespace, kind, name) of the workloads whose facts failed
 
     def add(
         image: ImageRef,
@@ -379,13 +385,29 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             if accounts is not None:
                 lists.sa_automount = {a.metadata.name: a.automount_service_account_token for a in accounts}
 
-        def facts_for(spec, container, labels, name=name, lists=lists) -> WorkloadFacts:
-            return WorkloadFacts(
-                pod=fact_builders.pod_security(spec, container, lists.sa_automount),
-                exposure=fact_builders.exposure(labels, name, lists.services, lists.ingresses, httproutes),
-                network=fact_builders.network(labels, lists.network_policies),
-                rights=rbac.rights(name, spec.service_account_name or "default"),
-            )
+        def facts_for(workload, spec, container, labels, name=name, lists=lists) -> WorkloadFacts:
+            # Facts never fail a scan: whatever goes wrong deriving them, the workload gets unknown facts instead.
+            service_account = getattr(spec, "service_account_name", None) or "default"
+            try:
+                return WorkloadFacts(
+                    pod=fact_builders.pod_security(spec, container, lists.sa_automount),
+                    exposure=fact_builders.exposure(
+                        labels, name, lists.services, lists.ingresses, httproutes, container
+                    ),
+                    network=fact_builders.network(labels, lists.network_policies),
+                    rights=rbac.rights(name, service_account),
+                )
+            except Exception as exc:  # any failure only makes these facts unknown
+                failed.add((workload.namespace, workload.kind, workload.name))
+                logger.debug(
+                    "attack-surface: facts for %s/%s/%s container %s failed: %s",
+                    workload.namespace,
+                    workload.kind,
+                    workload.name,
+                    workload.container,
+                    type(exc).__name__,
+                )
+                return fact_builders.unknown(service_account)
 
         deployments = _list_or_warn(api.list_deployments, "deployments", name, warnings, settings.selector)
         statefulsets = _list_or_warn(api.list_statefulsets, "statefulsets", name, warnings, settings.selector)
@@ -397,13 +419,11 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             platform = (node_platform.get(pod.spec.node_name) if pod.spec else None) or fallback
             for c in _spec_containers(pod.spec):
                 image = parse_image_id(c.image, ids.get(c.name, ""))
-                add(
-                    image,
-                    platform,
-                    Workload(namespace=name, kind=kind, name=workload_name, container=c.name, owner=owner, team=team),
-                    _pull_secret_names(pod.spec),
-                    facts_for(pod.spec, c, pod.metadata.labels or {}),
+                workload = Workload(
+                    namespace=name, kind=kind, name=workload_name, container=c.name, owner=owner, team=team
                 )
+                facts = facts_for(workload, pod.spec, c, pod.metadata.labels or {})
+                add(image, platform, workload, _pull_secret_names(pod.spec), facts)
 
         templates = [("Deployment", d) for d in deployments if d.spec and d.spec.replicas == 0]
         templates += [("StatefulSet", s) for s in statefulsets if s.spec and s.spec.replicas == 0]
@@ -420,6 +440,13 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
         if warning := tally.warning():
             warnings.append(warning)
     fact_sources["rbac"] = rbac_status
+    if failed:
+        warnings.append(
+            InventoryWarning(
+                f"attack-surface: could not derive facts for {len(failed)} workload(s); their facts are unknown",
+                coverage=False,
+            )
+        )
     if rbac_status in ("partial", "forbidden", "error"):
         outcome = "partial" if rbac_status == "partial" else "unknown"
         warnings.append(
@@ -454,10 +481,5 @@ def _add_template(add, facts_for, ns: str, kind: str, name: str, template, owner
     labels = (template.metadata.labels if template.metadata else None) or {}
     pull_secrets = _pull_secret_names(pod_spec)
     for c in _spec_containers(pod_spec):
-        add(
-            parse_image_id(c.image, ""),
-            platform,
-            Workload(namespace=ns, kind=kind, name=name, container=c.name, owner=owner, team=team),
-            pull_secrets,
-            facts_for(pod_spec, c, labels),
-        )
+        workload = Workload(namespace=ns, kind=kind, name=name, container=c.name, owner=owner, team=team)
+        add(parse_image_id(c.image, ""), platform, workload, pull_secrets, facts_for(workload, pod_spec, c, labels))

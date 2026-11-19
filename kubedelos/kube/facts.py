@@ -2,8 +2,9 @@
 
 The facts say what a workload's pod spec lets it do on the node (``pod_security``), how far it is reachable
 (``exposure``) and whether NetworkPolicies isolate it (``network``), and ``merge`` folds the facts of several pods
-of one workload container into the riskiest view. Everything here is a pure function of
-objects already in hand: nothing calls the cluster, and no Secret is ever read (only the names that specs refer to).
+of one workload container into the riskiest view; ``unknown`` stands in when they could not be derived. Everything
+here is a pure function of objects already in hand: nothing calls the cluster, and no Secret is ever read (only the
+names that specs refer to).
 """
 
 from kubedelos.models import (
@@ -56,8 +57,31 @@ def pod_security(pod_spec, container, sa_automount: dict[str, bool | None] | Non
         host_ipc=bool(pod_spec.host_ipc),
         host_path_volumes=_host_paths(pod_spec, container),
         service_account=service_account,
-        automount_token=_automount(pod_spec.automount_service_account_token, service_account, sa_automount),
+        automount_token=_automount(pod_spec, container, service_account, sa_automount),
         secret_refs=_secret_refs(pod_spec, container),
+    )
+
+
+def unknown(service_account: str) -> WorkloadFacts:
+    """The facts of a workload whose facts could not be derived: every one unknown, or riskier where its type has no
+    unknown. So privileged, privilege escalation and the host namespaces read True and the root filesystem writable,
+    as nothing showed otherwise; capabilities, hostPath volumes, secret refs and host ports stay empty, as no value
+    in them could be made up. Exposure and rights are unknown and isolation None."""
+    return WorkloadFacts(
+        pod=PodSecurity(
+            privileged=True,
+            allow_privilege_escalation=True,
+            runs_as_root=None,
+            read_only_root_fs=False,
+            host_network=True,
+            host_pid=True,
+            host_ipc=True,
+            service_account=service_account,
+            automount_token=None,
+        ),
+        exposure=Exposure(level="unknown"),
+        network=Network(ingress_isolated=None, egress_isolated=None),
+        rights=Rights(status="unknown"),
     )
 
 
@@ -82,7 +106,10 @@ def _mounted_volumes(pod_spec, container) -> list:
 
 
 def _host_paths(pod_spec, container) -> tuple[HostPath, ...]:
-    read_only = {m.name: bool(m.read_only) for m in container.volume_mounts or []}
+    """The hostPath volumes the container mounts; one mounted more than once is read-only only if every mount is."""
+    read_only: dict[str, bool] = {}
+    for m in container.volume_mounts or []:
+        read_only[m.name] = read_only.get(m.name, True) and bool(m.read_only)
     paths = [
         HostPath(path=v.host_path.path, read_only=read_only[v.name])
         for v in _mounted_volumes(pod_spec, container)
@@ -109,13 +136,26 @@ def _secret_refs(pod_spec, container) -> tuple[str, ...]:
     return tuple(sorted(names))
 
 
-def _automount(pod_value: bool | None, service_account: str, sa_automount: dict[str, bool | None] | None) -> Tri:
+def _automount(pod_spec, container, service_account: str, sa_automount: dict[str, bool | None] | None) -> Tri:
+    """Whether a ServiceAccount token is in the container. A mounted projected ``serviceAccountToken`` source puts one
+    there whatever ``automountServiceAccountToken`` says; otherwise the pod's field wins over the ServiceAccount's."""
+    if _mounts_projected_token(pod_spec, container):
+        return True
+    pod_value = pod_spec.automount_service_account_token
     if pod_value is not None:
         return pod_value
     if sa_automount is None:
         return None
     value = sa_automount.get(service_account)
     return True if value is None else value
+
+
+def _mounts_projected_token(pod_spec, container) -> bool:
+    return any(
+        source.service_account_token
+        for v in _mounted_volumes(pod_spec, container)
+        for source in ((v.projected.sources or []) if v.projected else [])
+    )
 
 
 def selector_matches(selector, labels: dict[str, str]) -> bool:
@@ -147,17 +187,20 @@ def exposure(
     services: list | None,
     ingresses: list | None,
     httproutes: list[dict] | None,
+    container=None,
 ) -> Exposure:
-    """How far a pod with ``labels`` in ``namespace`` is reachable.
+    """How far a pod with ``labels`` in ``namespace`` (and its ``container``, when given) is reachable.
 
     ``services`` and ``ingresses`` must be those of the pod's namespace (an Ingress cannot point across namespaces);
     ``httproutes`` are those of every scanned namespace, as a route may point at a Service elsewhere. ``services``
     None means they could not be listed (unknown). ``ingresses`` or ``httproutes`` None means the list was forbidden
     or failed; the caller passes ``[]`` when the kind does not exist (the CRD is absent). When Services match but
     nothing proves external reach and one of those lists is None, the level is unknown: an unread Ingress or route
-    could have made it external."""
+    could have made it external. A ``hostPort`` on ``container`` makes it external on its own: the port is open on
+    the node's IP, with or without a Service."""
+    host_ports = _host_ports(container)
     if services is None:
-        return Exposure(level="unknown")
+        return Exposure(level="external" if host_ports else "unknown", host_ports=host_ports)
     matched = [s for s in services if _service_selects(s, labels)]
     names = {s.metadata.name for s in matched}
     hosts: set[str] = set()
@@ -175,7 +218,7 @@ def exposure(
         for s in matched
     ]
     external_ips = sorted({ip for s in matched for ip in s.spec.external_ips or []})
-    if routed or external_ips or any(_publicly_reachable(e) for e in exposed):
+    if host_ports or routed or external_ips or any(_publicly_reachable(e) for e in exposed):
         level = "external"
     elif not matched:
         level = "none"  # a route needs a Service
@@ -188,7 +231,13 @@ def exposure(
         services=tuple(sorted(exposed, key=lambda e: e.name)),
         external_ips=tuple(external_ips),
         hosts=tuple(sorted(hosts)),
+        host_ports=host_ports,
     )
+
+
+def _host_ports(container) -> tuple[int, ...]:
+    ports = (container.ports if container is not None else None) or []
+    return tuple(sorted({p.host_port for p in ports if p.host_port}))
 
 
 def _service_selects(service, labels: dict[str, str]) -> bool:
@@ -365,6 +414,7 @@ def _merge_exposure(a: Exposure, b: Exposure) -> Exposure:
         services=tuple(by_name[n] for n in sorted(by_name)),
         external_ips=_union(a.external_ips, b.external_ips),
         hosts=_union(a.hosts, b.hosts),
+        host_ports=_union(a.host_ports, b.host_ports),
     )
 
 

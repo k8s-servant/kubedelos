@@ -3,6 +3,7 @@ from kubernetes.client import (
     V1Capabilities,
     V1ConfigMapEnvSource,
     V1Container,
+    V1ContainerPort,
     V1EnvFromSource,
     V1EnvVar,
     V1EnvVarSource,
@@ -21,6 +22,7 @@ from kubernetes.client import (
     V1SecretProjection,
     V1SecretVolumeSource,
     V1SecurityContext,
+    V1ServiceAccountTokenProjection,
     V1Volume,
     V1VolumeMount,
     V1VolumeProjection,
@@ -119,6 +121,27 @@ def test_host_path_only_when_this_container_mounts_it():
     assert _ps(spec, b).host_path_volumes == ()
 
 
+def test_host_path_mounted_twice_is_read_only_only_if_every_mount_is():
+    c = V1Container(
+        name="app",
+        image="x",
+        volume_mounts=[
+            V1VolumeMount(name="h", mount_path="/a"),
+            V1VolumeMount(name="h", mount_path="/b", read_only=True),
+            V1VolumeMount(name="r", mount_path="/c", read_only=True),
+            V1VolumeMount(name="r", mount_path="/d", read_only=True),
+        ],
+    )
+    vols = [
+        V1Volume(name="h", host_path=V1HostPathVolumeSource(path="/")),
+        V1Volume(name="r", host_path=V1HostPathVolumeSource(path="/etc")),
+    ]
+    assert _ps(_spec([c], volumes=vols), c).host_path_volumes == (
+        HostPath(path="/", read_only=False),
+        HostPath(path="/etc", read_only=True),
+    )
+
+
 def test_secret_refs_from_volumes_env_envfrom_and_projected():
     c = V1Container(
         name="app",
@@ -167,6 +190,26 @@ def test_secret_refs_from_volumes_env_envfrom_and_projected():
 def test_automount(pod_value, sa, expected):
     spec = _spec(service_account_name="s", automount_service_account_token=pod_value)
     assert _ps(spec, sa=sa).automount_token is expected
+
+
+def _token_volume(name="tok") -> V1Volume:
+    token = V1ServiceAccountTokenProjection(path="token")
+    return V1Volume(
+        name=name, projected=V1ProjectedVolumeSource(sources=[V1VolumeProjection(service_account_token=token)])
+    )
+
+
+def test_mounted_projected_token_counts_even_with_automount_off():
+    c = V1Container(name="app", image="x", volume_mounts=[V1VolumeMount(name="tok", mount_path="/t")])
+    spec = _spec([c], automount_service_account_token=False, volumes=[_token_volume()])
+    assert _ps(spec, c, sa={"default": False}).automount_token is True
+    assert _ps(spec, c, sa=None).automount_token is True
+
+
+def test_unmounted_projected_token_does_not_count():
+    c = V1Container(name="app", image="x")
+    spec = _spec([c], automount_service_account_token=False, volumes=[_token_volume()])
+    assert _ps(spec, c).automount_token is False
 
 
 def _facts(root=None, level="none", services=(), policies=(), rights=None, **pod_kw) -> WorkloadFacts:
@@ -373,6 +416,32 @@ def test_httproute_without_rules_or_hostnames_is_read_defensively():
 
 def test_services_unlistable_is_unknown():
     assert _exposure(None, [ingress("i", "default", default_backend="web")]).level == "unknown"
+
+
+def _with_ports(*host_ports) -> V1Container:
+    ports = [V1ContainerPort(container_port=80, host_port=p) for p in host_ports]
+    return V1Container(name="app", image="x", ports=[*ports, V1ContainerPort(container_port=9090)])
+
+
+def test_host_port_without_a_service_is_external():
+    e = exposure(ADMIN, "default", [], [], [], _with_ports(8443, 8080, 8443))
+    assert e.level == "external"
+    assert e.host_ports == (8080, 8443)
+
+
+def test_host_port_is_external_even_when_services_are_unknown():
+    e = exposure(ADMIN, "default", None, None, None, _with_ports(8080))
+    assert (e.level, e.host_ports) == ("external", (8080,))
+
+
+def test_container_without_host_ports_is_unchanged():
+    assert exposure(ADMIN, "default", [], [], [], _with_ports()) == Exposure(level="none")
+
+
+def test_merge_unions_host_ports():
+    a = _facts().model_copy(update={"exposure": Exposure(level="external", host_ports=(80, 443))})
+    b = _facts().model_copy(update={"exposure": Exposure(level="none", host_ports=(8080, 80))})
+    assert merge(a, b).exposure.host_ports == (80, 443, 8080)
 
 
 def test_no_services_is_none():
