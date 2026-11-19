@@ -27,6 +27,7 @@ from kubernetes.client import (
     V1LocalObjectReference,
     V1Namespace,
     V1NetworkPolicy,
+    V1NetworkPolicyEgressRule,
     V1NetworkPolicySpec,
     V1Node,
     V1NodeStatus,
@@ -204,16 +205,15 @@ def network_policy(
     policy_types: list[str] | None = None,
     egress: bool = False,
 ) -> V1NetworkPolicy:
-    """A policy selecting pods by labels; ``egress`` adds the Egress type to ``policy_types``."""
+    """A policy selecting pods by labels. ``policy_types`` is passed through verbatim (None leaves it unset, as a
+    manifest without ``policyTypes``); ``egress`` adds one egress rule to the spec and leaves ``policy_types`` alone."""
     expressions = [V1LabelSelectorRequirement(key=k, operator=op, values=v) for k, op, v in match_expressions or []]
-    types = list(policy_types) if policy_types else ["Ingress"]
-    if egress and "Egress" not in types:
-        types.append("Egress")
     return V1NetworkPolicy(
         metadata=V1ObjectMeta(name=name, namespace=ns),
         spec=V1NetworkPolicySpec(
             pod_selector=V1LabelSelector(match_labels=match_labels, match_expressions=expressions or None),
-            policy_types=types,
+            policy_types=policy_types,
+            egress=[V1NetworkPolicyEgressRule()] if egress else None,
         ),
     )
 
