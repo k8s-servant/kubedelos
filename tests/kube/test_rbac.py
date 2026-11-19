@@ -205,6 +205,22 @@ def test_creates_workloads_ignores_api_group():
         ([([""], ["pods/attach"], ["get"], None)], True, False),
         ([([""], ["pods/*"], ["create"], None)], True, False),
         ([([""], ["*/exec"], ["create"], None)], True, False),
+        ([([""], ["pods/portforward"], ["create"], None)], True, False),
+        ([([""], ["pods/portforward"], ["get"], None)], True, False),
+        ([([""], ["pods/ephemeralcontainers"], ["patch"], None)], True, False),
+        ([([""], ["pods/ephemeralcontainers"], ["update"], None)], True, False),
+        ([([""], ["pods/ephemeralcontainers"], ["get"], None)], False, False),
+        ([([""], ["pods/*"], ["patch"], None)], True, False),
+        ([([""], ["nodes/proxy"], ["get"], None)], True, False),
+        ([([""], ["nodes/proxy"], ["create"], None)], True, False),
+        ([([""], ["nodes/*"], ["get"], None)], True, False),
+        ([([""], ["*/proxy"], ["get"], None)], True, False),
+        ([([""], ["nodes"], ["get"], None)], False, False),
+        ([([""], ["serviceaccounts/token"], ["create"], None)], False, True),
+        ([([""], ["serviceaccounts/*"], ["create"], None)], False, True),
+        ([([""], ["*/token"], ["create"], None)], False, True),
+        ([([""], ["serviceaccounts/token"], ["get"], None)], False, False),
+        ([([""], ["serviceaccounts"], ["create"], None)], False, False),
         ([([""], ["pods"], ["create"], None)], False, False),
         ([(["rbac.authorization.k8s.io"], ["clusterroles"], ["bind"], None)], False, True),
         ([(["rbac.authorization.k8s.io"], ["rolebindings"], ["patch"], None)], False, True),
@@ -239,6 +255,30 @@ def test_wildcard_flag(rule, wildcard):
     rights = _rights(api)
     assert rights.wildcard == wildcard
     assert not rights.cluster_admin
+
+
+@pytest.mark.parametrize(
+    "resource", ["pods/portforward", "pods/ephemeralcontainers", "nodes/proxy", "serviceaccounts/token"]
+)
+def test_star_verb_covers_new_sinks(resource):
+    api = FakeKubeApi(
+        roles={"web": [role("r", "web", [([""], [resource], ["*"], None)])]},
+        role_bindings={"web": [role_binding("b", "web", "Role", "r", SA)]},
+    )
+    rights = _rights(api)
+    assert rights.pod_exec == (resource != "serviceaccounts/token")
+    assert rights.escalates  # verb * always escalates
+
+
+@pytest.mark.parametrize("verb", ["get", "patch"])
+def test_star_resource_covers_subresources_by_verb(verb):
+    api = FakeKubeApi(
+        roles={"web": [role("r", "web", [([""], ["*"], [verb], None)])]},
+        role_bindings={"web": [role_binding("b", "web", "Role", "r", SA)]},
+    )
+    rights = _rights(api)
+    assert rights.pod_exec  # get: exec/attach/portforward/nodes proxy; patch: ephemeral containers
+    assert rights.escalates == (verb == "patch")  # patch on * covers rolebindings
 
 
 def test_star_resource_covers_subresources():

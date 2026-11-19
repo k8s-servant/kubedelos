@@ -19,9 +19,18 @@ from kubedelos.models import Rights
 CLUSTER_ADMIN = "cluster-admin"
 _READ = {"get", "list", "watch", "*"}
 _WORKLOADS = {"pods", "deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "cronjobs"}
-_EXEC = {"pods/exec", "pods/attach"}
-_RBAC = {"roles", "clusterroles", "rolebindings", "clusterrolebindings"}
-_ESCALATE_VERBS = {"escalate", "bind", "impersonate"}
+# Sinks: (verbs, resources) pairs, any of whose verbs (or ``*``) on any of whose resources sets the flag.
+_EXEC_SINKS = (
+    ({"create", "get"}, {"pods/exec", "pods/attach"}),  # a shell in, or the stdio of, a running container
+    ({"create", "get"}, {"pods/portforward"}),  # a network pivot into the pod
+    ({"patch", "update"}, {"pods/ephemeralcontainers"}),  # injects a container into the pod: effectively exec
+    ({"create", "get"}, {"nodes/proxy"}),  # the kubelet API, which allows exec into any pod on the node
+)
+_ESCALATE_SINKS = (
+    ({"create", "update", "patch"}, {"roles", "clusterroles", "rolebindings", "clusterrolebindings"}),  # grant more
+    ({"create"}, {"serviceaccounts/token"}),  # mints tokens for other ServiceAccounts
+)
+_ESCALATE_VERBS = {"escalate", "bind", "impersonate"}  # escalate on any resource, whatever it names
 
 
 def _verbs(rule, wanted: set[str]) -> bool:
@@ -40,6 +49,10 @@ def _covers(granted: str, wanted: str) -> bool:
 
 def _resources(rule, wanted: set[str]) -> bool:
     return any(_covers(granted, w) for granted in rule.resources or [] for w in wanted)
+
+
+def _hits(rule, sinks) -> bool:
+    return any(_verbs(rule, verbs) and _resources(rule, resources) for verbs, resources in sinks)
 
 
 @dataclass
@@ -82,10 +95,10 @@ class _Acc:
             self._secrets(ns)
         if _verbs(rule, {"create"}) and _resources(rule, _WORKLOADS):
             self.creates_workloads = True
-        if _verbs(rule, {"create", "get"}) and _resources(rule, _EXEC):
+        if _hits(rule, _EXEC_SINKS):
             self.pod_exec = True
         # Verb ``*`` on any resource counts as escalate/bind/impersonate on purpose: it overstates, never understates.
-        if _verbs(rule, _ESCALATE_VERBS) or (_verbs(rule, {"create", "update", "patch"}) and _resources(rule, _RBAC)):
+        if _verbs(rule, _ESCALATE_VERBS) or _hits(rule, _ESCALATE_SINKS):
             self.escalates = True
 
     def rights(self, status: str, bindings: list[str]) -> Rights:
