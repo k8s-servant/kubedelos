@@ -440,7 +440,7 @@ def test_attack_surface_filters_and_order(world):
     assert set(first) == {"namespace", "kind", "name", "container", "image", "critical", "high", "host_access", "facts"}
     assert (first["critical"], first["high"], first["host_access"], first["image"]) == (1, 0, True, "img-a")
     assert result["items"][2]["host_access"] is True and result["items"][2]["high"] == 2
-    assert result["items"][3]["facts"] is None and result["items"][3]["host_access"] is False
+    assert result["items"][3]["facts"] is None and result["items"][3]["host_access"] is None
     json.dumps(result)
     assert _names(tools.attack_surface(conn, db, NOW, exposure=["external", "cluster"])) == [
         ("web", "ext"),
@@ -485,6 +485,31 @@ def test_attack_surface_without_facts(world):
     result = tools.attack_surface(conn, db, NOW, min_severity="HIGH")
     assert _names(result) == [("web", "old")] and result["items"][0]["facts"] is None
     assert result["facts_collected"] is False
+
+
+def test_attack_surface_unknown_host_access_is_null(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_workloads(repo, run_id, "img-a", [_wl("web", "old")], [finding("CVE-1", "HIGH")])
+    result = tools.attack_surface(conn, db, NOW)
+    assert result["items"][0]["facts"] is None and result["items"][0]["host_access"] is None
+
+
+def test_attack_surface_exposure_filters_never_match_rows_without_facts(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_workloads(repo, run_id, "img-a", [_wl("web", "old")], [finding("CVE-1", "HIGH")])
+    for level in ("none", "unknown"):
+        assert tools.attack_surface(conn, db, NOW, exposure=[level])["items"] == [], level
+
+
+def test_attack_surface_unknown_exposure_is_not_none(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    unk = _wl("web", "unk")
+    add_workloads(repo, run_id, "img-a", [unk], [finding("CVE-1", "HIGH")], facts={unk: _facts(level="unknown")})
+    assert tools.attack_surface(conn, db, NOW, exposure=["none"])["items"] == []
+    assert _names(tools.attack_surface(conn, db, NOW, exposure=["unknown"])) == [("web", "unk")]
 
 
 def _two_runs(repo):

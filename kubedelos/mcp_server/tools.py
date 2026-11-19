@@ -412,7 +412,7 @@ def attack_surface(
                 "image": row.ref,
                 "critical": row.counts["CRITICAL"],
                 "high": row.counts["HIGH"],
-                "host_access": host_access(row.facts) if row.facts else False,
+                "host_access": host_access(row.facts) if row.facts else None,
                 "facts": _facts_payload(row.facts),
             }
             for row in page
