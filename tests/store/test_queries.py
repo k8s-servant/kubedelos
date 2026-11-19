@@ -955,3 +955,15 @@ def test_run_registry_hosts_lists_each_host_once(db):
         item = InventoryItem(image=image, platform="linux/amd64")
         repo.add_result(run_id, item, ImageResult(image=image, platform="linux/amd64", status="ok"))
     assert run_registry_hosts(conn, run_id) == {"reg.example.com", "other.example.com:5000"}
+
+
+def test_set_fact_sources_is_read_back_on_the_run(db):
+    conn, repo = db
+    run_id = _run(repo)
+    repo.set_fact_sources(run_id, {"services": "ok", "rbac": "partial"})
+    assert get_run(conn, "ctx", run_id).fact_sources == {"services": "ok", "rbac": "partial"}
+
+
+def test_old_run_has_no_fact_sources(db):
+    conn, repo = db
+    assert get_run(conn, "ctx", _run(repo)).fact_sources is None

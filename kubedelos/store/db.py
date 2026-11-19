@@ -176,6 +176,12 @@ MIGRATIONS: list[str] = [
     """
     ALTER TABLE image_result ADD COLUMN pull_secrets TEXT;
     """,
+    # 12: attack-surface facts per workload row, as versioned JSON (NULL when not collected), and the status of each
+    # fact source per run, as JSON. Names only, never Secret contents.
+    """
+    ALTER TABLE workload ADD COLUMN facts TEXT;
+    ALTER TABLE scan_run ADD COLUMN fact_sources TEXT;
+    """,
 ]
 
 
