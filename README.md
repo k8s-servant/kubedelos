@@ -254,6 +254,13 @@ Tick **Rescan every image** on the Scans form to skip the cache for one scan, fo
 A namespace or resource kubedelos may not list is skipped with a warning, and the run is marked incomplete. A forbidden
 node list only costs detail: the platform falls back to the most common one.
 
+### Attack-surface facts
+
+Each scan also records, per workload container, what its pod spec allows, how far it is reachable (Services, Ingresses,
+Gateway API routes), whether NetworkPolicies isolate it, and what its ServiceAccount may do through RBAC. It only lists
+objects and reads no Secret; `KUBEDELOS_ATTACK_SURFACE=false` turns it off. See [Attack-surface
+facts](docs/attack-surface.md).
+
 ## Configuration
 
 Settings come from environment variables. `kubedelos ui --context` and `--kubeconfig` win over theirs, and the Scans

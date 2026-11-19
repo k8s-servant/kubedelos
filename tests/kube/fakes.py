@@ -3,6 +3,9 @@
 import base64
 
 from kubernetes.client import (
+    RbacV1Subject,
+    V1ClusterRole,
+    V1ClusterRoleBinding,
     V1Container,
     V1ContainerStatus,
     V1CronJob,
@@ -10,10 +13,23 @@ from kubernetes.client import (
     V1Deployment,
     V1DeploymentSpec,
     V1EphemeralContainer,
+    V1HTTPIngressPath,
+    V1HTTPIngressRuleValue,
+    V1Ingress,
+    V1IngressBackend,
+    V1IngressRule,
+    V1IngressServiceBackend,
+    V1IngressSpec,
     V1JobSpec,
     V1JobTemplateSpec,
+    V1LabelSelector,
+    V1LabelSelectorRequirement,
     V1LocalObjectReference,
     V1Namespace,
+    V1NetworkPolicy,
+    V1NetworkPolicyEgressRule,
+    V1NetworkPolicyPeer,
+    V1NetworkPolicySpec,
     V1Node,
     V1NodeStatus,
     V1NodeSystemInfo,
@@ -23,7 +39,15 @@ from kubernetes.client import (
     V1PodSpec,
     V1PodStatus,
     V1PodTemplateSpec,
+    V1PolicyRule,
+    V1Role,
+    V1RoleBinding,
+    V1RoleRef,
     V1Secret,
+    V1Service,
+    V1ServiceAccount,
+    V1ServiceBackendPort,
+    V1ServiceSpec,
 )
 from kubernetes.client.rest import ApiException
 
@@ -119,6 +143,139 @@ def secret(name: str, ns: str, data: dict[str, bytes] | None = None, type: str =
     return V1Secret(metadata=V1ObjectMeta(name=name, namespace=ns), type=type, data=encoded)
 
 
+def service(
+    name: str,
+    ns: str,
+    selector: dict | None,
+    type: str = "ClusterIP",
+    annotations: dict | None = None,
+    external_ips: list[str] | None = None,
+) -> V1Service:
+    return V1Service(
+        metadata=V1ObjectMeta(name=name, namespace=ns, annotations=annotations),
+        spec=V1ServiceSpec(selector=selector, type=type, external_ips=external_ips),
+    )
+
+
+def ingress(
+    name: str,
+    ns: str,
+    rules: list[tuple[str, str]] | None = None,  # (host, service name)
+    default_backend: str | None = None,  # service name
+) -> V1Ingress:
+    def backend(svc: str) -> V1IngressBackend:
+        return V1IngressBackend(service=V1IngressServiceBackend(name=svc, port=V1ServiceBackendPort(number=80)))
+
+    ing_rules = [
+        V1IngressRule(
+            host=host,
+            http=V1HTTPIngressRuleValue(paths=[V1HTTPIngressPath(path="/", path_type="Prefix", backend=backend(svc))]),
+        )
+        for host, svc in rules or []
+    ]
+    return V1Ingress(
+        metadata=V1ObjectMeta(name=name, namespace=ns),
+        spec=V1IngressSpec(
+            rules=ing_rules or None, default_backend=backend(default_backend) if default_backend else None
+        ),
+    )
+
+
+def httproute(
+    name: str,
+    ns: str,
+    hostnames: list[str] | None = None,
+    backends: list[tuple] | None = None,  # (name, kind="Service", group="", namespace=None); None omits the field
+) -> dict:
+    """An HTTPRoute as the CustomObjectsApi returns it: a plain dict. A kind, group or namespace of None is left
+    out of the backend ref, as real routes usually do (the API defaults them)."""
+    refs = []
+    for name_, *rest in backends or []:
+        values = {"kind": "Service", "group": "", "namespace": None}  # what a short tuple means
+        values.update(zip(("kind", "group", "namespace"), rest, strict=False))
+        refs.append({"name": name_, **{k: v for k, v in values.items() if v is not None}})
+    return {
+        "metadata": {"name": name, "namespace": ns},
+        "spec": {"hostnames": hostnames or [], "rules": [{"backendRefs": refs}]},
+    }
+
+
+def _egress_rules(egress: bool | list) -> list | None:
+    if egress is True:
+        peer = V1NetworkPolicyPeer(pod_selector=V1LabelSelector(match_labels={"x": "y"}))
+        return [V1NetworkPolicyEgressRule(to=[peer])]
+    return egress or None
+
+
+def network_policy(
+    name: str,
+    ns: str,
+    match_labels: dict | None = None,
+    match_expressions: list[tuple[str, str, list[str]]] | None = None,  # (key, operator, values)
+    policy_types: list[str] | None = None,
+    egress: bool | list = False,
+    ingress: list | None = None,
+) -> V1NetworkPolicy:
+    """A policy selecting pods by labels. ``policy_types`` is passed through verbatim (None leaves it unset, as a
+    manifest without ``policyTypes``); ``egress=True`` adds one restrictive egress rule (to pods labelled ``x=y``), a
+    list sets the egress rules, and ``ingress`` sets the ingress rules; ``policy_types`` is left alone."""
+    expressions = [V1LabelSelectorRequirement(key=k, operator=op, values=v) for k, op, v in match_expressions or []]
+    return V1NetworkPolicy(
+        metadata=V1ObjectMeta(name=name, namespace=ns),
+        spec=V1NetworkPolicySpec(
+            pod_selector=V1LabelSelector(match_labels=match_labels, match_expressions=expressions or None),
+            policy_types=policy_types,
+            ingress=ingress,
+            egress=_egress_rules(egress),
+        ),
+    )
+
+
+def _rules(rules: list[tuple] | None) -> list[V1PolicyRule]:
+    return [
+        V1PolicyRule(api_groups=groups, resources=resources, verbs=verbs, resource_names=names)
+        for groups, resources, verbs, names in rules or []
+    ]
+
+
+def role(name: str, ns: str, rules: list[tuple] | None = None) -> V1Role:
+    """``rules`` are (api groups, resources, verbs, resource names) tuples."""
+    return V1Role(metadata=V1ObjectMeta(name=name, namespace=ns), rules=_rules(rules))
+
+
+def cluster_role(name: str, rules: list[tuple] | None = None) -> V1ClusterRole:
+    return V1ClusterRole(metadata=V1ObjectMeta(name=name), rules=_rules(rules))
+
+
+def _subjects(subjects: list[tuple[str, str, str | None]] | None) -> list[RbacV1Subject]:
+    return [RbacV1Subject(kind=kind, name=name, namespace=ns) for kind, name, ns in subjects or []]
+
+
+def role_binding(
+    name: str, ns: str, role_kind: str, role_name: str, subjects: list[tuple[str, str, str | None]] | None = None
+) -> V1RoleBinding:
+    """``subjects`` are (kind, name, namespace) tuples; ``role_kind`` is Role or ClusterRole."""
+    return V1RoleBinding(
+        metadata=V1ObjectMeta(name=name, namespace=ns),
+        role_ref=V1RoleRef(api_group="rbac.authorization.k8s.io", kind=role_kind, name=role_name),
+        subjects=_subjects(subjects),
+    )
+
+
+def cluster_role_binding(
+    name: str, role_name: str, subjects: list[tuple[str, str, str | None]] | None = None
+) -> V1ClusterRoleBinding:
+    return V1ClusterRoleBinding(
+        metadata=V1ObjectMeta(name=name),
+        role_ref=V1RoleRef(api_group="rbac.authorization.k8s.io", kind="ClusterRole", name=role_name),
+        subjects=_subjects(subjects),
+    )
+
+
+def service_account(name: str, ns: str, automount: bool | None = None) -> V1ServiceAccount:
+    return V1ServiceAccount(metadata=V1ObjectMeta(name=name, namespace=ns), automount_service_account_token=automount)
+
+
 class FakeKubeApi:
     def __init__(
         self,
@@ -136,6 +293,16 @@ class FakeKubeApi:
         secrets: dict[tuple[str, str], V1Secret] | None = None,  # (namespace, name) -> Secret
         secret_status: dict[tuple[str, str], int] | None = None,  # (namespace, name) -> HTTP status to answer
         secret_errors: dict[tuple[str, str], Exception] | None = None,  # (namespace, name) -> error to raise
+        services: dict[str, list] | None = None,
+        service_accounts: dict[str, list] | None = None,
+        ingresses: dict[str, list] | None = None,
+        network_policies: dict[str, list] | None = None,
+        httproutes: dict[str, list] | None = None,
+        roles: dict[str, list] | None = None,
+        role_bindings: dict[str, list] | None = None,
+        cluster_roles: list | None = None,
+        cluster_role_bindings: list | None = None,
+        missing: set[str] | None = None,  # list methods that answer HTTP 404, as for a CRD that is not installed
     ) -> None:
         self.namespaces = namespaces or []
         self.pods = pods or {}
@@ -151,6 +318,17 @@ class FakeKubeApi:
         self.secrets = secrets or {}
         self.secret_status = secret_status or {}
         self.secret_errors = secret_errors or {}
+        self.services = services or {}
+        self.service_accounts = service_accounts or {}
+        self.ingresses = ingresses or {}
+        self.network_policies = network_policies or {}
+        self.httproutes = httproutes or {}
+        self.roles = roles or {}
+        self.role_bindings = role_bindings or {}
+        self.cluster_roles = cluster_roles or []
+        self.cluster_role_bindings = cluster_role_bindings or []
+        self.missing = missing or set()
+        self.calls: list[str] = []  # the name of every list method called
         self.secret_reads: list[tuple[str, str]] = []
         self.selectors: list[tuple[str, str | None]] = []
 
@@ -171,30 +349,81 @@ class FakeKubeApi:
         return [o for o in objs if all((o.metadata.labels or {}).get(k) == v for k, v in wanted.items())]
 
     def list_namespaces(self, label_selector=None):
+        self.calls.append("list_namespaces")
         if self.namespaces_forbidden:
             raise ApiException(status=403, reason="Forbidden")
         return self._match("list_namespaces", self.namespaces, label_selector)
 
     def list_pods(self, ns, label_selector=None):
+        self.calls.append("list_pods")
         self._check(ns, "pods")
         return self._match("list_pods", self.pods.get(ns, []), label_selector)
 
     def list_deployments(self, ns, label_selector=None):
+        self.calls.append("list_deployments")
         self._check(ns, "deployments")
         return self._match("list_deployments", self.deployments.get(ns, []), label_selector)
 
     def list_statefulsets(self, ns, label_selector=None):
+        self.calls.append("list_statefulsets")
         self._check(ns, "statefulsets")
         return self._match("list_statefulsets", self.statefulsets.get(ns, []), label_selector)
 
     def list_cronjobs(self, ns, label_selector=None):
+        self.calls.append("list_cronjobs")
         self._check(ns, "cronjobs")
         return self._match("list_cronjobs", self.cronjobs.get(ns, []), label_selector)
 
     def list_nodes(self):
+        self.calls.append("list_nodes")
         if self.nodes_forbidden:
             raise ApiException(status=403, reason="Forbidden")
         return self.nodes
+
+    def _list(self, method: str, ns: str | None, resource: str, store: dict[str, list]) -> list:
+        """A namespaced list; ``ns=None`` is the all-namespaces call, answering every namespace's entries."""
+        self.calls.append(method)
+        if method in self.missing:
+            raise ApiException(status=404, reason="Not Found")
+        if ns is None:
+            self._check("*", resource)
+            return [o for objs in store.values() for o in objs]
+        self._check(ns, resource)
+        return store.get(ns, [])
+
+    def _cluster_list(self, method: str, resource: str, objs: list) -> list:
+        self.calls.append(method)
+        if method in self.missing:
+            raise ApiException(status=404, reason="Not Found")
+        self._check("*", resource)
+        return objs
+
+    def list_services(self, ns):
+        return self._list("list_services", ns, "services", self.services)
+
+    def list_service_accounts(self, ns):
+        return self._list("list_service_accounts", ns, "serviceaccounts", self.service_accounts)
+
+    def list_ingresses(self, ns):
+        return self._list("list_ingresses", ns, "ingresses", self.ingresses)
+
+    def list_network_policies(self, ns):
+        return self._list("list_network_policies", ns, "networkpolicies", self.network_policies)
+
+    def list_httproutes(self, ns):
+        return self._list("list_httproutes", ns, "httproutes", self.httproutes)
+
+    def list_roles(self, ns):
+        return self._list("list_roles", ns, "roles", self.roles)
+
+    def list_role_bindings(self, ns):
+        return self._list("list_role_bindings", ns, "rolebindings", self.role_bindings)
+
+    def list_cluster_roles(self):
+        return self._cluster_list("list_cluster_roles", "clusterroles", self.cluster_roles)
+
+    def list_cluster_role_bindings(self):
+        return self._cluster_list("list_cluster_role_bindings", "clusterrolebindings", self.cluster_role_bindings)
 
     def read_secret(self, ns, name):
         self.secret_reads.append((ns, name))

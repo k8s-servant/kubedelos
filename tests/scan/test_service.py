@@ -1,3 +1,4 @@
+import json
 import threading
 from datetime import timedelta
 from pathlib import Path
@@ -7,6 +8,7 @@ import pytest
 from kubernetes.client import V1Namespace, V1ObjectMeta
 
 from kubedelos.config import Settings
+from kubedelos.kube.inventory import Inventory
 from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity
 from kubedelos.scan import service
 from kubedelos.store import runlock
@@ -198,7 +200,7 @@ def test_service_rejects_invalid_refs(env, monkeypatch, bad):
     settings, repo, calls = env
     good = InventoryItem(image=ImageRef(ref="reg.io/a:1", repo="reg.io/a", tag="1"), platform="linux/amd64")
     evil = InventoryItem(image=ImageRef(ref=bad, repo=bad), platform="linux/amd64")
-    monkeypatch.setattr(service, "collect", lambda api, settings: ([good, evil], []))
+    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([good, evil], [], {}))
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
@@ -214,7 +216,7 @@ def test_service_rejects_invalid_refs(env, monkeypatch, bad):
 def test_service_skips_trivy_when_only_invalid_refs(env, monkeypatch):
     settings, repo, calls = env
     evil = InventoryItem(image=ImageRef(ref="-oyaml", repo="-oyaml"), platform="linux/amd64")
-    monkeypatch.setattr(service, "collect", lambda api, settings: ([evil], []))
+    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([evil], [], {}))
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings, api=_api(), repo=repo)
     assert calls == [] and FakeCache.started == 0
@@ -361,7 +363,7 @@ def test_progress_skips_trivy_db_phase_when_everything_is_cached(env, monkeypatc
 def test_cancel_during_inventory_never_reaches_trivy(env, monkeypatch):
     settings, repo, calls = env
     cancel = threading.Event()
-    real_collect = service.collect
+    real_collect = service.collect_inventory
 
     def collect(api, settings):
         cancel.set()  # Ctrl-C on the UI while the cluster is being listed
@@ -371,7 +373,7 @@ def test_cancel_during_inventory_never_reaches_trivy(env, monkeypatch):
         raise AssertionError("a cancelled scan fetched Trivy")
 
     phases: list[str] = []
-    monkeypatch.setattr(service, "collect", collect)
+    monkeypatch.setattr(service, "collect_inventory", collect)
     monkeypatch.setattr(service, "ensure_trivy", refuse)
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel, on_progress=lambda p: phases.append(p.phase))
@@ -617,3 +619,20 @@ def test_retry_does_not_load_the_cluster_when_no_failed_image_has_pull_secrets(e
     retry = settings.model_copy(update={"secrets_dir": secrets, "pod_pull_secret_namespaces": ["default"]})
     service.retry_failed(retry, run_id, repo=repo)
     assert loaded == []
+
+
+def test_cache_hit_still_stores_facts(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    service.run_scan(settings, api=_api(), repo=repo)
+    out = service.run_scan(settings, api=_api(), repo=repo)  # every image comes from the cache
+    rows = repo._conn.execute(
+        "SELECT w.facts FROM workload w JOIN image_result r ON r.id = w.image_result_id "
+        "WHERE r.run_id = ? AND r.status = 'cached'",
+        (out.run_id,),
+    ).fetchall()
+    assert len(rows) == 2 and all(row["facts"] is not None for row in rows)
+    sources = json.loads(
+        repo._conn.execute("SELECT fact_sources FROM scan_run WHERE id = ?", (out.run_id,)).fetchone()[0]
+    )
+    assert sources["pod_security"] == "ok" and sources["services"] == "ok"

@@ -5,6 +5,8 @@ keeps the results in SQLite on a volume. It reads the cluster through a read-onl
 namespaces, pods and nodes, `list` on deployments, statefulsets and cronjobs) and nothing else. It reads no Secrets,
 unless you turn on pod pull secrets, which adds a `get`-only Role in each namespace you list (see
 [private registries](#private-registries)).
+The chart turns the [attack-surface facts](attack-surface.md) off (`KUBEDELOS_ATTACK_SURFACE=false`) because it grants
+no RBAC for their lists yet; that is a follow-up.
 The image bundles the pinned Trivy, so the pod downloads no scanner, only the vulnerability DBs.
 
 Without any registry setting a scan reads public images, and whatever the node's own identity lets Trivy reach. For

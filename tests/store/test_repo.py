@@ -7,7 +7,19 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
+from kubedelos.models import (
+    Exposure,
+    Finding,
+    ImageRef,
+    ImageResult,
+    InventoryItem,
+    Network,
+    PodSecurity,
+    Rights,
+    Severity,
+    Workload,
+    WorkloadFacts,
+)
 from kubedelos.store.db import MIGRATIONS, connect, connect_readonly
 from kubedelos.store.repo import Repo
 
@@ -612,5 +624,27 @@ def test_migration_11_adds_pull_secrets_to_old_results(tmp_path):
     old.close()
     conn = connect(path)
     _OPEN.append(conn)
-    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 11
+    assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
     assert conn.execute("SELECT pull_secrets FROM image_result").fetchone()[0] is None
+
+
+def test_add_result_stores_facts_per_workload(tmp_path):
+    repo = _repo(tmp_path)
+    first = Workload(namespace="ns", kind="Deployment", name="a", container="c")
+    second = Workload(namespace="ns", kind="Deployment", name="b", container="c")
+    facts = WorkloadFacts(
+        pod=PodSecurity(
+            privileged=False, allow_privilege_escalation=False, runs_as_root=True, read_only_root_fs=True,
+            host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=None,
+        ),
+        exposure=Exposure(level="none"),
+        network=Network(ingress_isolated=False, egress_isolated=None),
+        rights=Rights(status="off"),
+    )  # fmt: skip
+    item = _item(workloads=[first, second]).model_copy(update={"facts": {first: facts}})
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    repo.add_result(run, item, _result(item))
+    rows = repo._conn.execute("SELECT facts FROM workload ORDER BY id").fetchall()
+    assert json.loads(rows[0]["facts"])["v"] == 1
+    assert WorkloadFacts.model_validate_json(rows[0]["facts"]) == facts
+    assert rows[1]["facts"] is None

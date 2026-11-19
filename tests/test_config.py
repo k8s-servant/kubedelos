@@ -256,3 +256,10 @@ def test_cloud_identity_defaults_to_none_and_is_read_from_the_environment(monkey
 def test_cloud_provider_must_be_a_known_one():
     with pytest.raises(ValidationError):
         Settings(cloud_provider="oracle")
+
+
+def test_attack_surface_setting_defaults_on_and_reads_env(monkeypatch):
+    monkeypatch.delenv("KUBEDELOS_ATTACK_SURFACE", raising=False)
+    assert Settings().attack_surface is True
+    monkeypatch.setenv("KUBEDELOS_ATTACK_SURFACE", "false")
+    assert Settings().attack_surface is False

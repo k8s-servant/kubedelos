@@ -10,7 +10,7 @@ from typing import get_args
 from pydantic import ValidationError
 
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
+from kubedelos.models import FactSources, ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import ErrorKind
 
@@ -67,6 +67,11 @@ class Repo:
             )
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
+    def set_fact_sources(self, run_id: int, sources: FactSources) -> None:
+        """Record the status of each fact source (e.g. services, rbac) for the run."""
+        with self._conn:
+            self._conn.execute("UPDATE scan_run SET fact_sources = ? WHERE id = ?", (json.dumps(sources), run_id))
+
     def add_warnings(self, run_id: int, warnings: Sequence[InventoryWarning]) -> None:
         with self._conn:
             self._conn.executemany(
@@ -94,8 +99,21 @@ class Repo:
             )  # fmt: skip
             result_id = cur.lastrowid
             self._conn.executemany(
-                "INSERT INTO workload (image_result_id, namespace, kind, name, container, owner, team) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                [(result_id, w.namespace, w.kind, w.name, w.container, w.owner, w.team) for w in item.workloads],
+                "INSERT INTO workload (image_result_id, namespace, kind, name, container, owner, team, facts)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                [
+                    (
+                        result_id,
+                        w.namespace,
+                        w.kind,
+                        w.name,
+                        w.container,
+                        w.owner,
+                        w.team,
+                        facts.model_dump_json() if (facts := item.facts.get(w)) else None,
+                    )
+                    for w in item.workloads
+                ],
             )
             self._add_findings(result_id, result)
 
@@ -142,6 +160,7 @@ class Repo:
 
     def replace_result(self, result_id: int, result: ImageResult) -> None:
         """Put ``result`` in place of the failure stored as ``result_id``; a row that is no longer a failure is kept."""
+        # The workload rows are left alone, so a retry keeps their facts.
         with self._conn:
             cur = self._conn.execute(
                 "UPDATE image_result SET status = ?, error_kind = ?, error = ?, os_family = ?, duration_s = ?"

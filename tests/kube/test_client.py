@@ -81,8 +81,14 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
 
             return call
 
-    for api in ("CoreV1Api", "AppsV1Api", "BatchV1Api"):
+    class CustomRecorder(Recorder):
+        def list_namespaced_custom_object(self, *args, **kwargs):
+            seen.append(("list_namespaced_custom_object", kwargs))
+            return {"items": []}
+
+    for api in ("CoreV1Api", "AppsV1Api", "BatchV1Api", "NetworkingV1Api", "RbacAuthorizationV1Api"):
         monkeypatch.setattr(kube_client.client, api, Recorder)
+    monkeypatch.setattr(kube_client.client, "CustomObjectsApi", CustomRecorder)
     real = kube_client._RealKubeApi("my-cluster")
     real.list_namespaces()
     real.list_nodes()
@@ -98,6 +104,70 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
         fn("ns", label_selector="app=web")
     assert [kw["label_selector"] for _, kw in seen] == ["team=x"] + ["app=web"] * 4
     assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
+
+
+def _recording_apis(monkeypatch):
+    seen = []
+
+    class Recorder:
+        def __getattr__(self, name):
+            def call(*args, **kwargs):
+                seen.append((name, args, kwargs))
+                return {"items": []} if name == "list_namespaced_custom_object" else SimpleNamespace(items=[])
+
+            return call
+
+    for api in (
+        "CoreV1Api",
+        "AppsV1Api",
+        "BatchV1Api",
+        "NetworkingV1Api",
+        "RbacAuthorizationV1Api",
+        "CustomObjectsApi",
+    ):
+        monkeypatch.setattr(kube_client.client, api, Recorder)
+    return seen
+
+
+def test_real_api_sets_request_timeout_on_every_attack_surface_list(monkeypatch):
+    seen = _recording_apis(monkeypatch)
+    real = kube_client._RealKubeApi("my-cluster")
+    for fn in (
+        real.list_services,
+        real.list_service_accounts,
+        real.list_ingresses,
+        real.list_network_policies,
+        real.list_httproutes,
+        real.list_roles,
+        real.list_role_bindings,
+    ):
+        assert fn("ns") == []
+    assert real.list_roles(None) == [] and real.list_role_bindings(None) == []
+    assert real.list_cluster_roles() == [] and real.list_cluster_role_bindings() == []
+    assert [name for name, _, _ in seen] == [
+        "list_namespaced_service",
+        "list_namespaced_service_account",
+        "list_namespaced_ingress",
+        "list_namespaced_network_policy",
+        "list_namespaced_custom_object",
+        "list_namespaced_role",
+        "list_namespaced_role_binding",
+        "list_role_for_all_namespaces",
+        "list_role_binding_for_all_namespaces",
+        "list_cluster_role",
+        "list_cluster_role_binding",
+    ]
+    assert all(kw == {"_request_timeout": kube_client.REQUEST_TIMEOUT} for _, _, kw in seen)
+    custom = next(args for name, args, _ in seen if name == "list_namespaced_custom_object")
+    assert custom == ("gateway.networking.k8s.io", "v1", "ns", "httproutes")
+
+
+def test_list_roles_all_namespaces_uses_the_cluster_wide_call(monkeypatch):
+    seen = _recording_apis(monkeypatch)
+    real = kube_client._RealKubeApi("my-cluster")
+    real.list_roles(None)
+    real.list_role_bindings(None)
+    assert [name for name, _, _ in seen] == ["list_role_for_all_namespaces", "list_role_binding_for_all_namespaces"]
 
 
 def test_real_api_reads_one_secret_with_the_timeout(monkeypatch):

@@ -184,6 +184,10 @@ def test_configmap_env(render):
     assert scoped["KUBEDELOS_SELECTOR"] == "app=b"
 
 
+def test_attack_surface_is_off_in_the_chart(render):
+    assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_ATTACK_SURFACE"] == "false"
+
+
 def test_configmap_values_load_as_settings(render, monkeypatch):
     docs = render({"scope": {"namespaces": ["web", "jobs"]}, "sweep": {"enabled": False}, "readOnly": True})
     for key, value in kind(docs, "ConfigMap")["data"].items():
@@ -193,6 +197,7 @@ def test_configmap_values_load_as_settings(render, monkeypatch):
     assert settings.cluster_name == "my-cluster"
     assert settings.sweep_enabled is False
     assert settings.read_only is True
+    assert settings.attack_surface is False
     assert settings.secure_cookies is True
     assert "t-kubedelos.kd.svc.cluster.local" in settings.allowed_hosts
 

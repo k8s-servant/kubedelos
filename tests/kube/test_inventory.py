@@ -1,9 +1,24 @@
 import pytest
-from fakes import FakeKubeApi, cronjob, deployment, namespace, node, pod
+import urllib3
+from fakes import (
+    FakeKubeApi,
+    cronjob,
+    deployment,
+    namespace,
+    network_policy,
+    node,
+    pod,
+    role,
+    role_binding,
+    service,
+    service_account,
+)
+from kubernetes.client import V1ContainerPort, V1ObjectMeta, V1SecurityContext
 
 from kubedelos.config import Settings
-from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id, parse_user_ref
-from kubedelos.models import ImageRef
+from kubedelos.kube import facts as fact_builders
+from kubedelos.kube.inventory import InventoryWarning, collect, collect_inventory, parse_image_id, parse_user_ref
+from kubedelos.models import ImageRef, Workload
 
 DIGEST = "sha256:" + "a" * 64
 ID = f"docker-pullable://nginx@{DIGEST}"
@@ -450,3 +465,304 @@ def test_parse_user_ref_accepts_a_tag_and_a_digest():
     digest = "sha256:" + "a" * 64
     assert parse_user_ref("registry.example.com/team/app:1").ref == "registry.example.com/team/app:1"
     assert parse_user_ref(f"registry.example.com/team/app@{digest}").digest == digest
+
+
+# --- attack-surface facts ---
+
+NEW_CALLS = {
+    "list_services",
+    "list_ingresses",
+    "list_httproutes",
+    "list_network_policies",
+    "list_service_accounts",
+    "list_roles",
+    "list_role_bindings",
+    "list_cluster_roles",
+    "list_cluster_role_bindings",
+}
+
+
+def _facts_of(inv, ns, kind, name, container="app"):
+    (fact,) = [
+        f
+        for item in inv.items
+        for w, f in item.facts.items()
+        if (w.namespace, w.kind, w.name, w.container) == (ns, kind, name, container)
+    ]
+    return fact
+
+
+def _web_pod(name="p1", ns="web", labels=None, **kw):
+    return pod(name, ns, owner=("ReplicaSet", "front-5d9"), labels={"pod-template-hash": "5d9", **(labels or {})}, **kw)
+
+
+def test_facts_attached_per_workload():
+    api = FakeKubeApi(
+        namespaces=[namespace("web")],
+        pods={"web": [_web_pod(labels={"app": "front"})]},
+        services={"web": [service("front", "web", {"app": "front"}, type="NodePort")]},
+        network_policies={
+            "web": [network_policy("deny", "web", match_labels={"app": "front"}, policy_types=["Ingress"])]
+        },
+        service_accounts={"web": [service_account("default", "web")]},
+        roles={"web": [role("mk", "web", [([""], ["pods"], ["create"], None)])]},
+        role_bindings={"web": [role_binding("b", "web", "Role", "mk", [("ServiceAccount", "default", "web")])]},
+    )
+    inv = collect_inventory(api, Settings())
+    facts = _facts_of(inv, "web", "Deployment", "front")
+    assert facts.exposure.level == "external"
+    assert facts.network.ingress_isolated is True
+    assert facts.rights.creates_workloads
+    assert inv.fact_sources == {
+        "pod_security": "ok",
+        "services": "ok",
+        "ingresses": "ok",
+        "httproutes": "ok",
+        "network_policies": "ok",
+        "service_accounts": "ok",
+        "rbac": "ok",
+    }
+    assert inv.warnings == []
+
+
+def test_same_image_two_namespaces_keeps_separate_facts():
+    api = FakeKubeApi(
+        namespaces=[namespace("a"), namespace("b")],
+        pods={
+            "a": [_web_pod("p", "a", labels={"app": "x"}, image_id=ID)],
+            "b": [_web_pod("p", "b", labels={"app": "x"}, image_id=ID)],
+        },
+        services={"a": [service("x", "a", {"app": "x"}, type="LoadBalancer")], "b": []},
+    )
+    inv = collect_inventory(api, Settings())
+    assert len(inv.items) == 1
+    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "external"
+    assert _facts_of(inv, "b", "Deployment", "front").exposure.level == "none"
+
+
+def test_template_workloads_use_template_labels():
+    cj = cronjob("job", "ops", "busybox:1")
+    cj.spec.job_template.spec.template.metadata = V1ObjectMeta(labels={"app": "job"})
+    api = FakeKubeApi(
+        namespaces=[namespace("ops")],
+        cronjobs={"ops": [cj]},
+        services={"ops": [service("job", "ops", {"app": "job"})]},
+    )
+    inv = collect_inventory(api, Settings())
+    assert _facts_of(inv, "ops", "CronJob", "job").exposure.level == "cluster"
+
+
+def test_template_without_labels_defaults_to_empty():
+    api = FakeKubeApi(namespaces=[namespace("ops")], deployments={"ops": [deployment("d", "ops", "nginx:1", 0)]})
+    assert _facts_of(collect_inventory(api, Settings()), "ops", "Deployment", "d").exposure.level == "none"
+
+
+def test_rollout_pods_merge_to_the_riskier_facts():
+    safe, risky = _web_pod("p1"), _web_pod("p2")
+    risky.spec.containers[0].security_context = V1SecurityContext(privileged=True)
+    api = FakeKubeApi(namespaces=[namespace("web")], pods={"web": [safe, risky]})
+    inv = collect_inventory(api, Settings())
+    assert _facts_of(inv, "web", "Deployment", "front").pod.privileged is True
+
+
+def test_switch_off_makes_no_new_calls():
+    api = FakeKubeApi(namespaces=[namespace("web")], pods={"web": [_web_pod()]})
+    inv = collect_inventory(api, Settings(attack_surface=False))
+    assert not NEW_CALLS & set(api.calls)
+    assert inv.fact_sources == {
+        "pod_security": "ok",
+        "services": "off",
+        "ingresses": "off",
+        "httproutes": "off",
+        "network_policies": "off",
+        "service_accounts": "off",
+        "rbac": "off",
+    }
+    assert inv.warnings == []
+    facts = _facts_of(inv, "web", "Deployment", "front")
+    assert facts.exposure.level == "unknown" and facts.rights.status == "off"
+
+
+def test_forbidden_policies_in_some_namespaces_is_partial_with_one_warning():
+    api = FakeKubeApi(
+        namespaces=[namespace("a"), namespace("b"), namespace("c")],
+        pods={ns: [_web_pod("p", ns)] for ns in "abc"},
+        forbidden_resources={("networkpolicies", "a"), ("networkpolicies", "b")},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["network_policies"] == "partial"
+    assert [w.text for w in inv.warnings] == [
+        "attack-surface: cannot list networkpolicies in 2 namespaces (forbidden); their facts are unknown"
+    ]
+    assert inv.warnings[0].coverage is False
+    assert _facts_of(inv, "a", "Deployment", "front").network.ingress_isolated is None
+    assert _facts_of(inv, "c", "Deployment", "front").network.ingress_isolated is False
+
+
+def test_all_forbidden_singular_warning_and_status():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")], pods={"a": [_web_pod("p", "a")]}, forbidden_resources={("services", "a")}
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["services"] == "forbidden"
+    assert [w.text for w in inv.warnings] == [
+        "attack-surface: cannot list services in 1 namespace (forbidden); their facts are unknown"
+    ]
+    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "unknown"
+
+
+def test_httproute_crd_absent_is_absent_without_warning():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "x"})]},
+        services={"a": [service("x", "a", {"app": "x"})]},
+        missing={"list_httproutes"},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["httproutes"] == "absent"
+    assert inv.warnings == []
+    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "cluster"  # routes [], not unknown
+
+
+@pytest.mark.parametrize(
+    ("method", "source", "resource"),
+    [
+        ("list_services", "services", "services"),
+        ("list_ingresses", "ingresses", "ingresses"),
+        ("list_network_policies", "network_policies", "networkpolicies"),
+        ("list_service_accounts", "service_accounts", "serviceaccounts"),
+    ],
+)
+def test_not_found_on_a_core_list_is_an_error_not_absent(method, source, resource):
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "x"})]},
+        services={"a": [service("x", "a", {"app": "x"})]},
+        missing={method},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources[source] == "error"
+    assert [w.text for w in inv.warnings] == [
+        f"attack-surface: cannot list {resource} in 1 namespace (error); their facts are unknown"
+    ]
+    facts = _facts_of(inv, "a", "Deployment", "front")
+    if source == "services":
+        assert facts.exposure.level == "unknown"
+    if source == "network_policies":
+        assert facts.network.ingress_isolated is None
+    if source == "service_accounts":
+        assert facts.pod.automount_token is None
+
+
+def test_host_port_without_a_service_is_external():
+    p = _web_pod("p", "a")
+    p.spec.containers[0].ports = [V1ContainerPort(container_port=80, host_port=8080)]
+    inv = collect_inventory(api := FakeKubeApi(namespaces=[namespace("a")], pods={"a": [p]}), Settings())
+    assert api.calls  # the run went through
+    exposure = _facts_of(inv, "a", "Deployment", "front").exposure
+    assert (exposure.level, exposure.host_ports) == ("external", (8080,))
+
+
+def test_pod_security_source_is_error_when_every_workload_failed(monkeypatch):
+    def broken(*_args):
+        raise KeyError("boom")
+
+    monkeypatch.setattr(fact_builders, "network", broken)
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [_web_pod("p", "a")]})
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["pod_security"] == "error"
+
+
+def test_a_failing_fact_builder_never_fails_the_scan(monkeypatch, caplog):
+    real = fact_builders.network
+
+    def flaky(labels, policies):
+        if labels.get("app") == "bad":
+            raise KeyError("boom")
+        return real(labels, policies)
+
+    monkeypatch.setattr(fact_builders, "network", flaky)
+    bad = [pod(f"b{i}", "a", owner=("ReplicaSet", "bad-5d9"), labels={"app": "bad", "pod-template-hash": "5d9"})
+           for i in range(2)]  # fmt: skip
+    cj = cronjob("job", "a", "busybox:1")
+    cj.spec.job_template.spec.template.metadata = V1ObjectMeta(labels={"app": "bad"})
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "good"}), *bad]},
+        cronjobs={"a": [cj]},
+    )
+    with caplog.at_level("DEBUG", logger="kubedelos.kube.inventory"):
+        inv = collect_inventory(api, Settings())
+    assert [(w.text, w.coverage) for w in inv.warnings] == [
+        ("attack-surface: could not derive facts for 2 workload(s); their facts are unknown", False)
+    ]
+    assert "a/Deployment/bad" in caplog.text and "KeyError" in caplog.text
+    assert inv.fact_sources["pod_security"] == "partial"
+    good = _facts_of(inv, "a", "Deployment", "front")
+    assert good.network.ingress_isolated is False and good.rights.status == "ok"
+    for kind, name in (("Deployment", "bad"), ("CronJob", "job")):
+        f = _facts_of(inv, "a", kind, name)
+        assert f.exposure.level == "unknown"
+        assert (f.network.ingress_isolated, f.network.egress_isolated) == (None, None)
+        assert f.rights.status == "unknown"
+        assert (f.pod.runs_as_root, f.pod.automount_token) == (None, None)
+        assert f.pod.privileged and f.pod.allow_privilege_escalation and not f.pod.read_only_root_fs
+        assert f.pod.host_network and f.pod.host_pid and f.pod.host_ipc
+
+
+def test_forbidden_httproutes_keep_exposure_unknown_and_warn():
+    api = FakeKubeApi(
+        namespaces=[namespace("a"), namespace("b")],
+        pods={"a": [_web_pod("p", "a", labels={"app": "x"})]},
+        services={"a": [service("x", "a", {"app": "x"})]},
+        forbidden_resources={("httproutes", "b")},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["httproutes"] == "partial"
+    assert [w.text for w in inv.warnings] == [
+        "attack-surface: cannot list httproutes in 1 namespace (forbidden); their facts are unknown"
+    ]
+    assert _facts_of(inv, "a", "Deployment", "front").exposure.level == "unknown"
+
+
+def test_transport_error_on_a_list_is_an_error_not_a_crash():
+    class Flaky(FakeKubeApi):
+        def list_ingresses(self, ns):
+            raise urllib3.exceptions.ProtocolError("reset")
+
+    api = Flaky(namespaces=[namespace("a")], pods={"a": [_web_pod("p", "a")]})
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["ingresses"] == "error"
+    assert "(error)" in inv.warnings[0].text
+
+
+def test_partial_rbac_warns_once():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a")]},
+        forbidden_resources={("roles", "*")},
+    )
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["rbac"] == "partial"
+    assert [w.text for w in inv.warnings] == [
+        "attack-surface: cannot fully list roles and bindings (partial); service account rights are partial"
+    ]
+
+
+def test_forbidden_rbac_warns_unknown():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        pods={"a": [_web_pod("p", "a")]},
+        forbidden_resources={("roles", "*"), ("roles", "a"), ("rolebindings", "*"), ("rolebindings", "a"),
+                             ("clusterroles", "*"), ("clusterrolebindings", "*")},
+    )  # fmt: skip
+    inv = collect_inventory(api, Settings())
+    assert inv.fact_sources["rbac"] == "forbidden"
+    assert inv.warnings[0].text.endswith("(forbidden); service account rights are unknown")
+
+
+def test_collect_still_returns_two_values():
+    api = FakeKubeApi(namespaces=[namespace("web")], pods={"web": [_web_pod()]})
+    items, warnings = collect(api, Settings())
+    assert len(items) == 1 and warnings == []
+    assert isinstance(next(iter(items[0].facts)), Workload)

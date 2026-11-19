@@ -1,7 +1,22 @@
+import json
+
 import pytest
 
 from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import Finding, ImageRef, Severity, is_digest, is_valid_ref, registry_host
+from kubedelos.models import (
+    Exposure,
+    Finding,
+    ImageRef,
+    Network,
+    PodSecurity,
+    Rights,
+    Severity,
+    Workload,
+    WorkloadFacts,
+    is_digest,
+    is_valid_ref,
+    registry_host,
+)
 
 D = "sha256:" + "a" * 64
 
@@ -77,3 +92,34 @@ def test_imageref_cache_key_digest_then_image_id_then_none():
     assert local.cache_key == "image-id@" + image_id
     assert local.key == "nginx:1.25"  # dedupe and storage keep the ref
     assert ImageRef(ref="nginx:1.25", repo="nginx", tag="1.25").cache_key is None
+
+
+def _facts(**rights):
+    return WorkloadFacts(
+        pod=PodSecurity(
+            privileged=True, allow_privilege_escalation=True, runs_as_root=None, read_only_root_fs=False,
+            host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=True,
+        ),
+        exposure=Exposure(level="unknown"),
+        network=Network(ingress_isolated=None, egress_isolated=None),
+        rights=Rights(status="off", **rights),
+    )  # fmt: skip
+
+
+def test_workload_facts_round_trip_and_version():
+    facts = _facts()
+    data = json.loads(facts.model_dump_json())
+    assert data["v"] == 1
+    assert WorkloadFacts.model_validate_json(facts.model_dump_json()) == facts
+
+
+@pytest.mark.parametrize("scope", [None, "cluster", ("a", "b")])
+def test_rights_secret_scope_round_trips_through_json(scope):
+    facts = _facts(reads_secrets=True, reads_secrets_scope=scope)
+    assert WorkloadFacts.model_validate_json(facts.model_dump_json()) == facts
+
+
+def test_inventory_item_facts_do_not_change_workload_equality():
+    w = Workload(namespace="web", kind="Deployment", name="web", container="app")
+    assert w == Workload(namespace="web", kind="Deployment", name="web", container="app")
+    assert hash(w) == hash(Workload(namespace="web", kind="Deployment", name="web", container="app"))

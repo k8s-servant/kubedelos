@@ -75,6 +75,9 @@ def registry_host(image: ImageRef) -> str:
     return image.repo.split("/", 1)[0]
 
 
+Tri = bool | None  # None means unknown
+
+
 class Workload(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -86,11 +89,100 @@ class Workload(BaseModel):
     team: str | None = None
 
 
+class HostPath(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    path: str
+    read_only: bool
+
+
+class PodSecurity(BaseModel):
+    """What a workload's pod spec lets its containers do on the node; None means the spec did not say."""
+
+    model_config = ConfigDict(frozen=True)
+
+    privileged: bool
+    allow_privilege_escalation: bool
+    runs_as_root: Tri
+    read_only_root_fs: bool
+    added_capabilities: tuple[str, ...] = ()
+    host_network: bool
+    host_pid: bool
+    host_ipc: bool
+    host_path_volumes: tuple[HostPath, ...] = ()
+    service_account: str
+    automount_token: Tri
+    secret_refs: tuple[str, ...] = ()  # names only, never contents
+
+
+class ExposedService(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    type: str
+    internal_lb: bool = False
+
+
+class Exposure(BaseModel):
+    """How far the workload is reachable from outside its pod."""
+
+    model_config = ConfigDict(frozen=True)
+
+    level: Literal["external", "cluster", "none", "unknown"]
+    services: tuple[ExposedService, ...] = ()
+    external_ips: tuple[str, ...] = ()
+    hosts: tuple[str, ...] = ()
+    host_ports: tuple[int, ...] = ()  # the container's hostPorts: reachable on the node's IP
+
+
+class Network(BaseModel):
+    """Whether NetworkPolicies isolate the workload's pods; None means unknown."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ingress_isolated: Tri
+    egress_isolated: Tri
+    ingress_policies: tuple[str, ...] = ()
+    egress_policies: tuple[str, ...] = ()
+
+
+class Rights(BaseModel):
+    """What the workload's service account may do through RBAC; ``status`` says how far that could be worked out."""
+
+    model_config = ConfigDict(frozen=True)
+
+    status: Literal["ok", "partial", "unknown", "off"]
+    cluster_admin: bool = False
+    reads_secrets: bool = False
+    reads_secrets_scope: Literal["cluster"] | tuple[str, ...] | None = None  # "cluster" or the namespaces
+    creates_workloads: bool = False
+    pod_exec: bool = False
+    escalates: bool = False
+    wildcard: bool = False
+    bindings: tuple[str, ...] = ()  # "ClusterRoleBinding/<name>" or "RoleBinding/<ns>/<name>"
+
+
+class WorkloadFacts(BaseModel):
+    """The attack-surface facts of one workload, stored as versioned JSON (``v``) on its workload row."""
+
+    model_config = ConfigDict(frozen=True)
+
+    v: Literal[1] = 1
+    pod: PodSecurity
+    exposure: Exposure
+    network: Network
+    rights: Rights
+
+
+FactSources = dict[str, str]  # fact source name -> status, per run
+
+
 class InventoryItem(BaseModel):
     image: ImageRef
     platform: str  # e.g. "linux/amd64"
     workloads: list[Workload] = []
     pull_secrets: list[tuple[str, str]] = []  # (namespace, name) of the imagePullSecrets pods name, first seen first
+    facts: dict[Workload, WorkloadFacts] = {}
 
 
 class Finding(BaseModel):
