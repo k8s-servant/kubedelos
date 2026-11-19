@@ -388,7 +388,7 @@ def test_page_zero_is_page_one(world):
     assert tools.list_findings(conn, db, NOW, page=-4)["page"] == 1
 
 
-def _facts(*, level="none", privileged=False, host_pid=False, hostpath=None, caps=(), rights=None):
+def _facts(*, level="none", privileged=False, host_pid=False, hostpath=None, caps=(), rights=None, rights_status="ok"):
     base = make_facts(level=level)
     pod = base.pod.model_copy(
         update={
@@ -398,7 +398,7 @@ def _facts(*, level="none", privileged=False, host_pid=False, hostpath=None, cap
             "host_path_volumes": (HostPath(path="/data", read_only=hostpath),) if hostpath is not None else (),
         }
     )
-    return base.model_copy(update={"pod": pod, "rights": Rights(status="ok", **(rights or {}))})
+    return base.model_copy(update={"pod": pod, "rights": Rights(status=rights_status, **(rights or {}))})
 
 
 def test_host_access_rules():
@@ -410,6 +410,9 @@ def test_host_access_rules():
     assert tools.host_access(_facts(caps=["CHOWN", "SYS_ADMIN"]))
     assert tools.host_access(_facts(caps=["ALL"]))
     assert not tools.host_access(_facts(caps=["CHOWN"]))
+    for cap in ("cap_sys_admin", "CAP_SYS_MODULE", "bpf"):
+        assert tools.host_access(_facts(caps=[cap])), cap
+    assert not tools.host_access(_facts(caps=["NET_BIND_SERVICE"]))
 
 
 def _surface_world(repo):
@@ -437,7 +440,18 @@ def test_attack_surface_filters_and_order(world):
     assert result["facts_collected"] is True and result["total"] == 4 and result["truncated"] is False
     assert result["cluster"] == "my-cluster" and result["run"]["number"] == 1
     first = result["items"][0]
-    assert set(first) == {"namespace", "kind", "name", "container", "image", "critical", "high", "host_access", "facts"}
+    assert set(first) == {
+        "namespace",
+        "kind",
+        "name",
+        "container",
+        "image",
+        "critical",
+        "high",
+        "host_access",
+        "rights_status",
+        "facts",
+    }
     assert (first["critical"], first["high"], first["host_access"], first["image"]) == (1, 0, True, "img-a")
     assert result["items"][2]["host_access"] is True and result["items"][2]["high"] == 2
     assert result["items"][3]["facts"] is None and result["items"][3]["host_access"] is None
@@ -510,6 +524,21 @@ def test_attack_surface_unknown_exposure_is_not_none(world):
     add_workloads(repo, run_id, "img-a", [unk], [finding("CVE-1", "HIGH")], facts={unk: _facts(level="unknown")})
     assert tools.attack_surface(conn, db, NOW, exposure=["none"])["items"] == []
     assert _names(tools.attack_surface(conn, db, NOW, exposure=["unknown"])) == [("web", "unk")]
+
+
+def test_attack_surface_undetermined_rights_match_the_rights_filter(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    unk, ok, nof = _wl("n", "unk"), _wl("n", "ok"), _wl("n", "nof")
+    add_workloads(repo, run_id, "img-a", [unk, ok, nof], [finding("CVE-1", "HIGH")], facts={
+        unk: _facts(rights_status="unknown"),
+        ok: _facts(rights_status="ok"),
+    })  # fmt: skip
+    result = tools.attack_surface(conn, db, NOW, rights=["reads_secrets"])
+    assert _names(result) == [("n", "unk")]
+    assert result["items"][0]["rights_status"] == "unknown"
+    by_name = {i["name"]: i["rights_status"] for i in tools.attack_surface(conn, db, NOW)["items"]}
+    assert by_name == {"unk": "unknown", "ok": "ok", "nof": None}
 
 
 def _two_runs(repo):

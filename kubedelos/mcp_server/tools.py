@@ -325,7 +325,10 @@ def _finding_item(row: sqlite3.Row) -> dict:
     return item
 
 
-_HOST_CAPABILITIES = frozenset({"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "ALL"})
+# Capabilities that allow escaping the container or controlling the node.
+_HOST_CAPABILITIES = frozenset(
+    {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO", "DAC_READ_SEARCH", "BPF", "ALL"}
+)
 _EXPOSURE_RANK = {"external": 0, "unknown": 1, "cluster": 2, "none": 3}
 _NO_FACTS_RANK = 4
 
@@ -339,7 +342,7 @@ def host_access(facts: WorkloadFacts) -> bool:
         or pod.host_network
         or pod.host_ipc
         or any(not volume.read_only for volume in pod.host_path_volumes)
-        or any(cap in _HOST_CAPABILITIES for cap in pod.added_capabilities)
+        or any(cap.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for cap in pod.added_capabilities)
     )
 
 
@@ -359,7 +362,8 @@ def _matches_facts(
         (exposure is None or facts.exposure.level in exposure)
         and (privileged is None or facts.pod.privileged is privileged)
         and (host is None or host_access(facts) is host)
-        and (not rights or any(getattr(facts.rights, flag) for flag in rights))
+        # Rights that could not be worked out (not "ok") might include the one asked for, so they match.
+        and (not rights or facts.rights.status != "ok" or any(getattr(facts.rights, flag) for flag in rights))
     )
 
 
@@ -413,6 +417,7 @@ def attack_surface(
                 "critical": row.counts["CRITICAL"],
                 "high": row.counts["HIGH"],
                 "host_access": host_access(row.facts) if row.facts else None,
+                "rights_status": row.facts.rights.status if row.facts else None,
                 "facts": _facts_payload(row.facts),
             }
             for row in page

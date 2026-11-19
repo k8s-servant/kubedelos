@@ -170,7 +170,8 @@ def build_server(db: Db) -> MCPServer:
             "The run's workload containers ranked by how reachable and how powerful they are: exposure first "
             "(external, unknown, cluster, none, then no facts), then Critical and High counts. Filters combine with "
             "AND: exposure levels, privileged, host (host namespaces, writable hostPath or SYS_ADMIN-class "
-            "capabilities), rights (any listed ServiceAccount right) and min_severity. A workload without facts never "
+            "capabilities), rights (any listed ServiceAccount right; "
+            "workloads whose rights are undetermined are included, see rights_status) and min_severity. A workload without facts never "
             "matches a facts filter; facts_collected says whether the run has any. At most 100 items; total and "
             "truncated say whether the list was cut, and offset pages on. " + UNTRUSTED
         ),
