@@ -35,7 +35,10 @@ running an exploit, and never suggest changing the cluster from here.
 
 1. Call attack_surface(exposure=["external", "unknown"], min_severity="HIGH"{cluster_kw}) to list the reachable
    workloads with Critical or High findings.
-2. For the worst few, call workload(namespace, name{cluster_kw}) for their findings and facts.
+2. That call never lists a workload without facts, so also call attack_surface(min_severity="HIGH"{cluster_kw}) with
+   no facts filter. Always do this, and above all when facts_collected is false (no facts were collected for the
+   run). Every row whose facts is null goes in the "unknown" section: treat it as possibly exposed.
+3. For the worst few, call workload(namespace, name{cluster_kw}) for their findings and facts.
 """
 
 ATTACK_PATHS_WORKLOAD = """\

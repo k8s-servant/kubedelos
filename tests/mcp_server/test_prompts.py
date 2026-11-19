@@ -1,3 +1,6 @@
+import ast
+import inspect
+
 import pytest
 from mcp import Client
 
@@ -24,11 +27,38 @@ def test_prompts_name_their_tools():
     _in_order(prompts.fix_first_briefing(), ["run_summary", "fix_first", "find_vulnerability"])
     _in_order(
         prompts.attack_paths(),
-        ["attack_surface", "ingress_isolated", "host access", "ServiceAccount", "secret_refs", '"unknown" section'],
+        [
+            'attack_surface(exposure=["external", "unknown"], min_severity="HIGH")',
+            'attack_surface(min_severity="HIGH")',
+            "facts_collected",
+            "ingress_isolated",
+            "host access",
+            "ServiceAccount",
+            "secret_refs",
+            'separate "unknown" section',
+        ],
     )
     _in_order(prompts.explain_cve("CVE-2024-1"), ["find_vulnerability", "workload"])
     for text in (prompts.fix_first_briefing(), prompts.attack_paths(), prompts.explain_cve("CVE-2024-1")):
         assert text.rstrip().endswith(CLOSING)
+
+
+def test_attack_paths_also_lists_workloads_without_facts():
+    text = prompts.attack_paths(cluster="my-cluster")
+    assert 'attack_surface(min_severity="HIGH", cluster="my-cluster")' in text
+    assert "facts_collected" in text and "facts is null" in text
+
+
+def test_prompts_do_not_import_the_store_or_the_tools():
+    tree = ast.parse(inspect.getsource(prompts))
+    imported = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            imported |= {alias.name for alias in node.names}
+        elif isinstance(node, ast.ImportFrom):
+            imported.add(node.module or "")
+            imported |= {f"{node.module}.{alias.name}" for alias in node.names}
+    assert not {m for m in imported if m.startswith("kubedelos.store") or m == "kubedelos.mcp_server.tools"}
 
 
 def test_attack_paths_with_workload_uses_workload_tool():
