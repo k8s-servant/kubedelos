@@ -11,6 +11,7 @@ Matching follows Kubernetes: verbs, resources and apiGroups compare case-sensiti
 from dataclasses import dataclass, field
 
 from kubernetes.client.rest import ApiException
+from urllib3.exceptions import HTTPError
 
 from kubedelos.kube.client import KubeApi
 from kubedelos.models import Rights
@@ -83,6 +84,7 @@ class _Acc:
             self.creates_workloads = True
         if _verbs(rule, {"create", "get"}) and _resources(rule, _EXEC):
             self.pod_exec = True
+        # Verb ``*`` on any resource counts as escalate/bind/impersonate on purpose: it overstates, never understates.
         if _verbs(rule, _ESCALATE_VERBS) or (_verbs(rule, {"create", "update", "patch"}) and _resources(rule, _RBAC)):
             self.escalates = True
 
@@ -103,10 +105,14 @@ class _Acc:
 
 
 def _subject_matches(subject, ns: str, service_account: str) -> bool:
+    """Whether a binding subject names the ServiceAccount: directly, by its username
+    ``system:serviceaccount:<ns>:<name>`` as a User, or through a group every ServiceAccount in ``ns`` is in."""
     if subject.kind == "ServiceAccount":
         return subject.name == service_account and bool(subject.namespace) and subject.namespace == ns
     if subject.kind == "Group":
         return subject.name in ("system:serviceaccounts", f"system:serviceaccounts:{ns}", "system:authenticated")
+    if subject.kind == "User":
+        return subject.name == f"system:serviceaccount:{ns}:{service_account}"
     return False
 
 
@@ -115,7 +121,8 @@ def _applies(binding, ns: str, service_account: str) -> bool:
 
 
 class _Lister:
-    """Calls list methods, remembering whether any succeeded and whether any failure was other than 403."""
+    """Calls list methods, remembering whether any succeeded and whether any failure was other than 403. A transport
+    error (urllib3 ``HTTPError``, such as a connection reset) counts as a non-403 failure."""
 
     def __init__(self) -> None:
         self.read = False
@@ -128,6 +135,9 @@ class _Lister:
         except ApiException as exc:
             self.failed = True
             self.errored = self.errored or exc.status != 403
+            return None
+        except HTTPError:
+            self.failed = self.errored = True
             return None
         self.read = True
         return objs

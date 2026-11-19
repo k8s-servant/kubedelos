@@ -1,5 +1,6 @@
 import pytest
 from kubernetes.client import V1PolicyRule
+from urllib3.exceptions import ProtocolError
 
 from kubedelos.kube.rbac import RbacIndex
 from kubedelos.models import Rights
@@ -39,10 +40,17 @@ def test_cluster_admin_binding():
 
 def test_cluster_admin_binding_unresolved_still_counts():
     api = FakeKubeApi(cluster_role_bindings=[cluster_role_binding("admins", "cluster-admin", SA)])
-    rights = _rights(api)
-    assert rights.status == "ok"
-    assert rights.cluster_admin and rights.escalates and rights.pod_exec and rights.wildcard
-    assert rights.reads_secrets_scope == "cluster"
+    assert _rights(api) == Rights(
+        status="ok",
+        cluster_admin=True,
+        reads_secrets=True,
+        reads_secrets_scope="cluster",
+        creates_workloads=True,
+        pod_exec=True,
+        escalates=True,
+        wildcard=True,
+        bindings=("ClusterRoleBinding/admins",),
+    )
 
 
 def test_cluster_wide_star_rule_is_cluster_admin():
@@ -77,12 +85,26 @@ def test_other_subjects_do_not_apply():
                     ("ServiceAccount", "other", "web"),
                     ("ServiceAccount", "sa", None),  # no namespace never matches
                     ("User", "sa", None),
+                    ("User", "system:serviceaccount:ops:sa", None),
+                    ("User", "system:serviceaccount:web:other", None),
                 ],
             )
         ],
     )
     rights = _rights(api)
     assert rights == Rights(status="ok")
+
+
+def test_serviceaccount_username_as_user_subject_applies():
+    api = FakeKubeApi(
+        roles={"web": [role("reader", "web", SECRET_READER)]},
+        role_bindings={
+            "web": [role_binding("read", "web", "Role", "reader", [("User", "system:serviceaccount:web:sa", None)])]
+        },
+    )
+    rights = _rights(api)
+    assert rights.reads_secrets and rights.reads_secrets_scope == ("web",)
+    assert rights.bindings == ("RoleBinding/web/read",)
 
 
 def test_rolebinding_to_clusterrole_is_namespaced():
@@ -182,6 +204,7 @@ def test_creates_workloads_ignores_api_group():
         ([([""], ["pods/exec"], ["create"], None)], True, False),
         ([([""], ["pods/attach"], ["get"], None)], True, False),
         ([([""], ["pods/*"], ["create"], None)], True, False),
+        ([([""], ["*/exec"], ["create"], None)], True, False),
         ([([""], ["pods"], ["create"], None)], False, False),
         ([(["rbac.authorization.k8s.io"], ["clusterroles"], ["bind"], None)], False, True),
         ([(["rbac.authorization.k8s.io"], ["rolebindings"], ["patch"], None)], False, True),
@@ -307,6 +330,19 @@ def test_nothing_listable_is_unknown():
 def test_server_error_is_error_not_forbidden():
     # The fake answers 404 for methods in ``missing``: any non-403 ApiException stands for a server error here.
     api = FakeKubeApi(missing={"list_cluster_roles", "list_cluster_role_bindings", "list_roles", "list_role_bindings"})
+    index, status = RbacIndex.load(api, ["web"])
+    assert status == "error"
+    assert index.rights("web", "sa").status == "unknown"
+
+
+def test_transport_error_is_error_not_an_exception():
+    api = FakeKubeApi()
+
+    def reset(*_args):
+        raise ProtocolError("Connection aborted.", ConnectionResetError())
+
+    for method in ("list_cluster_roles", "list_cluster_role_bindings", "list_roles", "list_role_bindings"):
+        setattr(api, method, reset)
     index, status = RbacIndex.load(api, ["web"])
     assert status == "error"
     assert index.rights("web", "sa").status == "unknown"
