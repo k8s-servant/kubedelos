@@ -184,13 +184,15 @@ def httproute(
     name: str,
     ns: str,
     hostnames: list[str] | None = None,
-    backends: list[tuple] | None = None,  # (name, kind="Service", group="")
+    backends: list[tuple] | None = None,  # (name, kind="Service", group="", namespace=None); None omits the field
 ) -> dict:
-    """An HTTPRoute as the CustomObjectsApi returns it: a plain dict."""
-    refs = [
-        {"name": b[0], "kind": b[1] if len(b) > 1 else "Service", "group": b[2] if len(b) > 2 else ""}
-        for b in backends or []
-    ]
+    """An HTTPRoute as the CustomObjectsApi returns it: a plain dict. A kind, group or namespace of None is left
+    out of the backend ref, as real routes usually do (the API defaults them)."""
+    refs = []
+    for name_, *rest in backends or []:
+        values = {"kind": "Service", "group": "", "namespace": None}  # what a short tuple means
+        values.update(zip(("kind", "group", "namespace"), rest, strict=False))
+        refs.append({"name": name_, **{k: v for k, v in values.items() if v is not None}})
     return {
         "metadata": {"name": name, "namespace": ns},
         "spec": {"hostnames": hostnames or [], "rules": [{"backendRefs": refs}]},

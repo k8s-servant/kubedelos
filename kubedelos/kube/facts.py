@@ -1,7 +1,8 @@
 """Attack-surface facts derived from Kubernetes objects the inventory has already listed.
 
-The facts say what a workload's pod spec lets it do on the node (``pod_security``), and ``merge`` folds the
-facts of several pods of one workload container into the riskiest view. Everything here is a pure function of
+The facts say what a workload's pod spec lets it do on the node (``pod_security``), how far it is reachable
+(``exposure``) and whether NetworkPolicies isolate it (``network``), and ``merge`` folds the facts of several pods
+of one workload container into the riskiest view. Everything here is a pure function of
 objects already in hand: nothing calls the cluster, and no Secret is ever read (only the names that specs refer to).
 """
 
@@ -16,6 +17,20 @@ from kubedelos.models import (
     WorkloadFacts,
 )
 
+# Service annotations that make a LoadBalancer internal (key -> value, compared without regard to case). Checked
+# against the vendors' docs:
+#   AKS:  https://learn.microsoft.com/en-us/azure/aks/internal-lb
+#   AWS:  https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/service/annotations/
+#         (aws-load-balancer-internal is deprecated there but still honoured; the in-tree AWS cloud provider uses it)
+#   GKE:  https://docs.cloud.google.com/kubernetes-engine/docs/how-to/internal-load-balancing
+#         (networking.gke.io/load-balancer-type is current; cloud.google.com/load-balancer-type is the legacy key)
+INTERNAL_LB_ANNOTATIONS = {
+    "service.beta.kubernetes.io/azure-load-balancer-internal": "true",
+    "service.beta.kubernetes.io/aws-load-balancer-internal": "true",
+    "service.beta.kubernetes.io/aws-load-balancer-scheme": "internal",
+    "networking.gke.io/load-balancer-type": "internal",
+    "cloud.google.com/load-balancer-type": "internal",
+}
 _SERVICE_RISK = {"LoadBalancer": 2, "NodePort": 2, "ExternalName": 1}
 _EXPOSURE_RANK = {"external": 3, "unknown": 2, "cluster": 1, "none": 0}
 _STATUS_RANK = {"unknown": 3, "partial": 2, "ok": 1, "off": 0}
@@ -101,6 +116,130 @@ def _automount(pod_value: bool | None, service_account: str, sa_automount: dict[
         return None
     value = sa_automount.get(service_account)
     return True if value is None else value
+
+
+def selector_matches(selector, labels: dict[str, str]) -> bool:
+    """Whether a ``V1LabelSelector`` selects ``labels``; an empty (or missing) selector selects everything."""
+    if selector is None:
+        return True
+    if any(labels.get(k) != v for k, v in (selector.match_labels or {}).items()):
+        return False
+    return all(_expression_matches(e, labels) for e in selector.match_expressions or [])
+
+
+def _expression_matches(expression, labels: dict[str, str]) -> bool:
+    present = expression.key in labels
+    match expression.operator:
+        case "In":
+            return present and labels[expression.key] in (expression.values or [])
+        case "NotIn":
+            return not present or labels[expression.key] not in (expression.values or [])
+        case "Exists":
+            return present
+        case "DoesNotExist":
+            return not present
+    return False  # an operator Kubernetes would have rejected
+
+
+def exposure(
+    labels: dict[str, str], services: list | None, ingresses: list | None, httproutes: list[dict] | None
+) -> Exposure:
+    """How far a pod with ``labels`` is reachable. ``services`` None means they could not be listed (unknown);
+    None ingresses or HTTPRoutes are judged on what was read. All objects are those of the pod's namespace."""
+    if services is None:
+        return Exposure(level="unknown")
+    matched = [s for s in services if _service_selects(s, labels)]
+    names = {s.metadata.name for s in matched}
+    hosts: set[str] = set()
+    routed = False
+    for ing in ingresses or []:
+        found = _ingress_backends(ing)
+        if found & names:
+            routed = True
+            hosts.update(r.host for r in ing.spec.rules or [] if r.host)
+    for route in httproutes or []:
+        if _route_backends(route) & names:
+            routed = True
+            hosts.update(route.get("spec", {}).get("hostnames") or [])
+    exposed = [
+        ExposedService(name=s.metadata.name, type=s.spec.type or "ClusterIP", internal_lb=_internal_lb(s))
+        for s in matched
+    ]
+    external_ips = sorted({ip for s in matched for ip in s.spec.external_ips or []})
+    if routed or external_ips or any(_publicly_reachable(e) for e in exposed):
+        level = "external"
+    else:
+        level = "cluster" if matched else "none"
+    return Exposure(
+        level=level,
+        services=tuple(sorted(exposed, key=lambda e: e.name)),
+        external_ips=tuple(external_ips),
+        hosts=tuple(sorted(hosts)),
+    )
+
+
+def _service_selects(service, labels: dict[str, str]) -> bool:
+    spec = service.spec
+    if spec.type == "ExternalName" or not spec.selector:
+        return False
+    return all(labels.get(k) == v for k, v in spec.selector.items())
+
+
+def _internal_lb(service) -> bool:
+    if service.spec.type != "LoadBalancer":
+        return False
+    annotations = service.metadata.annotations or {}
+    return any(str(annotations.get(k, "")).lower() == v for k, v in INTERNAL_LB_ANNOTATIONS.items())
+
+
+def _publicly_reachable(e: ExposedService) -> bool:
+    return e.type == "NodePort" or (e.type == "LoadBalancer" and not e.internal_lb)
+
+
+def _ingress_backends(ing) -> set[str]:
+    spec = ing.spec
+    backends = [spec.default_backend] if spec.default_backend else []
+    for rule in spec.rules or []:
+        backends += [p.backend for p in (rule.http.paths if rule.http else None) or []]
+    return {b.service.name for b in backends if b and b.service}
+
+
+def _route_backends(route: dict) -> set[str]:
+    """Names of the same-namespace Services an HTTPRoute sends to; kind and group default to Service and ``""``.
+    A ref into another namespace needs a ReferenceGrant, which is not read, so it does not count."""
+    namespace = (route.get("metadata") or {}).get("namespace")
+    names: set[str] = set()
+    for rule in (route.get("spec") or {}).get("rules") or []:
+        for ref in rule.get("backendRefs") or []:
+            if ref.get("kind", "Service") != "Service" or ref.get("group", "") != "":
+                continue
+            if ref.get("namespace", namespace) != namespace:
+                continue
+            names.add(ref.get("name"))
+    return names
+
+
+def network(labels: dict[str, str], policies: list | None) -> Network:
+    """Whether NetworkPolicies isolate a pod with ``labels``; None ``policies`` means they could not be listed."""
+    if policies is None:
+        return Network(ingress_isolated=None, egress_isolated=None)
+    ingress: list[str] = []
+    egress: list[str] = []
+    for policy in policies:
+        spec = policy.spec
+        if not selector_matches(spec.pod_selector, labels):
+            continue
+        types = spec.policy_types or ["Ingress", *(["Egress"] if spec.egress else [])]
+        if "Ingress" in types:
+            ingress.append(policy.metadata.name)
+        if "Egress" in types:
+            egress.append(policy.metadata.name)
+    return Network(
+        ingress_isolated=bool(ingress),
+        egress_isolated=bool(egress),
+        ingress_policies=tuple(sorted(ingress)),
+        egress_policies=tuple(sorted(egress)),
+    )
 
 
 def _tri_riskier(a: Tri, b: Tri) -> Tri:
