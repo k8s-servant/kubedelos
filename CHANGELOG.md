@@ -6,7 +6,8 @@
 
 - `kubedelos mcp`: a read-only MCP server over stdio, so your own agent can query the local scan database. It opens
   the database read-only, never reaches the cluster and calls no LLM. Tools so far: `list_clusters`, `run_summary`, `fix_first`,
-  `find_vulnerability`, `workload`, `list_findings`, `attack_surface`, `compare_runs` and `accepted_risks`.
+  `find_vulnerability`, `workload`, `list_findings`, `attack_surface`, `compare_runs` and `accepted_risks`. Prompts: `fix_first_briefing`, `attack_paths` and `explain_cve`, fixed instructions that
+  never contain scan data. `attack_surface` reports `host_access` as null for a workload without facts.
 - Attack-surface facts: each scan records, per workload container, its pod security settings, exposure (hostPorts,
   Services, Ingresses, Gateway API HTTPRoutes), NetworkPolicy isolation and ServiceAccount RBAC rights as versioned
   JSON on the workload, plus the status of each source per run. Anything it could not list is reported as unknown or
