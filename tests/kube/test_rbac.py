@@ -83,7 +83,7 @@ def test_other_subjects_do_not_apply():
                     ("Group", "system:serviceaccounts:ops", None),
                     ("ServiceAccount", "sa", "ops"),
                     ("ServiceAccount", "other", "web"),
-                    ("ServiceAccount", "sa", None),  # no namespace never matches
+                    ("ServiceAccount", "sa", None),  # in a ClusterRoleBinding, no namespace never matches
                     ("User", "sa", None),
                     ("User", "system:serviceaccount:ops:sa", None),
                     ("User", "system:serviceaccount:web:other", None),
@@ -93,6 +93,19 @@ def test_other_subjects_do_not_apply():
     )
     rights = _rights(api)
     assert rights == Rights(status="ok")
+
+
+def test_rolebinding_serviceaccount_without_namespace_means_the_binding_namespace():
+    api = FakeKubeApi(
+        roles={"web": [role("reader", "web", SECRET_READER)], "ops": [role("reader", "ops", SECRET_READER)]},
+        role_bindings={
+            "web": [role_binding("read", "web", "Role", "reader", [("ServiceAccount", "sa", None)])],
+            "ops": [role_binding("read", "ops", "Role", "reader", [("ServiceAccount", "sa", None)])],
+        },
+    )
+    rights = _rights(api)
+    assert rights.reads_secrets and rights.reads_secrets_scope == ("web",)
+    assert rights.bindings == ("RoleBinding/web/read",)
 
 
 def test_serviceaccount_username_as_user_subject_applies():
@@ -187,6 +200,15 @@ def test_resource_names_still_count():
     )
     rights = _rights(api)
     assert rights.reads_secrets and rights.reads_secrets_scope == ("web",)
+
+
+@pytest.mark.parametrize("resource", ["replicationcontrollers", "deployments", "pods"])
+def test_creates_workloads_resources(resource):
+    api = FakeKubeApi(
+        roles={"web": [role("maker", "web", [([""], [resource], ["create"], None)])]},
+        role_bindings={"web": [role_binding("make", "web", "Role", "maker", SA)]},
+    )
+    assert _rights(api).creates_workloads
 
 
 def test_creates_workloads_ignores_api_group():

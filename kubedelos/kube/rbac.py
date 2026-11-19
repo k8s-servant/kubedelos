@@ -18,7 +18,16 @@ from kubedelos.models import Rights
 
 CLUSTER_ADMIN = "cluster-admin"
 _READ = {"get", "list", "watch", "*"}
-_WORKLOADS = {"pods", "deployments", "statefulsets", "daemonsets", "replicasets", "jobs", "cronjobs"}
+_WORKLOADS = {
+    "pods",
+    "deployments",
+    "statefulsets",
+    "daemonsets",
+    "replicasets",
+    "replicationcontrollers",
+    "jobs",
+    "cronjobs",
+}
 # Sinks: (verbs, resources) pairs, any of whose verbs (or ``*``) on any of whose resources sets the flag.
 _EXEC_SINKS = (
     ({"create", "get"}, {"pods/exec", "pods/attach"}),  # a shell in, or the stdio of, a running container
@@ -117,11 +126,15 @@ class _Acc:
         )
 
 
-def _subject_matches(subject, ns: str, service_account: str) -> bool:
+def _subject_matches(subject, ns: str, service_account: str, binding_ns: str | None) -> bool:
     """Whether a binding subject names the ServiceAccount: directly, by its username
-    ``system:serviceaccount:<ns>:<name>`` as a User, or through a group every ServiceAccount in ``ns`` is in."""
+    ``system:serviceaccount:<ns>:<name>`` as a User, or through a group every ServiceAccount in ``ns`` is in.
+    ``binding_ns`` is a RoleBinding's namespace (None for a ClusterRoleBinding): as in the Kubernetes authorizer, a
+    ServiceAccount subject without a namespace means the RoleBinding's own, and never matches in a
+    ClusterRoleBinding."""
     if subject.kind == "ServiceAccount":
-        return subject.name == service_account and bool(subject.namespace) and subject.namespace == ns
+        subject_ns = subject.namespace or binding_ns
+        return subject.name == service_account and bool(subject_ns) and subject_ns == ns
     if subject.kind == "Group":
         return subject.name in ("system:serviceaccounts", f"system:serviceaccounts:{ns}", "system:authenticated")
     if subject.kind == "User":
@@ -129,8 +142,8 @@ def _subject_matches(subject, ns: str, service_account: str) -> bool:
     return False
 
 
-def _applies(binding, ns: str, service_account: str) -> bool:
-    return any(_subject_matches(s, ns, service_account) for s in binding.subjects or [])
+def _applies(binding, ns: str, service_account: str, binding_ns: str | None = None) -> bool:
+    return any(_subject_matches(s, ns, service_account, binding_ns) for s in binding.subjects or [])
 
 
 class _Lister:
@@ -212,9 +225,9 @@ class RbacIndex:
                 continue
             self._grant(acc, self._cluster_roles.get(name), None)
         for rb in self._role_bindings:
-            if not _applies(rb, ns, service_account):
-                continue
             rb_ns = rb.metadata.namespace
+            if not _applies(rb, ns, service_account, rb_ns):
+                continue
             bindings.append(f"RoleBinding/{rb_ns}/{rb.metadata.name}")
             ref = rb.role_ref
             rules = (
