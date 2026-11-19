@@ -4,6 +4,11 @@
 
 ### Features
 
+- Attack-surface facts: each scan records, per workload container, its pod security settings, exposure (Services,
+  Ingresses, Gateway API HTTPRoutes), NetworkPolicy isolation and ServiceAccount RBAC rights as versioned JSON on
+  the workload, plus the status of each source per run. Anything it could not list is reported as unknown or partial,
+  never as safe, and no Secret is read. `KUBEDELOS_ATTACK_SURFACE=false` turns it off; the chart sets it to `false`
+  until it grants the RBAC. See [Attack-surface facts](docs/attack-surface.md).
 - Settings page: a Registries card (cloud identity and the hosts it covers, mounted Docker config Secret names,
   pull-secret namespaces) and, in `kubedelos serve`, a "Test an image" form that scans one image with the cloud identity
   and the mounted Docker configs (not pod pull secrets: there is no pod; an auth error on a host known only from the
