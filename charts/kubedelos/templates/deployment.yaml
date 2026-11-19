@@ -22,10 +22,12 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
       labels:
-        {{- include "kubedelos.selectorLabels" . | nindent 8 }}
-        {{- with .Values.podLabels }}
-        {{- toYaml . | nindent 8 }}
+        {{- $labels := fromYaml (include "kubedelos.selectorLabels" .) }}
+        {{- if eq .Values.cloud.provider "azure" }}
+        {{- $_ := set $labels "azure.workload.identity/use" "true" }}
         {{- end }}
+        {{- $labels = mergeOverwrite $labels (deepCopy (.Values.podLabels | default dict)) }}
+        {{- toYaml $labels | nindent 8 }}
     spec:
       serviceAccountName: {{ include "kubedelos.fullname" . }}
       automountServiceAccountToken: true # kubedelos reads the cluster through it
@@ -72,12 +74,32 @@ spec:
               mountPath: /data
             - name: tmp
               mountPath: /tmp
+            - name: secrets
+              mountPath: /run/kubedelos
+            {{- range $i, $name := .Values.registries.dockerConfigSecrets }}
+            - name: docker-config-{{ $i }}
+              mountPath: /etc/kubedelos/docker-configs/{{ $name }}
+              readOnly: true
+            {{- end }}
       volumes:
         - name: data
           persistentVolumeClaim:
             claimName: {{ include "kubedelos.claimName" . }}
         - name: tmp
           emptyDir: {}
+        - name: secrets # per-scan docker configs, held in memory and never on disk
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Mi
+        {{- range $i, $name := .Values.registries.dockerConfigSecrets }}
+        - name: docker-config-{{ $i }}
+          secret:
+            secretName: {{ $name }}
+            defaultMode: 0400
+            items:
+              - key: .dockerconfigjson
+                path: .dockerconfigjson
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

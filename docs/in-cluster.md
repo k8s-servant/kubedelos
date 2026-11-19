@@ -2,11 +2,13 @@
 
 The Helm chart installs `kubedelos serve`: one pod that serves the UI of one cluster, sweeps it on a cron schedule and
 keeps the results in SQLite on a volume. It reads the cluster through a read-only ClusterRole (`get` and `list` on
-namespaces, pods and nodes, `list` on deployments, statefulsets and cronjobs) and nothing else; it reads no Secrets.
+namespaces, pods and nodes, `list` on deployments, statefulsets and cronjobs) and nothing else. It reads no Secrets,
+unless you turn on pod pull secrets, which adds a `get`-only Role in each namespace you list (see
+[private registries](#private-registries)).
 The image bundles the pinned Trivy, so the pod downloads no scanner, only the vulnerability DBs.
 
-Registry login for private images (cloud workload identity, mounted pull secrets) is not in the chart yet. Until it is,
-a scan can read the public images and whatever the node's pod identity already lets Trivy reach.
+Without any registry setting a scan reads public images, and whatever the node's own identity lets Trivy reach. For
+private images see [Private registries](#private-registries).
 
 ## Install
 
@@ -66,7 +68,14 @@ The chart rejects keys it does not know (`values.schema.json`).
 | `persistence.storageClassName` | `""` | Empty uses the cluster default class. |
 | `persistence.existingClaim` | `""` | Use this claim instead of creating one. |
 | `resources` | 100m CPU and 512Mi memory requested, 2Gi memory limit | With `scan.parallelism` 4, the 2Gi limit can be tight for large or Java images (several Trivy processes plus the Java DB). If scans are OOM-killed, raise `resources.limits.memory` or lower `scan.parallelism`. |
-| `serviceAccount.annotations` | `{}` | |
+| `serviceAccount.annotations` | `{}` | The cloud preset's annotation is merged over these. |
+| `cloud.provider` | `none` | `azure`, `aws`, `gcp` or `none`. Annotates the ServiceAccount for that cloud's workload identity (and labels the pod on Azure). Needs the matching id below. |
+| `cloud.azure.clientId` | `""` | Client id of the managed identity. Required with `azure`. |
+| `cloud.aws.roleArn` | `""` | IAM role ARN. Required with `aws`. |
+| `cloud.gcp.serviceAccount` | `""` | Google service account email. Required with `gcp`. |
+| `registries.dockerConfigSecrets` | `[]` | Names of `kubernetes.io/dockerconfigjson` Secrets in the release namespace, mounted in order; the first match for a host wins. |
+| `registries.podPullSecrets` | `false` | Read the `imagePullSecrets` of scanned pods, in the namespaces below. |
+| `registries.podPullSecretNamespaces` | `[]` | Required when `podPullSecrets` is on, and refused when it is off. Each namespace gets a Role with `get` on `secrets`. |
 | `podAnnotations`, `podLabels`, `nodeSelector`, `tolerations`, `affinity` | empty | Passed to the pod. |
 | `networkPolicy.enabled` | `true` | Render the NetworkPolicy. |
 | `networkPolicy.ingressFrom` | `[]` | Raw NetworkPolicy `from` entries that may reach the pod. Empty admits nothing. |
@@ -81,7 +90,27 @@ The chart rejects keys it does not know (`values.schema.json`).
 | `httpRoute.annotations` | `{}` | |
 
 The pod runs as user 65532 on a read-only root filesystem, with all capabilities dropped and the `RuntimeDefault`
-seccomp profile. Only `/data` (the volume) and `/tmp` (an `emptyDir`) are written.
+seccomp profile. Only `/data` (the volume), `/tmp` (an `emptyDir`) and `/run/kubedelos` (a memory-backed `emptyDir` of
+16Mi, see below) are written.
+
+## Private registries
+
+Each registry setting has its own page:
+
+- [Azure Container Registry from AKS](registries/acr.md): `cloud.provider: azure` with workload identity.
+- [Amazon ECR from EKS](registries/ecr.md): `cloud.provider: aws` with IAM roles for service accounts.
+- [Artifact Registry from GKE](registries/gar.md): `cloud.provider: gcp` with Workload Identity Federation.
+- [Pull secrets and Docker configs](registries/pull-secrets.md): `registries.dockerConfigSecrets` and
+  `registries.podPullSecrets`, for any other registry.
+
+The cloud preset only wires the identity into the pod; the cloud-side role (`AcrPull`, an ECR read policy,
+`roles/artifactregistry.reader`) is yours to create, and it decides which registries kubedelos can read. The Settings
+page
+has a Registries card that shows what is configured and, in `serve`, a "Test an image" box.
+
+Per-scan Docker configs are written to `/run/kubedelos` (`KUBEDELOS_SECRETS_DIR`), a memory-backed volume, so a
+credential never reaches node disk. Turning on pod pull secrets gives kubedelos `get` on every Secret in the namespaces
+you list; read the [security note](registries/pull-secrets.md#security-note) first.
 
 ## Storage
 

@@ -94,7 +94,9 @@ def test_setting_sources_name_the_flag_the_environment_or_the_default():
 
 def test_no_setting_is_named_like_a_secret():
     # The Settings page lists every field; a credential must never become one.
-    assert not [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
+    # secrets_dir is only the path of a directory and pod_pull_secret_namespaces a list of namespace names, not values.
+    names = [name for name in Settings.model_fields if re.search(r"token|password|secret|key|credential", name)]
+    assert names == ["secrets_dir", "pod_pull_secret_namespaces"]
 
 
 def test_scope_ignores_repeated_values():
@@ -181,3 +183,76 @@ def test_secure_cookies_and_trivy_dir_from_env(monkeypatch):
     monkeypatch.setenv("KUBEDELOS_TRIVY_DIR", "/opt/trivy")
     settings = Settings()
     assert settings.secure_cookies is True and settings.trivy_dir == Path("/opt/trivy")
+
+
+def test_docker_configs_need_secrets_dir(tmp_path):
+    assert Settings().docker_configs == [] and Settings().secrets_dir is None
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
+        Settings(docker_configs=[tmp_path / "a.json"])
+    settings = Settings(
+        docker_configs=[tmp_path / "a.json"],
+        secrets_dir=tmp_path / "s",
+        data_dir=tmp_path / "d",
+        cache_dir=tmp_path / "c",
+    )
+    assert settings.docker_configs == [tmp_path / "a.json"]
+
+
+def test_docker_configs_from_env_comma_or_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path))
+    monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", "/a/one.json, /b/two.json")
+    assert Settings().docker_configs == [Path("/a/one.json"), Path("/b/two.json")]
+    monkeypatch.setenv("KUBEDELOS_DOCKER_CONFIGS", '["/a/one.json"]')
+    assert Settings().docker_configs == [Path("/a/one.json")]
+
+
+def test_pod_pull_secret_namespaces_default_env_and_secrets_dir(monkeypatch, tmp_path):
+    assert Settings().pod_pull_secret_namespaces == []
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR is required for registry credentials"):
+        Settings(pod_pull_secret_namespaces=["web"])
+    monkeypatch.setenv("KUBEDELOS_SECRETS_DIR", str(tmp_path / "s"))
+    monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", "web, ops")
+    monkeypatch.setenv("KUBEDELOS_DATA_DIR", str(tmp_path / "d"))
+    monkeypatch.setenv("KUBEDELOS_CACHE_DIR", str(tmp_path / "c"))
+    assert Settings().pod_pull_secret_namespaces == ["web", "ops"]
+    monkeypatch.setenv("KUBEDELOS_POD_PULL_SECRET_NAMESPACES", '["web"]')
+    assert Settings().pod_pull_secret_namespaces == ["web"]
+
+
+@pytest.mark.parametrize("where", ["same_data", "inside_data", "contains_data", "inside_cache", "contains_cache"])
+def test_secrets_dir_must_not_overlap_data_or_cache(tmp_path, where):
+    data, cache = tmp_path / "data", tmp_path / "cache"
+    secrets = {
+        "same_data": data,
+        "inside_data": data / "s",
+        "contains_data": tmp_path,
+        "inside_cache": cache / "s",
+        "contains_cache": tmp_path,
+    }[where]
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR must not"):
+        Settings(data_dir=data, cache_dir=cache, secrets_dir=secrets)
+
+
+def test_secrets_dir_must_not_contain_docker_configs(tmp_path):
+    secrets = tmp_path / "secrets"
+    with pytest.raises(ValidationError, match="KUBEDELOS_SECRETS_DIR must not contain"):
+        Settings(
+            data_dir=tmp_path / "d", cache_dir=tmp_path / "c", secrets_dir=secrets, docker_configs=[secrets / "c.json"]
+        )
+    ok = Settings(
+        data_dir=tmp_path / "d", cache_dir=tmp_path / "c", secrets_dir=secrets, docker_configs=[tmp_path / "c.json"]
+    )
+    assert ok.secrets_dir == secrets
+
+
+def test_cloud_identity_defaults_to_none_and_is_read_from_the_environment(monkeypatch):
+    assert Settings().cloud_provider == "none" and Settings().cloud_identity is None
+    monkeypatch.setenv("KUBEDELOS_CLOUD_PROVIDER", "azure")
+    monkeypatch.setenv("KUBEDELOS_CLOUD_IDENTITY", "client-id-123")
+    settings = Settings()
+    assert settings.cloud_provider == "azure" and settings.cloud_identity == "client-id-123"
+
+
+def test_cloud_provider_must_be_a_known_one():
+    with pytest.raises(ValidationError):
+        Settings(cloud_provider="oracle")

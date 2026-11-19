@@ -5,7 +5,7 @@ from typing import Protocol
 
 import yaml
 from kubernetes import client, config
-from kubernetes.client import V1Namespace
+from kubernetes.client import V1Namespace, V1Secret
 from kubernetes.config import kube_config
 
 from kubedelos.config import Settings
@@ -32,6 +32,9 @@ class KubeApi(Protocol):
 
     def list_nodes(self) -> list:
         """Cluster nodes, for each pod's platform."""
+
+    def read_secret(self, ns: str, name: str) -> V1Secret:
+        """One Secret by name: only ever a Secret a pod names as an imagePullSecret, never a list."""
 
     def current_context(self) -> str:
         """The kube-context name, or ``in-cluster``."""
@@ -69,6 +72,9 @@ class _RealKubeApi:
 
     def list_nodes(self) -> list:
         return self._core.list_node(_request_timeout=REQUEST_TIMEOUT).items
+
+    def read_secret(self, ns: str, name: str) -> V1Secret:
+        return self._core.read_namespaced_secret(name, ns, _request_timeout=REQUEST_TIMEOUT)
 
     def current_context(self) -> str:
         return self._context

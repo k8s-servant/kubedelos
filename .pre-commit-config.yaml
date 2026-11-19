@@ -10,6 +10,7 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: check-yaml
         exclude: ^charts/.*/templates/
+        args: [--allow-multiple-documents]
       - id: check-toml
       - id: check-added-large-files
       - id: detect-private-key

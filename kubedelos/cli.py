@@ -26,8 +26,10 @@ from kubedelos import __version__
 from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
-from kubedelos.kube.inventory import parse_image_id
-from kubedelos.models import is_valid_ref, registry_host
+from kubedelos.kube.inventory import parse_user_ref
+from kubedelos.models import InventoryItem, registry_host
+from kubedelos.registry import dockerconfig
+from kubedelos.registry.access import RegistryAccess
 from kubedelos.scheduler import Sweeper, cron_error
 from kubedelos.store import queue, runlock
 from kubedelos.store.db import connect
@@ -145,9 +147,8 @@ def registry_test(
     trivy_path: Annotated[Path | None, typer.Option(help="Use this Trivy binary instead of the pinned one.")] = None,
 ) -> None:
     """Check that kubedelos can read IMAGE with your current registry login, by scanning it once."""
-    ref = parse_image_id(image, "")
-    # parse_image_id falls back to :latest when a digest is malformed; for a user's ref that would scan another image.
-    if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
+    ref = parse_user_ref(image)
+    if ref is None:
         typer.echo(f"error: invalid image reference: {_one_line(image, 512)}", err=True)
         raise typer.Exit(2)
     if not _PLATFORM_RE.fullmatch(platform):
@@ -161,9 +162,18 @@ def registry_test(
         with _signals_as_interrupt():
             trivy = ensure_trivy(settings)
             # Only access is checked, so scan the smallest level and skip the Java DB.
-            with TrivyCache(trivy, settings.cache_dir, java_db=False) as cache:
+            with (
+                TrivyCache(trivy, settings.cache_dir, java_db=False) as cache,
+                RegistryAccess(settings).for_item(InventoryItem(image=ref, platform=platform)) as access,
+            ):
                 result = scan_image(
-                    trivy, ref, platform, settings.scan_timeout_s, cache_dir=cache.dir, pkg_types=("os",)
+                    trivy,
+                    ref,
+                    platform,
+                    settings.scan_timeout_s,
+                    cache_dir=cache.dir,
+                    pkg_types=("os",),
+                    docker_config=access.docker_config,
                 )
     except KeyboardInterrupt:
         typer.echo("cancelled", err=True)
@@ -289,6 +299,8 @@ def _serve(settings: Settings, host: str, port: int) -> None:
     except Exception as exc:
         typer.echo(f"error: {_flat(exc)}", err=True)
         raise typer.Exit(2) from exc
+    if settings.secrets_dir is not None:
+        dockerconfig.clear(settings.secrets_dir)  # configs a crashed scan left behind
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
     try:

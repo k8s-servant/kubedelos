@@ -30,3 +30,12 @@ data:
   KUBEDELOS_SECURE_COOKIES: {{ .Values.secureCookies | toString | quote }}
   KUBEDELOS_ALLOWED_HOSTS: {{ include "kubedelos.allowedHosts" . | quote }}
   KUBEDELOS_LOG_LEVEL: {{ .Values.logLevel | quote }}
+  KUBEDELOS_CLOUD_PROVIDER: {{ .Values.cloud.provider | quote }}
+  {{- with include "kubedelos.cloudIdentity" . }}
+  KUBEDELOS_CLOUD_IDENTITY: {{ . | quote }}
+  {{- end }}
+  KUBEDELOS_SECRETS_DIR: /run/kubedelos # the memory volume the deployment mounts
+  KUBEDELOS_DOCKER_CONFIGS: {{ include "kubedelos.dockerConfigPaths" . | quote }}
+  {{- if .Values.registries.podPullSecrets }}
+  KUBEDELOS_POD_PULL_SECRET_NAMESPACES: {{ .Values.registries.podPullSecretNamespaces | toJson | quote }}
+  {{- end }}

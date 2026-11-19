@@ -23,11 +23,13 @@ LABEL org.opencontainers.image.source="https://github.com/k8s-servant/kubedelos"
 COPY --from=builder /opt/kubedelos /opt/kubedelos
 COPY --from=builder /usr/local/lib/kubedelos/trivy /usr/local/lib/kubedelos/trivy
 # /data is owned by the runtime user so a fresh volume inherits it (a Kubernetes PVC gets fsGroup instead).
-RUN mkdir /data && chown 65532:65532 /data
+# /run/kubedelos is where serve writes the per-scan docker configs; the chart mounts a memory volume over it.
+RUN mkdir /data /run/kubedelos && chown 65532:65532 /data /run/kubedelos && chmod 0700 /run/kubedelos
 ENV PATH="/opt/kubedelos/bin:${PATH}" \
     PYTHONDONTWRITEBYTECODE=1 \
     KUBEDELOS_DATA_DIR=/data \
     KUBEDELOS_CACHE_DIR=/data/cache \
+    KUBEDELOS_SECRETS_DIR=/run/kubedelos \
     KUBEDELOS_TRIVY_DIR=/usr/local/lib/kubedelos/trivy \
     TMPDIR=/tmp
 USER 65532:65532

@@ -1,0 +1,14 @@
+{#- The result of POST /settings/registry-test, swapped into the Registries card: one line, and for an authentication
+    failure the login hint and a link to the docs page for the host. Autoescaped; holds no credential. -#}
+<div class="{% if failed %}callout{% else %}notice{% endif %}" role="status">
+  <p>{{ text }}</p>
+  {%- if hint %}
+  <p class="hint">{{ hint }}</p>
+  {%- endif %}
+  {%- if note %}
+  <p class="hint">{{ note }}</p>
+  {%- endif %}
+  {%- if docs %}
+  <p class="hint">See <a href="{{ docs }}" rel="noopener noreferrer">{{ docs }}</a></p>
+  {%- endif %}
+</div>

@@ -25,6 +25,7 @@ from typing import Literal
 
 from kubedelos.config import Settings
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_digest
+from kubedelos.registry.access import RegistryAccess
 from kubedelos.trivy import layers
 from kubedelos.trivy.layers import LayerSlots
 from kubedelos.trivy.parse import parse_report
@@ -371,6 +372,7 @@ def scan_many(
     settings: Settings,
     on_result: Callable[[ImageResult], None],
     cancel: threading.Event,
+    access: RegistryAccess | None = None,
 ) -> None:
     """Scan ``items`` with ``settings.parallelism`` workers, handing each result to ``on_result`` on this thread.
 
@@ -378,14 +380,17 @@ def scan_many(
     ``_RETRY_DELAY_S``, unless ``cancel`` is set by then; when that fails too, its error starts with ``RETRIED_PREFIX``.
     Once ``cancel`` is set no new image starts; scans already running finish and are reported. An exception from
     ``on_result`` (or an interrupt) kills the running scans and propagates.
+
+    ``access`` gives each image its registry credentials; both attempts of an image share one config, removed after.
     """
     if not items:
         return
+    access = access if access is not None else RegistryAccess.none()
     workers = settings.parallelism
     groups = _ClientGroups()
     slots = LayerSlots(cache_dir, settings.cache_dir / "trivy-layers", layers.SLOTS) if settings.layer_cache else None
 
-    def attempt(item: InventoryItem, layer_dir: Path | None) -> ImageResult:
+    def attempt(item: InventoryItem, layer_dir: Path | None, docker_config: Path | None) -> ImageResult:
         try:
             return scan_image(
                 trivy,
@@ -395,6 +400,7 @@ def scan_many(
                 cache_dir=cache_dir,
                 layer_dir=layer_dir,
                 pkg_types=settings.pkg_types,
+                docker_config=docker_config,
                 _groups=groups,
             )
         except Exception as exc:
@@ -408,16 +414,30 @@ def scan_many(
 
     def work(item: InventoryItem) -> ImageResult:
         started = time.monotonic()
-        with slots.take(item.image.repo) if slots else contextlib.nullcontext() as layer_dir:
-            result = attempts(item, layer_dir)
+        with (
+            slots.take(item.image.repo) if slots else contextlib.nullcontext() as layer_dir,
+            contextlib.ExitStack() as stack,
+        ):
+            try:
+                scan_access = stack.enter_context(access.for_item(item))
+            except Exception as exc:  # the credential file could not be made: this image fails, the others go on
+                result = ImageResult(
+                    image=item.image,
+                    platform=item.platform,
+                    status="error",
+                    error_kind="unknown",
+                    error=_short(f"could not prepare registry credentials: {type(exc).__name__}"),
+                )
+            else:
+                result = attempts(item, layer_dir, scan_access.docker_config)
         return result.model_copy(update={"duration_s": round(time.monotonic() - started, 1)})
 
-    def attempts(item: InventoryItem, layer_dir: Path | None) -> ImageResult:
-        result = attempt(item, layer_dir)
+    def attempts(item: InventoryItem, layer_dir: Path | None, docker_config: Path | None) -> ImageResult:
+        result = attempt(item, layer_dir, docker_config)
         # The wait holds this worker's slot, so a burst of 503s briefly narrows the scan; one retry keeps that short.
         if not _passing(result) or cancel.wait(_RETRY_DELAY_S):
             return result
-        again = attempt(item, layer_dir)
+        again = attempt(item, layer_dir, docker_config)
         if again.status != "error":
             return again
         kept = (again.error or "")[-(_MAX_ERROR_CHARS - len(RETRIED_PREFIX)) :]  # the prefix stays within the cap

@@ -60,7 +60,7 @@ def env(tmp_path, monkeypatch):
 
 
 def _fake_scan(calls, fail_ref=None):
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         calls.append(list(items))
         for item in items:
             if fail_ref and item.image.ref == fail_ref:
@@ -138,7 +138,7 @@ def test_service_cancel(env, monkeypatch):
     settings, repo, _calls = env
     cancel = threading.Event()
 
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         cancel.set()
 
     monkeypatch.setattr(service, "scan_many", scan_many)
@@ -310,7 +310,7 @@ def test_run_scan_records_an_owner_that_is_live_during_the_scan(env, monkeypatch
     settings, repo, calls = env
     seen = []
 
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         owner = repo.get_run(repo.latest_run_id())["owner"]
         seen.append((owner, runlock.is_owned(settings.data_dir, owner)))
         _fake_scan(calls)(
@@ -404,7 +404,7 @@ def _kind_api():
 
 
 def _scan_reporting(calls, scanned_image_id):
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         calls.append(list(items))
         for item in items:
             r = ImageResult(image=item.image, platform=item.platform, status="ok", scanned_image_id=scanned_image_id)
@@ -458,7 +458,7 @@ def test_retry_rescans_only_the_failed_images_in_the_same_run(env, monkeypatch):
     run_id = _partial_run(env, monkeypatch, pkg_types=("os",))
     seen = []
 
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         seen.append(settings)
         _fake_scan(calls)(
             items, cache_dir=cache_dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel
@@ -515,7 +515,7 @@ def test_retry_cancelled_keeps_what_finished_and_settles_the_run(env, monkeypatc
     settings, repo, _calls = env
     run_id = _partial_run(env, monkeypatch)
 
-    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel):
+    def scan_many(items, *, cache_dir, trivy, settings, on_result, cancel, access=None):
         cancel.set()
 
     monkeypatch.setattr(service, "scan_many", scan_many)
@@ -561,3 +561,59 @@ def test_retry_refuses_a_run_it_cannot_retry(env, monkeypatch, change, message):
     with pytest.raises(service.RetryRefused, match=message):
         service.retry_failed(settings, run_id, repo=repo)
     assert calls == []
+
+
+def _with_pull_secrets(repo, monkeypatch):
+    real = repo.failed_items
+
+    def failed_items(run_id, kinds=None):
+        return [
+            (rid, item.model_copy(update={"pull_secrets": [("default", "regcred")]}))
+            for rid, item in real(run_id, kinds)
+        ]
+
+    monkeypatch.setattr(repo, "failed_items", failed_items)
+
+
+def test_retry_loads_the_cluster_only_for_pull_secrets(env, monkeypatch):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    loaded = []
+    monkeypatch.setattr(service.kube_client, "load", lambda s: loaded.append(s) or FakeKubeApi())
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    _with_pull_secrets(repo, monkeypatch)
+    service.retry_failed(settings, run_id, repo=repo)  # no namespaces configured
+    assert loaded == []
+
+
+def test_retry_loads_the_cluster_when_failed_images_have_pull_secrets(env, monkeypatch, tmp_path):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    loaded, accesses = [], []
+    api = FakeKubeApi()
+    monkeypatch.setattr(service.kube_client, "load", lambda s: loaded.append(s) or api)
+
+    def scan_many(items, *, access=None, **kw):
+        accesses.append(access)
+        _fake_scan(calls)(items, **kw)
+
+    monkeypatch.setattr(service, "scan_many", scan_many)
+    _with_pull_secrets(repo, monkeypatch)
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    retry = settings.model_copy(update={"secrets_dir": secrets, "pod_pull_secret_namespaces": ["default"]})
+    service.retry_failed(retry, run_id, repo=repo)
+    assert len(loaded) == 1 and len(accesses) == 1
+
+
+def test_retry_does_not_load_the_cluster_when_no_failed_image_has_pull_secrets(env, monkeypatch, tmp_path):
+    settings, repo, calls = env
+    run_id = _partial_run(env, monkeypatch)
+    loaded = []
+    monkeypatch.setattr(service.kube_client, "load", lambda s: loaded.append(s) or FakeKubeApi())
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    secrets = tmp_path / "secrets"
+    secrets.mkdir()
+    retry = settings.model_copy(update={"secrets_dir": secrets, "pod_pull_secret_namespaces": ["default"]})
+    service.retry_failed(retry, run_id, repo=repo)
+    assert loaded == []

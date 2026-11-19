@@ -1,0 +1,71 @@
+# A private registry:2 with htpasswd auth for scripts/e2e-chart.sh. One Deployment behind two Services with fixed
+# ClusterIPs inside kind's default service CIDR, so the same registry answers as two different hosts: the chart's
+# mounted docker config covers only the first, which makes the pull-secret cases meaningful on the second.
+# Plain HTTP is fine: go-containerregistry (and so Trivy) uses it for RFC 1918 hosts.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: e2e-registry
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: registry
+  namespace: e2e-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: registry
+  template:
+    metadata:
+      labels:
+        app: registry
+    spec:
+      containers:
+        - name: registry
+          image: registry:2
+          ports:
+            - containerPort: 5000
+          env:
+            - name: REGISTRY_AUTH
+              value: htpasswd
+            - name: REGISTRY_AUTH_HTPASSWD_REALM
+              value: e2e
+            - name: REGISTRY_AUTH_HTPASSWD_PATH
+              value: /auth/htpasswd
+          volumeMounts:
+            - name: auth
+              mountPath: /auth
+              readOnly: true
+          readinessProbe:
+            tcpSocket:
+              port: 5000
+      volumes:
+        - name: auth
+          secret:
+            secretName: registry-htpasswd
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry
+  namespace: e2e-registry
+spec:
+  clusterIP: 10.96.200.50
+  selector:
+    app: registry
+  ports:
+    - port: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-alt
+  namespace: e2e-registry
+spec:
+  clusterIP: 10.96.200.51
+  selector:
+    app: registry
+  ports:
+    - port: 5000

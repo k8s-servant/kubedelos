@@ -18,6 +18,7 @@ from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
 from kubedelos.kube.inventory import InventoryWarning, collect
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_valid_ref
+from kubedelos.registry.access import RegistryAccess
 from kubedelos.store import db, runlock
 from kubedelos.store.repo import Repo
 from kubedelos.trivy.binary import ensure_trivy
@@ -81,7 +82,10 @@ def run_scan(
         try:
             repo.add_warnings(run_id, warnings)
             save = functools.partial(repo.add_result, run_id)
-            errors = _scan(settings, repo, run_id, items, save, on_progress, cancel, cache_max_age, rescan=rescan)
+            access = RegistryAccess(settings, api)  # per run, so the Secret contents it read go with the run
+            errors = _scan(
+                settings, repo, run_id, items, save, on_progress, cancel, cache_max_age, access, rescan=rescan
+            )
         except KeyboardInterrupt:
             cancel.set()
             repo.finish_run(run_id, "cancelled")
@@ -111,9 +115,11 @@ def retry_failed(
     """Scan the failed images of the finished partial run ``run_id`` again (only those of ``kinds`` when given) and put
     the results in that run.
 
-    The refs, platforms and workloads come from the database, so the cluster is not read. The run's package types
-    apply; ``settings`` gives the time limit and parallelism. Each new result replaces its failure, and the run is
-    recounted (``ok`` once nothing fails) and noted, also when the retry is cancelled or interrupted.
+    The refs, platforms and workloads come from the database, so the cluster is not read, except for the pull secrets
+    of failed images: when ``pod_pull_secret_namespaces`` is set and one of them names any, the Secrets are read
+    again. The run's package types apply; ``settings`` gives the time limit and parallelism. Each new result replaces
+    its failure, and the run is recounted (``ok`` once nothing fails) and noted, also when the retry is cancelled or
+    interrupted.
     """
     repo = repo if repo is not None else Repo(db.connect(settings.db_path))
     cancel = cancel if cancel is not None else threading.Event()
@@ -136,8 +142,16 @@ def retry_failed(
     def save(item: InventoryItem, result: ImageResult) -> None:
         repo.replace_result(ids[id(item)], result)
 
+    items = [item for _, item in failed]
+    api = (
+        kube_client.load(settings)
+        if settings.pod_pull_secret_namespaces and any(i.pull_secrets for i in items)
+        else None
+    )
     try:
-        _scan(run_settings, repo, run_id, [item for _, item in failed], save, on_progress, cancel, cache_max_age)
+        _scan(
+            run_settings, repo, run_id, items, save, on_progress, cancel, cache_max_age, RegistryAccess(settings, api)
+        )
     finally:
         status = repo.settle_retry(run_id, [result_id for result_id, _ in failed], kinds=kinds)
     return ScanOutcome(run_id=run_id, warnings=[], status=status)
@@ -161,6 +175,7 @@ def _scan(
     on_progress: Callable[[Progress], None],
     cancel: threading.Event,
     cache_max_age: timedelta,
+    access: RegistryAccess,
     *,
     rescan: bool = False,
 ) -> int:
@@ -224,6 +239,14 @@ def _scan(
         if not cancel.is_set():  # a shutdown during the binary download: no DB download either
             with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
                 emit("scanning")
-                scan_many(todo, cache_dir=cache.dir, trivy=trivy, settings=settings, on_result=on_result, cancel=cancel)
+                scan_many(
+                    todo,
+                    cache_dir=cache.dir,
+                    trivy=trivy,
+                    settings=settings,
+                    on_result=on_result,
+                    cancel=cancel,
+                    access=access,
+                )
     emit("saving")
     return errors

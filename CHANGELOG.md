@@ -4,10 +4,43 @@
 
 ### Features
 
+- Settings page: a Registries card (cloud identity and the hosts it covers, mounted Docker config Secret names,
+  pull-secret namespaces) and, in `kubedelos serve`, a "Test an image" form that scans one image with the cloud identity
+  and the mounted Docker configs (not pod pull secrets: there is no pod; an auth error on a host known only from the
+  newest run says so). The AWS hosts cover every ECR endpoint form Trivy accepts (FIPS, `on.aws`, `.amazonaws.com.cn`,
+  `sc2s.sgov.gov`, `c2s.ic.gov`). It refuses a host that is not in a mounted Docker config, not covered by the
+  configured cloud provider and not used by an image in the cluster's newest run, and in read-only mode. New settings
+  `KUBEDELOS_CLOUD_PROVIDER` and `KUBEDELOS_CLOUD_IDENTITY` (display only).
+- Cloud presets: the chart's `cloud.provider` (`azure`, `aws`, `gcp`) with `cloud.azure.clientId`, `cloud.aws.roleArn`
+  or `cloud.gcp.serviceAccount` annotates the ServiceAccount for workload identity (and labels the pod on Azure), so
+  Trivy logs in to ACR, ECR and Artifact Registry/GCR itself. The render fails when the id is missing. The cloud-side
+  role stays yours to create; see [ACR](docs/registries/acr.md), [ECR](docs/registries/ecr.md) and
+  [GAR](docs/registries/gar.md).
+- Mounted Docker configs: `registries.dockerConfigSecrets` mounts `kubernetes.io/dockerconfigjson` Secrets from the
+  release namespace (`KUBEDELOS_DOCKER_CONFIGS`), the first match per host wins, and no Secret RBAC is needed.
+- Opt-in pod pull secrets: `registries.podPullSecrets` with `registries.podPullSecretNamespaces`
+  (`KUBEDELOS_POD_PULL_SECRET_NAMESPACES`) makes a scan read the `imagePullSecrets` of pods in those namespaces, through
+  a Role with `get` on `secrets` in each (nothing cluster-wide). kubedelos gets each Secret a pod names, once per run (a
+  failed read counts as empty until the next run); one that is not `dockerconfigjson` is discarded without its data
+  being decoded, used or logged, only the entries for the image's host are used, and they override the mounted configs.
+  This is an exception to "never read Secrets"; see [Pull secrets](docs/registries/pull-secrets.md) for what it permits.
+- Secrets volume: each scan's Docker config is written to a temporary directory under `KUBEDELOS_SECRETS_DIR` (the chart
+  mounts a 16Mi memory-backed `emptyDir` at `/run/kubedelos`), mode 0700, and removed when the scan ends; `serve`
+  removes leftover per-scan configs (`kubedelos-docker-*`) from it at start. It must be a different directory from the
+  data and cache directories. With it unset, as on a laptop, nothing is written and your own Docker login applies.
+- Retries keep pull secrets: the names of the Secrets an image's pods used are stored with its result (schema migration
+  11, `image_result.pull_secrets`), so a retry of an auth failure reads the same Secrets again. Contents are never
+  stored.
 - Helm chart `charts/kubedelos` installs `kubedelos serve`: one hardened replica (Recreate, non-root, read-only root filesystem), a PVC, a Service, a ConfigMap of `KUBEDELOS_*` settings and a read-only ClusterRole. `clusterName` is required and a values schema rejects unknown keys. A NetworkPolicy admits only `networkPolicy.ingressFrom` (nothing by default). An optional Ingress or Gateway API HTTPRoute adds its hosts to `KUBEDELOS_ALLOWED_HOSTS`, which the chart fills with the Service's DNS names, `localhost` and `127.0.0.1` (so `kubectl port-forward` works), the Ingress and HTTPRoute hosts and `extraAllowedHosts`.
 - Chart guards: with `auth.trustProxyHeaders` on, the chart refuses to render unless the NetworkPolicy is on and `ingressFrom` names a source that does not admit every pod (`{}`, an entry with no selector or `ipBlock`, a selector with no `matchLabels` or `In` expression, an empty `namespaceSelector`, one naming only the release namespace with no `podSelector`, an `ipBlock` with prefix 0). Wildcard Ingress hosts and HTTPRoute hostnames are refused, and an enabled Ingress needs a host and an enabled HTTPRoute a `parentRefs` entry. The guard catches common mistakes and is not a proof: `ipBlock` ranges, other NetworkPolicies, `kubectl port-forward`, `hostNetwork` traffic and a CNI that does not enforce NetworkPolicy are the operator's to check. NOTES.txt warns when the UI is exposed or writable without sign-in and, with trust on, names those bypasses.
 - Container image: a multi-arch `Dockerfile` (python alpine, pinned by digest) bundles the pinned Trivy, checksum-verified at build time, so the pod downloads nothing. It runs `kubedelos serve` as user 65532 and writes only `/data` and `/tmp`; `scripts/image-smoke.sh IMAGE` checks it.
-- Release: the image (amd64 and arm64, with SBOM and provenance) and the Helm chart are pushed to `ghcr.io/k8s-servant` on each release and signed keylessly with cosign, each in its own job; verify them with the identity of `release-please.yml` on `main`. CI lints and renders the chart, builds, smoke-tests and scans the image with the pinned Trivy (failing only on fixable `CRITICAL` findings), and installs every downloaded tool by its pinned SHA-256. A kind end-to-end job (`scripts/e2e-chart.sh`) installs the chart with the built image and waits for the first scheduled sweep.
+- Release: the image (amd64 and arm64, with SBOM and provenance) and the Helm chart are pushed to `ghcr.io/k8s-servant`
+  on each release and signed keylessly with cosign, each in its own job; verify them with the identity of
+  `release-please.yml` on `main`. CI lints and renders the chart, builds, smoke-tests and scans the image with the
+  pinned Trivy (failing only on fixable `CRITICAL` findings), and installs every downloaded tool by its pinned SHA-256.
+  A kind end-to-end job (`scripts/e2e-chart.sh`) installs the chart with the built image and waits for the first
+  scheduled sweep, which also scans images in a private `registry:2` through a mounted docker config and pod pull
+  secrets (the cloud presets are not run in CI).
 - `KUBEDELOS_SECURE_COOKIES=true` marks the `serve` CSRF cookie `Secure` (the chart sets it by default, `secureCookies`); `KUBEDELOS_TRIVY_DIR` names a directory holding `<version>/trivy`, used before the cache and never downloaded over.
 - `kubedelos serve` runs kubedelos in a cluster: the UI of one cluster (`KUBEDELOS_CLUSTER_NAME`) on `0.0.0.0:8080`, with `/healthz`. Only one `serve` can use a data directory. Anyone who can reach it can read the whole inventory and, unless read-only, write, so expose it only through an authenticating proxy or keep it cluster-internal.
 - Writes in `kubedelos serve`: UI scans, retries and cancels go through the queue and stay within the configured scope (a scan can only narrow it). Writes need an allowed `Origin` and a CSRF token.
@@ -54,6 +87,10 @@
 
 ### Documentation
 
+- Guides for private registries in the in-cluster mode: [ACR from AKS](docs/registries/acr.md), [ECR from
+  EKS](docs/registries/ecr.md), [Artifact Registry from GKE](docs/registries/gar.md) and [pull secrets and Docker
+  configs](docs/registries/pull-secrets.md). They say which hosts Trivy v0.76.1 uses the cloud identity for and that the
+  identity is tried before a Docker config.
 - Guides for the in-cluster mode: [Running kubedelos in a cluster](docs/in-cluster.md) (install, every chart value, storage, exposure, the security model and verifying the signed release) and [oauth2-proxy behind Envoy Gateway](docs/exposure-oauth2-proxy-envoy-gateway.md), a worked example.
 - The README leads with the web UI, explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
 - The README names the oldest Trivy a custom `KUBEDELOS_TRIVY_PATH` can be: v0.54.0, the first with `--pkg-types`.

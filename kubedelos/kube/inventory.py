@@ -10,7 +10,7 @@ from kubernetes.client.rest import ApiException
 from kubedelos.config import Settings
 from kubedelos.kube import owners
 from kubedelos.kube.client import KubeApi
-from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest
+from kubedelos.models import ImageRef, InventoryItem, Workload, is_digest, is_valid_ref
 
 DEFAULT_PLATFORM = "linux/amd64"
 _PREFIXES = ("docker-pullable://", "docker://")
@@ -75,6 +75,17 @@ def parse_image_id(image: str, image_id: str) -> ImageRef:
     tag = spec_tag or "latest"
     local_id = image_id if is_digest(image_id) else None  # a bare "sha256:..." is the node's local image ID
     return ImageRef(ref=f"{spec_repo}:{tag}", repo=spec_repo, tag=tag, image_id=local_id)
+
+
+def parse_user_ref(image: str) -> ImageRef | None:
+    """The ``ImageRef`` of an image a user typed, or None when it is not a plausible ref.
+
+    ``parse_image_id`` falls back to ``:latest`` for a malformed digest; for a typed ref that would check another image.
+    """
+    ref = parse_image_id(image, "")
+    if not is_valid_ref(ref.ref) or ("@" in image and ref.digest is None):
+        return None
+    return ref
 
 
 def _status_ids(pod) -> dict[str, str]:
@@ -214,10 +225,17 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
 
     items: dict[tuple[str, str], InventoryItem] = {}
 
-    def add(image: ImageRef, platform: str, workload: Workload) -> None:
+    pull_namespaces = set(settings.pod_pull_secret_namespaces)
+
+    def add(image: ImageRef, platform: str, workload: Workload, pull_secrets: list[str] | None = None) -> None:
         item = items.setdefault((image.key, platform), InventoryItem(image=image, platform=platform))
         if workload not in item.workloads:
             item.workloads.append(workload)
+        if workload.namespace in pull_namespaces:
+            for secret_name in pull_secrets or []:
+                ref = (workload.namespace, secret_name)
+                if ref not in item.pull_secrets:
+                    item.pull_secrets.append(ref)
 
     for ns in namespaces:
         name = ns.metadata.name
@@ -243,6 +261,7 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
                     image,
                     platform,
                     Workload(namespace=name, kind=kind, name=workload_name, container=c.name, owner=owner, team=team),
+                    _pull_secret_names(pod.spec),
                 )
 
         templates = [("Deployment", d) for d in deployments if d.spec and d.spec.replicas == 0]
@@ -260,10 +279,17 @@ def collect(api: KubeApi, settings: Settings) -> tuple[list[InventoryItem], list
     return kept, warnings
 
 
+def _pull_secret_names(spec) -> list[str]:
+    """The names in a pod spec's ``imagePullSecrets``; the Secrets themselves are not read here."""
+    return [ref.name for ref in (spec.image_pull_secrets if spec else None) or [] if ref.name]
+
+
 def _add_template(add, ns: str, kind: str, name: str, pod_spec, owner, team, platform: str) -> None:
+    pull_secrets = _pull_secret_names(pod_spec)
     for c in _spec_containers(pod_spec):
         add(
             parse_image_id(c.image, ""),
             platform,
             Workload(namespace=ns, kind=kind, name=name, container=c.name, owner=owner, team=team),
+            pull_secrets,
         )

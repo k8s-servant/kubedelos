@@ -11,6 +11,24 @@ listed one by one, and an HTTPRoute needs a Gateway to attach to.
 {{- define "kubedelos.validate" -}}
 {{- include "kubedelos.validateTrust" . -}}
 {{- include "kubedelos.validateExposure" . -}}
+{{- include "kubedelos.validateRegistries" . -}}
+{{- end -}}
+
+{{- define "kubedelos.validateRegistries" -}}
+{{- $c := .Values.cloud -}}
+{{- $ids := dict "azure" "clientId" "aws" "roleArn" "gcp" "serviceAccount" -}}
+{{- if ne $c.provider "none" -}}
+{{- if empty (include "kubedelos.cloudIdentity" .) -}}
+{{- fail (printf "cloud.provider %s needs cloud.%s.%s" $c.provider $c.provider (get $ids $c.provider)) -}}
+{{- end -}}
+{{- end -}}
+{{- $r := .Values.registries -}}
+{{- if and $r.podPullSecrets (empty $r.podPullSecretNamespaces) -}}
+{{- fail "registries.podPullSecrets needs at least one registries.podPullSecretNamespaces entry, the namespaces whose Secrets kubedelos may read" -}}
+{{- end -}}
+{{- if and (not $r.podPullSecrets) (not (empty $r.podPullSecretNamespaces)) -}}
+{{- fail "registries.podPullSecretNamespaces is set but registries.podPullSecrets is false: turn it on, or empty the list, so no Secret access is granted by accident" -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "kubedelos.validateTrust" -}}

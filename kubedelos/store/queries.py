@@ -580,6 +580,14 @@ def auth_failed_refs(conn: sqlite3.Connection, run_id: int) -> list[str]:
     return [row["ref"] for row in rows]
 
 
+def run_registry_hosts(conn: sqlite3.Connection, run_id: int) -> set[str]:
+    """The registry host of every image in a run, e.g. ``registry.example.com`` or ``registry.example.com:5000``."""
+    return {
+        row["repo"].split("/", 1)[0]
+        for row in conn.execute("SELECT DISTINCT repo FROM image_result WHERE run_id = ?", (run_id,))
+    }
+
+
 @dataclass(frozen=True)
 class FindingFilter:
     """What the findings page narrows to and how it orders the result. Empty values mean "no filter"."""

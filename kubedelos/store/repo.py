@@ -1,5 +1,6 @@
 """Reads and writes of scan runs, results and the scan cache."""
 
+import json
 import re
 import sqlite3
 from collections.abc import Callable, Collection, Sequence
@@ -84,10 +85,11 @@ class Repo:
         with self._conn:
             cur = self._conn.execute(
                 "INSERT INTO image_result (run_id, image_key, ref, repo, tag, digest, platform, status, error_kind, error,"
-                " os_family, duration_s) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " os_family, duration_s, pull_secrets) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     run_id, image.key, image.ref, image.repo, image.tag, image.digest, result.platform,
                     result.status, result.error_kind, result.error, result.os_family, result.duration_s,
+                    json.dumps(item.pull_secrets) if item.pull_secrets else None,
                 ),
             )  # fmt: skip
             result_id = cur.lastrowid
@@ -114,7 +116,7 @@ class Repo:
         """The run's failed images as ``(image_result id, item)``, by ref, rebuilt from the stored refs and workloads;
         only those of ``kinds`` when given (a stored kind kubedelos does not know counts as ``unknown``)."""
         rows = self._conn.execute(
-            "SELECT id, ref, repo, tag, digest, platform, error_kind FROM image_result"
+            "SELECT id, ref, repo, tag, digest, platform, error_kind, pull_secrets FROM image_result"
             " WHERE run_id = ? AND status = 'error' ORDER BY ref, platform",
             (run_id,),
         ).fetchall()
@@ -130,7 +132,10 @@ class Repo:
             ).fetchall()
             image = ImageRef(ref=row["ref"], repo=row["repo"], tag=row["tag"], digest=row["digest"])
             item = InventoryItem(
-                image=image, platform=row["platform"], workloads=[Workload(**dict(w)) for w in workloads]
+                image=image,
+                platform=row["platform"],
+                workloads=[Workload(**dict(w)) for w in workloads],
+                pull_secrets=[tuple(ref) for ref in json.loads(row["pull_secrets"] or "[]")],
             )
             failed.append((row["id"], item))
         return failed

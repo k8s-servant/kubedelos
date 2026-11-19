@@ -31,3 +31,8 @@ traffic from hostNetwork pods or the node itself. NetworkPolicies are additive, 
 pod and allows more ingress defeats this one. Limit who may port-forward in this namespace, check that your CNI
 enforces NetworkPolicy, and check the other policies in this namespace.
 {{- end }}
+{{- if .Values.registries.podPullSecrets }}
+
+Pod pull secrets are on: kubedelos can read (get) any Secret in {{ join ", " .Values.registries.podPullSecretNamespaces }}, not only image pull secrets, through a Role per namespace.
+Keep that list to namespaces whose Secrets you accept sharing with this deployment.
+{{- end }}

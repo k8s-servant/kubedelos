@@ -90,6 +90,7 @@ class InventoryItem(BaseModel):
     image: ImageRef
     platform: str  # e.g. "linux/amd64"
     workloads: list[Workload] = []
+    pull_secrets: list[tuple[str, str]] = []  # (namespace, name) of the imagePullSecrets pods name, first seen first
 
 
 class Finding(BaseModel):

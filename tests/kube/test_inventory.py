@@ -2,7 +2,7 @@ import pytest
 from fakes import FakeKubeApi, cronjob, deployment, namespace, node, pod
 
 from kubedelos.config import Settings
-from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id
+from kubedelos.kube.inventory import InventoryWarning, collect, parse_image_id, parse_user_ref
 from kubedelos.models import ImageRef
 
 DIGEST = "sha256:" + "a" * 64
@@ -386,3 +386,67 @@ def test_parse_image_id_drops_a_malformed_or_superseded_image_id():
     assert parse_image_id("nginx:1", "sha256:abc").image_id is None
     digest = "sha256:" + "d" * 64
     assert parse_image_id(f"nginx@{digest}", "sha256:" + "e" * 64).image_id is None  # the spec digest wins
+
+
+def test_inventory_records_pull_secret_names_in_listed_namespaces(tmp_path):
+    api = FakeKubeApi(
+        namespaces=[namespace("web"), namespace("jobs")],
+        pods={
+            "web": [
+                pod("p1", "web", pull_secrets=["regcred", "other"]),
+                pod("p2", "web", pull_secrets=["regcred"]),
+            ],
+            "jobs": [pod("p3", "jobs", image="redis:7", pull_secrets=["jobcred"])],
+        },
+    )
+    items, _ = collect(
+        api,
+        Settings(
+            pod_pull_secret_namespaces=["web"],
+            secrets_dir=tmp_path / "s",
+            data_dir=tmp_path / "d",
+            cache_dir=tmp_path / "c",
+        ),
+    )
+    by_image = {item.image.repo: item for item in items}
+    assert by_image["docker.io/library/nginx"].pull_secrets == [("web", "regcred"), ("web", "other")]
+    assert by_image["docker.io/library/redis"].pull_secrets == []
+    assert api.secret_reads == []  # collect only reads the names
+
+
+def test_pull_secrets_off_by_default():
+    api = FakeKubeApi(namespaces=[namespace("web")], pods={"web": [pod("p1", "web", pull_secrets=["regcred"])]})
+    items, _ = collect(api, Settings())
+    assert items[0].pull_secrets == []
+
+
+def test_templates_carry_pull_secrets_in_listed_namespaces(tmp_path):
+    api = FakeKubeApi(
+        namespaces=[namespace("web")],
+        deployments={"web": [deployment("idle", "web", "reg.example.com/idle:1", 0, pull_secrets=["regcred"])]},
+        cronjobs={"web": [cronjob("nightly", "web", "reg.example.com/nightly:1", pull_secrets=["cron-cred"])]},
+    )
+    items, _ = collect(
+        api,
+        Settings(
+            pod_pull_secret_namespaces=["web"],
+            secrets_dir=tmp_path / "s",
+            data_dir=tmp_path / "d",
+            cache_dir=tmp_path / "c",
+        ),
+    )
+    assert {i.image.repo: i.pull_secrets for i in items} == {
+        "reg.example.com/idle": [("web", "regcred")],
+        "reg.example.com/nightly": [("web", "cron-cred")],
+    }
+
+
+@pytest.mark.parametrize("image", ["", "-x", "a b", "reg.example.com/app@sha256:xyz", "reg.example.com/app@"])
+def test_parse_user_ref_rejects_what_would_scan_another_image(image):
+    assert parse_user_ref(image) is None
+
+
+def test_parse_user_ref_accepts_a_tag_and_a_digest():
+    digest = "sha256:" + "a" * 64
+    assert parse_user_ref("registry.example.com/team/app:1").ref == "registry.example.com/team/app:1"
+    assert parse_user_ref(f"registry.example.com/team/app@{digest}").digest == digest

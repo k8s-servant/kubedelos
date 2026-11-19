@@ -33,3 +33,11 @@ httpRoute:
     - kubedelos.example.com
 extraAllowedHosts:
   - kubedelos.example.org
+cloud:
+  provider: azure
+  azure:
+    clientId: 00000000-0000-0000-0000-000000000000
+registries:
+  dockerConfigSecrets: [registry-a, registry-b]
+  podPullSecrets: true
+  podPullSecretNamespaces: [web, jobs]

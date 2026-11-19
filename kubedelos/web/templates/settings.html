@@ -2,6 +2,12 @@
     log level. Read-only. -#}
 {% extends "base.html" %}
 {% block title %}Settings · kubedelos{% endblock %}
+{% block head %}
+  {%- if serve and can_write(request) %}
+  <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false}'>
+  <script src="{{ static_url('htmx.min.js') }}" nonce="{{ nonce }}" defer></script>
+  {%- endif %}
+{%- endblock %}
 {% block run_line %}<div class="page-head"><h1>Settings</h1></div>{% endblock %}
 {% block content %}
   <p class="notice">The settings this <code>kubedelos ui</code> started with. Change one with its <code>KUBEDELOS_*</code> variable (or flag) and restart the UI. The Scans form can still change the scope, parallel images and package types for one scan.</p>
@@ -27,6 +33,47 @@
         </tbody>
       </table>
     </div>
+  </section>
+  <section class="card settings-card" aria-labelledby="registries-title">
+    <h2 class="card-title" id="registries-title">Registries</h2>
+    <div class="table-wrap">
+      <table class="settings-files">
+        <tbody>
+          <tr>
+            <th scope="row">Cloud identity</th>
+            <td class="value">{{ registries.identity }}</td>
+          </tr>
+          {%- if registries.hosts %}
+          <tr>
+            <th scope="row">Used for these registry hosts</th>
+            <td class="value">{{ registries.hosts | join(", ") }}</td>
+          </tr>
+          {%- endif %}
+          <tr>
+            <th scope="row">Mounted Docker config Secrets</th>
+            <td class="value">{{ registries.secrets | join(", ") if registries.secrets else "none" }}</td>
+          </tr>
+          <tr>
+            <th scope="row">Pull-secret namespaces</th>
+            <td class="value">{{ registries.namespaces }}</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+    {%- if serve and can_write(request) %}
+    <h3 class="card-title">Test an image</h3>
+    <form method="post" action="/settings/registry-test" class="filters" hx-post="/settings/registry-test" hx-target="#registry-test-result" hx-swap="innerHTML">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <label>Image
+        <input type="text" name="image" placeholder="registry.example.com/team/app:1" required>
+        <span class="hint">scans it once with the cloud identity and the mounted Docker configs (pod pull secrets are not used: there is no pod)</span>
+      </label>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Test</button>
+      </div>
+    </form>
+    <div id="registry-test-result" aria-live="polite"></div>
+    {%- endif %}
   </section>
   <section class="card settings-card" aria-labelledby="files-title">
     <h2 class="card-title" id="files-title">Files and Trivy</h2>

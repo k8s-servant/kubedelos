@@ -100,6 +100,21 @@ def test_real_api_sets_request_timeout_on_every_list(monkeypatch):
     assert all(kw.get("_request_timeout") == kube_client.REQUEST_TIMEOUT for _, kw in seen)
 
 
+def test_real_api_reads_one_secret_with_the_timeout(monkeypatch):
+    seen = []
+
+    class Core:
+        def read_namespaced_secret(self, name, ns, **kwargs):
+            seen.append((name, ns, kwargs))
+            return "the-secret"
+
+    monkeypatch.setattr(kube_client.client, "CoreV1Api", Core)
+    for api in ("AppsV1Api", "BatchV1Api"):
+        monkeypatch.setattr(kube_client.client, api, lambda: None)
+    assert kube_client._RealKubeApi("my-cluster").read_secret("web", "regcred") == "the-secret"
+    assert seen == [("regcred", "web", {"_request_timeout": kube_client.REQUEST_TIMEOUT})]
+
+
 def _kubeconfig(path, names, current=None):
     lines = ["apiVersion: v1", "kind: Config", "clusters: []", "users: []", "contexts:"]
     lines += [f"- name: {name!r}\n  context: {{cluster: c, user: u}}" for name in names]
