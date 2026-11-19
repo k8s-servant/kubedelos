@@ -46,6 +46,23 @@ kc -n web rollout status deployment/web --timeout=300s
 kc -n web wait --for=condition=Ready pod -l app=web --timeout=300s
 kc -n jobs create cronjob cleanup --image=busybox:1.36 --schedule "0 0 1 1 *" -- true
 
+# Attack-surface facts: web is exposed by a NodePort Service and isolated for ingress by a policy that allows
+# nothing in; the jobs default ServiceAccount is bound to the view ClusterRole.
+kc -n web expose deployment web --type=NodePort --port=80
+kc apply -f - <<'EOF'
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: deny-ingress
+  namespace: web
+spec:
+  podSelector:
+    matchLabels:
+      app: web
+  policyTypes: [Ingress]
+EOF
+kc -n jobs create rolebinding cleanup-view --clusterrole=view --serviceaccount=jobs:default
+
 # kube-system is left out. kind preloads its control-plane images into the node image, and whether every one of
 # those tags (kind builds some of them itself) exists in a public registry is not guaranteed, so a single not_found
 # would make the run partial.

@@ -1,6 +1,7 @@
 """End-to-end scan of a throwaway kind cluster. Needs kind, docker and network access."""
 
 import contextlib
+import json
 import os
 import shutil
 import signal
@@ -74,3 +75,17 @@ def test_kind_scan(tmp_path: Path) -> None:
     assert {(namespace, owner) for _, namespace, owner in nginx} == {("web", "web@example.com")}
     assert busybox
     assert {status for (status,) in busybox} == {"ok"}
+
+    with contextlib.closing(sqlite3.connect(tmp_path / "data" / "kubedelos.db")) as db:
+        facts = {
+            namespace: json.loads(raw)
+            for namespace, raw in db.execute("SELECT namespace, facts FROM workload WHERE name IN ('web', 'cleanup')")
+        }
+        (fact_sources,) = db.execute("SELECT fact_sources FROM scan_run").fetchone()
+    web, jobs = facts["web"], facts["jobs"]
+    assert web["exposure"]["level"] == "external"  # the NodePort Service
+    assert web["network"]["ingress_isolated"] is True  # a policy that selects it and allows nothing in
+    assert web["rights"]["status"] == "ok"
+    assert jobs["exposure"]["level"] == "none"
+    assert "RoleBinding/jobs/cleanup-view" in jobs["rights"]["bindings"]
+    assert json.loads(fact_sources)["rbac"] == "ok"
