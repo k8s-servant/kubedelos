@@ -11,7 +11,8 @@ reports. It lists the container images running in a cluster (read-only), scans t
 a pinned Trivy, and stores the findings in SQLite. There is one command, `kubedelos`;
 `kubedelos ui` serves the local UI, and scans start from there; `kubedelos serve` is the
 in-cluster mode (a UI that scans through the queue within the configured scope, a cron
-sweep, and an optional read-only mode). CI gating is a non-goal (plain Trivy covers it), so
+sweep, and an optional read-only mode); `kubedelos mcp` is a read-only MCP server over the local
+database, for the engineer's own agent. CI gating is a non-goal (plain Trivy covers it), so
 don't add CI-only features such as exit-code gates or SARIF.
 
 ## Commands

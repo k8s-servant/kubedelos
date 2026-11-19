@@ -1,5 +1,8 @@
+import os
+import sys
+
 import pytest
-from mcp import Client
+from mcp import Client, StdioServerParameters
 
 import kubedelos.kube.client
 from kubedelos.mcp_server import tools
@@ -125,3 +128,25 @@ async def test_attack_surface_over_mcp(db, monkeypatch):
     assert bad.is_error
     assert compare.is_error and "no earlier comparable run" in compare.content[0].text
     assert risks.structured_content["entries"] == []
+
+
+async def test_stdio_round_trip(tmp_path):
+    """The real command, as a client config would launch it: nine tools, one cluster, and the database untouched."""
+    path = tmp_path / "kubedelos.db"
+    seed(path, {"my-cluster": 5})
+    before = path.read_bytes()
+    env = {
+        "PATH": os.environ.get("PATH", ""),
+        "KUBEDELOS_DATA_DIR": str(tmp_path),
+        "KUBEDELOS_CACHE_DIR": str(tmp_path / "cache"),
+    }
+    params = StdioServerParameters(
+        command=sys.executable, args=["-m", "kubedelos", "mcp", "--data-dir", str(tmp_path)], env=env
+    )
+    async with Client(params) as client:
+        names = [tool.name for tool in (await client.list_tools()).tools]
+        result = await client.call_tool("list_clusters", {})
+    assert len(names) == 9
+    assert "list_clusters" in names
+    assert [c["name"] for c in result.structured_content["clusters"]] == ["my-cluster"]
+    assert path.read_bytes() == before

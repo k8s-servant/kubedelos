@@ -9,6 +9,7 @@
   `fix_first`, `find_vulnerability`, `workload`, `list_findings`, `attack_surface`, `compare_runs` and
   `accepted_risks`. Prompts: `fix_first_briefing`, `attack_paths` and `explain_cve`, fixed instructions that never
   contain scan data. `attack_surface` reports `host_access` and `rights_status` as null for a workload without facts.
+  `python -m kubedelos` now works too. See [Ask your agent](docs/mcp.md).
 - Attack-surface facts: each scan records, per workload container, its pod security settings, exposure (hostPorts,
   Services, Ingresses, Gateway API HTTPRoutes), NetworkPolicy isolation and ServiceAccount RBAC rights as versioned
   JSON on the workload, plus the status of each source per run. Anything it could not list is reported as unknown or
