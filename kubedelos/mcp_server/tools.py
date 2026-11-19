@@ -16,7 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from kubedelos import analytics
 from kubedelos.models import WorkloadFacts
-from kubedelos.store import accepted, queries, workloads
+from kubedelos.store import accepted, diff, queries, workloads
 from kubedelos.store.db import MIGRATIONS, connect_readonly
 
 DEFAULT_LIMIT = 25
@@ -323,3 +323,137 @@ def _finding_item(row: sqlite3.Row) -> dict:
     item["targets"] = row["targets"].split(",") if row["targets"] else []
     item["accepted"] = bool(row["accepted"])
     return item
+
+
+_HOST_CAPABILITIES = frozenset({"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "ALL"})
+_EXPOSURE_RANK = {"external": 0, "unknown": 1, "cluster": 2, "none": 3}
+_NO_FACTS_RANK = 4
+
+
+def host_access(facts: WorkloadFacts) -> bool:
+    """Whether the pod can reach the node: host namespaces, privilege, a writable hostPath or a powerful capability."""
+    pod = facts.pod
+    return (
+        pod.privileged
+        or pod.host_pid
+        or pod.host_network
+        or pod.host_ipc
+        or any(not volume.read_only for volume in pod.host_path_volumes)
+        or any(cap in _HOST_CAPABILITIES for cap in pod.added_capabilities)
+    )
+
+
+def _matches_facts(
+    facts: WorkloadFacts | None,
+    exposure: list[str] | None,
+    privileged: bool | None,
+    host: bool | None,
+    rights: list[str] | None,
+) -> bool:
+    """Whether ``facts`` pass every facts filter given; a workload without facts passes only when none is given."""
+    if exposure is None and privileged is None and host is None and not rights:
+        return True
+    if facts is None:
+        return False
+    return (
+        (exposure is None or facts.exposure.level in exposure)
+        and (privileged is None or facts.pod.privileged is privileged)
+        and (host is None or host_access(facts) is host)
+        and (not rights or any(getattr(facts.rights, flag) for flag in rights))
+    )
+
+
+def attack_surface(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    cluster: str | None = None,
+    run: int | None = None,
+    exposure: list[Literal["external", "cluster", "none", "unknown"]] | None = None,
+    privileged: bool | None = None,
+    host: bool | None = None,
+    rights: list[Literal["cluster_admin", "reads_secrets", "creates_workloads", "pod_exec", "escalates", "wildcard"]]
+    | None = None,
+    min_severity: Literal["CRITICAL", "HIGH"] | None = None,
+    limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
+) -> dict:
+    name = resolve_cluster(conn, db, cluster)
+    selected = select_run(conn, name, run)
+    rows = workloads.workloads(conn, selected.id)
+    kept = [
+        row
+        for row in rows
+        if _matches_facts(row.facts, exposure, privileged, host, rights)
+        and (min_severity is None or row.counts["CRITICAL"] > 0 or (min_severity == "HIGH" and row.counts["HIGH"] > 0))
+    ]
+    kept.sort(
+        key=lambda row: (
+            _EXPOSURE_RANK[row.facts.exposure.level] if row.facts else _NO_FACTS_RANK,
+            -row.counts["CRITICAL"],
+            -row.counts["HIGH"],
+            row.namespace,
+            row.name,
+            row.container,
+        )
+    )
+    start = max(offset, 0)
+    page = kept[start : start + clamp(limit)]
+    return {
+        "cluster": name,
+        "run": run_payload(selected, now),
+        "facts_collected": any(row.facts is not None for row in rows),
+        "items": [
+            {
+                "namespace": row.namespace,
+                "kind": row.kind,
+                "name": row.name,
+                "container": row.container,
+                "image": row.ref,
+                "critical": row.counts["CRITICAL"],
+                "high": row.counts["HIGH"],
+                "host_access": host_access(row.facts) if row.facts else False,
+                "facts": _facts_payload(row.facts),
+            }
+            for row in page
+        ],
+        "total": len(kept),
+        "truncated": start + len(page) < len(kept),
+    }
+
+
+def compare_runs(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    cluster: str | None = None,
+    from_run: int | None = None,
+    to_run: int | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> dict:
+    name = resolve_cluster(conn, db, cluster)
+    new = select_run(conn, name, to_run)
+    old = select_run(conn, name, from_run) if from_run is not None else queries.previous_comparable(conn, new)
+    if old is None:
+        raise ToolError("no earlier comparable run to compare with; pass from_run")
+    result = _jsonable(dataclasses.asdict(diff.compare(conn, old.id, new.id, clamp(limit))))
+    return {"cluster": name, "from": run_payload(old, now), "to": run_payload(new, now), **result}
+
+
+def accepted_risks(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    cluster: str | None = None,
+    state: Literal["active", "all"] = "active",
+) -> dict:
+    name = resolve_cluster(conn, db, cluster)
+    run = _dashboard_run(conn, name)
+    entries = accepted.register(conn, name, run.id if run else None, now.date())
+    return {
+        "cluster": name,
+        "state": state,
+        "entries": [
+            _jsonable(dataclasses.asdict(entry)) for entry in entries if state == "all" or entry.state == "active"
+        ],
+    }

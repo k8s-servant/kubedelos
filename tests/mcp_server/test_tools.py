@@ -9,7 +9,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 from kubedelos.config import Settings
 from kubedelos.mcp_server import tools
 from kubedelos.mcp_server.tools import Db
-from kubedelos.models import Workload
+from kubedelos.models import HostPath, Rights, Workload
 from kubedelos.store import accepted, queries
 from kubedelos.store.db import MIGRATIONS, connect
 from kubedelos.store.repo import Repo
@@ -386,3 +386,168 @@ def test_page_zero_is_page_one(world):
     zero = tools.list_findings(conn, db, NOW, page=0)
     assert zero["page"] == 1 and zero["items"] == tools.list_findings(conn, db, NOW, page=1)["items"]
     assert tools.list_findings(conn, db, NOW, page=-4)["page"] == 1
+
+
+def _facts(*, level="none", privileged=False, host_pid=False, hostpath=None, caps=(), rights=None):
+    base = make_facts(level=level)
+    pod = base.pod.model_copy(
+        update={
+            "privileged": privileged,
+            "host_pid": host_pid,
+            "added_capabilities": tuple(caps),
+            "host_path_volumes": (HostPath(path="/data", read_only=hostpath),) if hostpath is not None else (),
+        }
+    )
+    return base.model_copy(update={"pod": pod, "rights": Rights(status="ok", **(rights or {}))})
+
+
+def test_host_access_rules():
+    assert not tools.host_access(_facts())
+    assert tools.host_access(_facts(privileged=True))
+    assert tools.host_access(_facts(host_pid=True))
+    assert tools.host_access(_facts(hostpath=False))
+    assert not tools.host_access(_facts(hostpath=True))
+    assert tools.host_access(_facts(caps=["CHOWN", "SYS_ADMIN"]))
+    assert tools.host_access(_facts(caps=["ALL"]))
+    assert not tools.host_access(_facts(caps=["CHOWN"]))
+
+
+def _surface_world(repo):
+    run_id = new_run(repo, "my-cluster")
+    ext, unk, clu, nof = _wl("web", "ext"), _wl("web", "unk"), _wl("api", "clu"), _wl("api", "nof")
+    add_workloads(repo, run_id, "img-a", [ext, unk], [finding("CVE-1", "CRITICAL")], facts={
+        ext: _facts(level="external", privileged=True, rights={"reads_secrets": True}),
+        unk: _facts(level="unknown", rights={"wildcard": True}),
+    })  # fmt: skip
+    add_workloads(repo, run_id, "img-b", [clu], [finding("CVE-2", "HIGH"), finding("CVE-3", "HIGH", pkg="z")],
+                  facts={clu: _facts(level="cluster", hostpath=False)})  # fmt: skip
+    add_workloads(repo, run_id, "img-c", [nof], [finding("CVE-4", "CRITICAL"), finding("CVE-5", "CRITICAL", pkg="y")])
+    return run_id
+
+
+def _names(result):
+    return [(i["namespace"], i["name"]) for i in result["items"]]
+
+
+def test_attack_surface_filters_and_order(world):
+    conn, repo, db = world
+    _surface_world(repo)
+    result = tools.attack_surface(conn, db, NOW)
+    assert _names(result) == [("web", "ext"), ("web", "unk"), ("api", "clu"), ("api", "nof")]
+    assert result["facts_collected"] is True and result["total"] == 4 and result["truncated"] is False
+    assert result["cluster"] == "my-cluster" and result["run"]["number"] == 1
+    first = result["items"][0]
+    assert set(first) == {"namespace", "kind", "name", "container", "image", "critical", "high", "host_access", "facts"}
+    assert (first["critical"], first["high"], first["host_access"], first["image"]) == (1, 0, True, "img-a")
+    assert result["items"][2]["host_access"] is True and result["items"][2]["high"] == 2
+    assert result["items"][3]["facts"] is None and result["items"][3]["host_access"] is False
+    json.dumps(result)
+    assert _names(tools.attack_surface(conn, db, NOW, exposure=["external", "cluster"])) == [
+        ("web", "ext"),
+        ("api", "clu"),
+    ]
+    assert _names(tools.attack_surface(conn, db, NOW, privileged=True)) == [("web", "ext")]
+    assert _names(tools.attack_surface(conn, db, NOW, privileged=False)) == [
+        ("web", "unk"),
+        ("api", "clu"),
+    ]
+    assert _names(tools.attack_surface(conn, db, NOW, host=True)) == [("web", "ext"), ("api", "clu")]
+    assert _names(tools.attack_surface(conn, db, NOW, rights=["reads_secrets", "wildcard"])) == [
+        ("web", "ext"),
+        ("web", "unk"),
+    ]
+    assert _names(tools.attack_surface(conn, db, NOW, rights=["pod_exec"])) == []
+    only_crit = tools.attack_surface(conn, db, NOW, min_severity="CRITICAL")
+    assert _names(only_crit) == [("web", "ext"), ("web", "unk"), ("api", "nof")]
+    assert _names(tools.attack_surface(conn, db, NOW, min_severity="HIGH", exposure=["cluster"])) == [("api", "clu")]
+    page = tools.attack_surface(conn, db, NOW, limit=2, offset=1)
+    assert _names(page) == [("web", "unk"), ("api", "clu")] and page["total"] == 4 and page["truncated"] is True
+    assert _names(tools.attack_surface(conn, db, NOW, limit=2, offset=-5))[0] == ("web", "ext")
+
+
+def test_attack_surface_orders_by_severity_within_exposure(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    a, b, c = _wl("n", "a"), _wl("n", "b"), _wl("n", "c")
+    add_workloads(repo, run_id, "img-a", [a], [finding("CVE-1", "HIGH")], facts={a: _facts(level="none")})
+    add_workloads(repo, run_id, "img-b", [b], [finding("CVE-2", "CRITICAL")], facts={b: _facts(level="none")})
+    add_workloads(repo, run_id, "img-c", [c], [], facts={c: _facts(level="none")})
+    assert _names(tools.attack_surface(conn, db, NOW)) == [("n", "b"), ("n", "a"), ("n", "c")]
+
+
+def test_attack_surface_without_facts(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_workloads(repo, run_id, "img-a", [_wl("web", "old")], [finding("CVE-1", "HIGH")])
+    for kwargs in ({"exposure": ["external"]}, {"privileged": False}, {"host": False}, {"rights": ["escalates"]}):
+        result = tools.attack_surface(conn, db, NOW, **kwargs)
+        assert result["items"] == [] and result["facts_collected"] is False, kwargs
+    result = tools.attack_surface(conn, db, NOW, min_severity="HIGH")
+    assert _names(result) == [("web", "old")] and result["items"][0]["facts"] is None
+    assert result["facts_collected"] is False
+
+
+def _two_runs(repo):
+    first = new_run(repo, "my-cluster")
+    add_image(repo, first, "img-a", [finding("CVE-1", "HIGH")])
+    second = new_run(repo, "my-cluster")
+    add_image(repo, second, "img-a", [finding("CVE-2", "CRITICAL")])
+    return first, second
+
+
+def test_compare_runs_defaults_to_previous_comparable(world):
+    conn, repo, db = world
+    _two_runs(repo)
+    result = tools.compare_runs(conn, db, NOW)
+    assert (result["from"]["number"], result["to"]["number"]) == (1, 2)
+    assert (result["new_total"], result["gone_total"]) == (1, 1)
+    assert [f["vuln_id"] for f in result["new"]] == ["CVE-2"]
+    assert [f["vuln_id"] for f in result["gone"]] == ["CVE-1"]
+    json.dumps(result)
+    explicit = tools.compare_runs(conn, db, NOW, from_run=2, to_run=1)
+    assert (explicit["from"]["number"], explicit["to"]["number"]) == (2, 1)
+    assert [f["vuln_id"] for f in explicit["new"]] == ["CVE-1"]
+    assert tools.compare_runs(conn, db, NOW, to_run=2)["from"]["number"] == 1
+    assert len(tools.compare_runs(conn, db, NOW, limit=1)["new"]) == 1
+
+
+def test_compare_runs_without_previous_is_an_error(world):
+    conn, repo, db = world
+    new_run(repo, "my-cluster")
+    with pytest.raises(ToolError) as exc:
+        tools.compare_runs(conn, db, NOW)
+    assert str(exc.value) == "no earlier comparable run to compare with; pass from_run"
+    with pytest.raises(ToolError) as exc:
+        tools.compare_runs(conn, db, NOW, from_run=9)
+    assert str(exc.value) == "no run 9 for my-cluster"
+
+
+def test_accepted_risks_active_and_all(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_image(repo, run_id, "img-a", [finding("CVE-1", "HIGH")])
+    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=date(2026, 3, 1),
+                        context="my-cluster", now=NOW)  # fmt: skip
+    old = accepted.add(conn, vuln_id="CVE-2", reason="old", owner="me", expires=date(2026, 2, 1), context=None,
+                       now=NOW)  # fmt: skip
+    gone = accepted.add(conn, vuln_id="CVE-3", reason="x", owner="me", expires=date(2026, 3, 1), context="my-cluster",
+                        now=NOW)  # fmt: skip
+    accepted.revoke(conn, gone, NOW)
+    later = NOW.replace(day=5)
+    active = tools.accepted_risks(conn, db, later)
+    assert active["cluster"] == "my-cluster" and active["state"] == "active"
+    assert [e["id"] for e in active["entries"]] == [live]
+    entry = active["entries"][0]
+    assert entry["expires"] == "2026-03-01" and entry["created_at"] == NOW.isoformat()
+    assert entry["state"] == "active" and entry["covers"] == 1 and entry["revoked_at"] is None
+    everything = tools.accepted_risks(conn, db, later, state="all")
+    assert {e["id"]: e["state"] for e in everything["entries"]} == {live: "active", old: "expired", gone: "revoked"}
+    json.dumps(everything)
+
+
+def test_accepted_risks_without_a_run(world):
+    conn, repo, db = world
+    new_run(repo, "my-cluster", "running")
+    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), context=None, now=NOW)
+    result = tools.accepted_risks(conn, db, NOW)
+    assert [e["covers"] for e in result["entries"]] == [None]

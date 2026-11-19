@@ -155,6 +155,82 @@ def build_server(db: Db) -> MCPServer:
                 per_page,
             )
 
+    @server.tool(
+        name="attack_surface",
+        description=(
+            "The run's workload containers ranked by how reachable and how powerful they are: exposure first "
+            "(external, unknown, cluster, none, then no facts), then Critical and High counts. Filters combine with "
+            "AND: exposure levels, privileged, host (host namespaces, writable hostPath or SYS_ADMIN-class "
+            "capabilities), rights (any listed ServiceAccount right) and min_severity. A workload without facts never "
+            "matches a facts filter; facts_collected says whether the run has any. At most 100 items; total and "
+            "truncated say whether the list was cut, and offset pages on. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def attack_surface(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+        exposure: Annotated[
+            list[Literal["external", "cluster", "none", "unknown"]] | None,
+            Field(description="Keep workloads with one of these exposure levels."),
+        ] = None,
+        privileged: Annotated[bool | None, Field(description="Keep privileged (true) or unprivileged (false).")] = None,
+        host: Annotated[
+            bool | None, Field(description="Keep workloads with (true) or without (false) host access.")
+        ] = None,
+        rights: Annotated[
+            list[Literal["cluster_admin", "reads_secrets", "creates_workloads", "pod_exec", "escalates", "wildcard"]]
+            | None,
+            Field(description="Keep workloads whose ServiceAccount has any of these rights."),
+        ] = None,
+        min_severity: Annotated[
+            Literal["CRITICAL", "HIGH"] | None,
+            Field(description="CRITICAL keeps workloads with a Critical finding; HIGH one with a Critical or High."),
+        ] = None,
+        limit: Annotated[int, Field(description="Items to return; 25 by default, 100 at most.")] = 25,
+        offset: Annotated[int, Field(description="Items to skip, for the next page.")] = 0,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.attack_surface(
+                conn, db, tools._now(), cluster, run, exposure, privileged, host, rights, min_severity, limit, offset
+            )
+
+    @server.tool(
+        name="compare_runs",
+        description=(
+            "What changed between two runs of a cluster: the new and the gone findings (worst first), the images "
+            "added, gone and changed, and how many findings stay open. Without from_run it compares with the previous "
+            "comparable run; without to_run it uses the newest run. At most 100 findings per side. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def compare_runs(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        from_run: Annotated[
+            int | None, Field(description="The older run's number; the previous comparable run.")
+        ] = None,
+        to_run: Annotated[int | None, Field(description="The newer run's number; the newest when omitted.")] = None,
+        limit: Annotated[int, Field(description="Findings per side to list; 25 by default, 100 at most.")] = 25,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.compare_runs(conn, db, tools._now(), cluster, from_run, to_run, limit)
+
+    @server.tool(
+        name="accepted_risks",
+        description=(
+            "The risk-acceptance register of a cluster (its own entries and the all-cluster ones): CVE, scope, "
+            "reason, owner, expiry, state and how many findings of the newest run each covers. Only active entries "
+            'unless state is "all". ' + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def accepted_risks(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        state: Annotated[Literal["active", "all"], Field(description="Active entries, or all of them.")] = "active",
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.accepted_risks(conn, db, tools._now(), cluster, state)
+
     return server
 
 

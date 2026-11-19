@@ -152,3 +152,21 @@ def test_mcp_cve_lookup_under_300ms(tmp_path):
     conn.close()
     assert result["total"] > 100, result["total"]
     assert statistics.median(timings) < BUDGET, timings
+
+
+@pytest.mark.perf
+def test_mcp_attack_surface_under_300ms(tmp_path):
+    """``attack_surface`` with no filters loads every workload row of the run with its counts."""
+    conn = connect(tmp_path / "large.db")
+    for _ in range(PRIOR_RUNS):
+        seed_large(conn)
+    seed_large(conn)
+    db = tools.Db(tmp_path / "large.db", CONTEXT)
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        result = tools.attack_surface(conn, db, tools._now(), limit=100)
+        timings.append(time.perf_counter() - start)
+    conn.close()
+    assert result["total"] > 0, result["total"]
+    assert statistics.median(timings) < BUDGET, timings

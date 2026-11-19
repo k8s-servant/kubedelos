@@ -15,6 +15,7 @@ MINIMAL_ARGS = {
     "find_vulnerability": {"vuln_id": "CVE-1"},
     "workload": {"namespace": "ns", "name": "a"},
     "list_findings": {},
+    "attack_surface": {"min_severity": "HIGH", "rights": ["pod_exec"]},
 }
 
 
@@ -39,6 +40,9 @@ async def test_tools_are_listed_read_only(db):
         "find_vulnerability",
         "workload",
         "list_findings",
+        "attack_surface",
+        "compare_runs",
+        "accepted_risks",
     ]
     for tool in listed:
         assert tool.annotations.read_only_hint is True
@@ -104,3 +108,20 @@ async def test_find_vulnerability_over_mcp(db, monkeypatch):
     assert missing.is_error and "no workload ns/nope in run 2" in missing.content[0].text
     assert bad.is_error and "unknown severity URGENT" in bad.content[0].text
     assert [i["vuln_id"] for i in found.structured_content["items"]] == ["CVE-1"]
+
+
+async def test_attack_surface_over_mcp(db, monkeypatch):
+    monkeypatch.setattr(tools, "_now", lambda: NOW)
+    conn = db.open()
+    expected = tools.attack_surface(conn, db, NOW, cluster="alpha", min_severity="HIGH")
+    conn.close()
+    async with Client(build_server(db)) as client:
+        result = await client.call_tool("attack_surface", {"cluster": "alpha", "min_severity": "HIGH", "limit": 500})
+        bad = await client.call_tool("attack_surface", {"cluster": "alpha", "exposure": ["sideways"]})
+        compare = await client.call_tool("compare_runs", {"cluster": "zeta"})
+        risks = await client.call_tool("accepted_risks", {"cluster": "alpha", "state": "all"})
+    assert result.structured_content == expected and expected["total"] == 1
+    assert expected["items"][0]["image"] == "img-a" and expected["items"][0]["facts"] is None
+    assert bad.is_error
+    assert compare.is_error and "no earlier comparable run" in compare.content[0].text
+    assert risks.structured_content["entries"] == []
