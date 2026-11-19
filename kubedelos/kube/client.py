@@ -1,4 +1,7 @@
-"""A small read-only wrapper over the Kubernetes API groups the inventory needs."""
+"""A small read-only wrapper over the Kubernetes API groups the inventory needs.
+
+The attack-surface lists (services, ingresses, network policies, RBAC) are reads too, and no Secret is listed.
+"""
 
 import os
 from typing import Protocol
@@ -33,6 +36,33 @@ class KubeApi(Protocol):
     def list_nodes(self) -> list:
         """Cluster nodes, for each pod's platform."""
 
+    def list_services(self, ns: str) -> list:
+        """Services in ``ns``."""
+
+    def list_service_accounts(self, ns: str) -> list:
+        """ServiceAccounts in ``ns``."""
+
+    def list_ingresses(self, ns: str) -> list:
+        """Ingresses in ``ns``."""
+
+    def list_network_policies(self, ns: str) -> list:
+        """NetworkPolicies in ``ns``."""
+
+    def list_httproutes(self, ns: str) -> list[dict]:
+        """Gateway API HTTPRoutes in ``ns``, as the plain dicts the custom-objects API returns."""
+
+    def list_roles(self, ns: str | None) -> list:
+        """Roles in ``ns``, or in every namespace when ``ns`` is None."""
+
+    def list_role_bindings(self, ns: str | None) -> list:
+        """RoleBindings in ``ns``, or in every namespace when ``ns`` is None."""
+
+    def list_cluster_roles(self) -> list:
+        """ClusterRoles."""
+
+    def list_cluster_role_bindings(self) -> list:
+        """ClusterRoleBindings."""
+
     def read_secret(self, ns: str, name: str) -> V1Secret:
         """One Secret by name: only ever a Secret a pod names as an imagePullSecret, never a list."""
 
@@ -53,6 +83,9 @@ class _RealKubeApi:
         self._core = client.CoreV1Api()
         self._apps = client.AppsV1Api()
         self._batch = client.BatchV1Api()
+        self._networking = client.NetworkingV1Api()
+        self._rbac = client.RbacAuthorizationV1Api()
+        self._custom = client.CustomObjectsApi()
         self._context = context_name
 
     def list_namespaces(self, label_selector: str | None = None) -> list[V1Namespace]:
@@ -72,6 +105,39 @@ class _RealKubeApi:
 
     def list_nodes(self) -> list:
         return self._core.list_node(_request_timeout=REQUEST_TIMEOUT).items
+
+    def list_services(self, ns: str) -> list:
+        return self._core.list_namespaced_service(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_service_accounts(self, ns: str) -> list:
+        return self._core.list_namespaced_service_account(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_ingresses(self, ns: str) -> list:
+        return self._networking.list_namespaced_ingress(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_network_policies(self, ns: str) -> list:
+        return self._networking.list_namespaced_network_policy(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_httproutes(self, ns: str) -> list[dict]:
+        return self._custom.list_namespaced_custom_object(
+            "gateway.networking.k8s.io", "v1", ns, "httproutes", _request_timeout=REQUEST_TIMEOUT
+        )["items"]
+
+    def list_roles(self, ns: str | None) -> list:
+        if ns is None:
+            return self._rbac.list_role_for_all_namespaces(_request_timeout=REQUEST_TIMEOUT).items
+        return self._rbac.list_namespaced_role(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_role_bindings(self, ns: str | None) -> list:
+        if ns is None:
+            return self._rbac.list_role_binding_for_all_namespaces(_request_timeout=REQUEST_TIMEOUT).items
+        return self._rbac.list_namespaced_role_binding(ns, _request_timeout=REQUEST_TIMEOUT).items
+
+    def list_cluster_roles(self) -> list:
+        return self._rbac.list_cluster_role(_request_timeout=REQUEST_TIMEOUT).items
+
+    def list_cluster_role_bindings(self) -> list:
+        return self._rbac.list_cluster_role_binding(_request_timeout=REQUEST_TIMEOUT).items
 
     def read_secret(self, ns: str, name: str) -> V1Secret:
         return self._core.read_namespaced_secret(name, ns, _request_timeout=REQUEST_TIMEOUT)
