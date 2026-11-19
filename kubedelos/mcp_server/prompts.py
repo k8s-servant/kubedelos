@@ -35,8 +35,9 @@ running an exploit, and never suggest changing the cluster from here.
 
 1. Call attack_surface(exposure=["external", "unknown"], min_severity="HIGH"{cluster_kw}) to list the reachable
    workloads with Critical or High findings.
-2. That call never lists a workload without facts, so also call attack_surface(min_severity="HIGH"{cluster_kw}) with
-   no facts filter. Always do this, and above all when facts_collected is false (no facts were collected for the
+2. That call never lists a workload without facts, so also call
+   attack_surface(min_severity="HIGH", limit=100{cluster_kw}) with no facts filter, and page on with offset while
+   truncated is true. Always do this, and above all when facts_collected is false (no facts were collected for the
    run). Every row whose facts is null goes in the "unknown" section: treat it as possibly exposed.
 3. For the worst few, call workload(namespace, name{cluster_kw}) for their findings and facts.
 """
@@ -81,6 +82,9 @@ collected, so treat it as possibly exposed), whether a fixed version exists, and
 
 
 def _valid(value: str | None, pattern: re.Pattern[str], argument: str) -> str | None:
+    """``value`` if it matches ``pattern``; an empty optional argument means omitted, as clients send it."""
+    if value == "":
+        return None
     if value is not None and not pattern.fullmatch(value):
         raise ValueError(f"invalid {argument}")
     return value
@@ -105,9 +109,9 @@ def fix_first_briefing(cluster: str | None = None) -> str:
 def attack_paths(workload: str | None = None, cluster: str | None = None) -> str:
     """Trace attack paths from the reachable vulnerable workloads, or from one ``<namespace>/<name>`` workload."""
     parts = _cluster_parts(cluster)
+    workload = _valid(workload, _CLUSTER, "workload")
     if workload is None:
         return ATTACK_PATHS_SURFACE.format(**parts) + ATTACK_PATHS_COMMON
-    _valid(workload, _CLUSTER, "workload")
     namespace, _, name = workload.partition("/")
     if not namespace or not name or "/" in name:
         raise ValueError("invalid workload")
@@ -117,5 +121,6 @@ def attack_paths(workload: str | None = None, cluster: str | None = None) -> str
 
 def explain_cve(vuln_id: str, cluster: str | None = None) -> str:
     """Explain one CVE: what it allows, where it runs, whether a fix exists and whether the risk is accepted."""
-    _valid(vuln_id, _VULN_ID, "vuln_id")
+    if not vuln_id or not _VULN_ID.fullmatch(vuln_id):  # required, so empty is invalid, not omitted
+        raise ValueError("invalid vuln_id")
     return EXPLAIN_CVE.format(vuln_id=vuln_id, **_cluster_parts(cluster))

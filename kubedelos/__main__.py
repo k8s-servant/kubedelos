@@ -1,8 +1,9 @@
 """Run the CLI with ``python -m kubedelos``, the same entry point as the ``kubedelos`` console script.
 
-An MCP client can then start the server with the interpreter it already has, without finding the script on PATH.
+The guard keeps a plain import of this module (by a tool that walks the package, say) from running the CLI.
 """
 
 from kubedelos.cli import app
 
-app()
+if __name__ == "__main__":
+    app()

@@ -54,7 +54,10 @@ class Db:
             )
         if version > len(MIGRATIONS):
             conn.close()
-            raise ToolError(f"the database at {self.path} was written by a newer kubedelos; upgrade kubedelos")
+            raise ToolError(
+                f"the database at {self.path} was written by a newer kubedelos; upgrade kubedelos or restart the MCP "
+                "server"
+            )
         return conn
 
 
@@ -66,6 +69,8 @@ def clamp(limit: int, default: int = DEFAULT_LIMIT) -> int:
 def resolve_cluster(conn: sqlite3.Connection, db: Db, cluster: str | None) -> str:
     """The cluster to query: the argument, else ``--context``, else the context with the newest finished run."""
     scans = queries.context_scans(conn)
+    if not scans:
+        raise ToolError(f'no scans yet in {db.path}; run "kubedelos ui" and start a scan first')
     name = cluster or db.default_cluster or _newest_finished(scans)
     if name is None or name not in scans:
         raise ToolError(f"unknown cluster {name}; known: {', '.join(sorted(scans))}")
@@ -85,12 +90,15 @@ def _dashboard_run(conn: sqlite3.Connection, cluster: str) -> queries.Run | None
 
 
 def run_payload(run: queries.Run, now: datetime) -> dict:
+    """The run every tool reports on, with what makes its picture incomplete: failed images and coverage gaps."""
     return {
         "number": run.number,
         "status": run.status,
         "finished_at": run.finished_at.isoformat() if run.finished_at else None,
         "scope": analytics.describe_scope(run.scope),
         "stale": analytics.is_stale(run.finished_at, now),
+        "images_failed": run.images_failed,
+        "coverage_gaps": len(run.gaps),
         "fact_sources": run.fact_sources,
     }
 
@@ -110,7 +118,8 @@ def list_clusters(conn: sqlite3.Connection, db: Db, now: datetime) -> dict:
                 "newest_run": run.number if run else None,
             }
         )
-    return {"clusters": clusters, "default": db.default_cluster or _newest_finished(scans)}
+    default = db.default_cluster or _newest_finished(scans)
+    return {"clusters": clusters, "default": default if default in scans else None}
 
 
 def _jsonable(value: Any) -> Any:
@@ -184,6 +193,31 @@ def _facts_payload(facts: WorkloadFacts | None) -> dict | None:
     return facts.model_dump(mode="json") if facts else None
 
 
+_EXPOSURE_RANK = {"external": 0, "unknown": 1, "cluster": 2, "none": 3}
+_NO_FACTS_RANK = _EXPOSURE_RANK["unknown"]  # not collected is as exposed as could not be read, never less
+
+
+def exposure_key(row: workloads.WorkloadRow) -> tuple:
+    """The order the workload lists share: most exposed first (no facts with unknown), then Critical, then High.
+
+    ``attack_surface`` and ``find_vulnerability`` both sort by it, so their rankings agree.
+    """
+    return (
+        _EXPOSURE_RANK[row.facts.exposure.level] if row.facts else _NO_FACTS_RANK,
+        -row.counts["CRITICAL"],
+        -row.counts["HIGH"],
+        row.namespace,
+        row.name,
+        row.container,
+    )
+
+
+def normalise_vuln_id(vuln_id: str) -> str:
+    """``vuln_id`` stripped, and upper-cased when it is a CVE id (Trivy writes those upper case); others stay as given."""
+    vuln_id = vuln_id.strip()
+    return vuln_id.upper() if vuln_id[:4].lower() == "cve-" else vuln_id
+
+
 def find_vulnerability(
     conn: sqlite3.Connection,
     db: Db,
@@ -192,11 +226,16 @@ def find_vulnerability(
     cluster: str | None = None,
     run: int | None = None,
     limit: int = DEFAULT_LIMIT,
+    offset: int = 0,
 ) -> dict:
     name = resolve_cluster(conn, db, cluster)
     selected = select_run(conn, name, run)
-    vuln_id = vuln_id.strip()
-    rows = workloads.workloads(conn, selected.id, vuln_id=vuln_id, counts=False)
+    vuln_id = normalise_vuln_id(vuln_id)
+    rows = sorted(workloads.workloads(conn, selected.id, vuln_id=vuln_id), key=exposure_key)
+    start = max(offset, 0)
+    page = rows[start : start + clamp(limit)]
+    packages = workloads.cve_packages(conn, selected.id, vuln_id)
+    images = workloads.cve_images(conn, selected.id, vuln_id)
     items = [
         {
             "namespace": row.namespace,
@@ -206,18 +245,20 @@ def find_vulnerability(
             "image": row.ref,
             "facts": _facts_payload(row.facts),
         }
-        for row in rows[: clamp(limit)]
+        for row in page
     ]
     active = [e for e in accepted.register(conn, name, selected.id, now.date(), vuln_id) if e.state == "active"]
     return {
         "cluster": name,
         "run": run_payload(selected, now),
         "vuln_id": vuln_id,
-        "packages": workloads.cve_packages(conn, selected.id, vuln_id),
-        "images": workloads.cve_images(conn, selected.id, vuln_id),
+        "packages": packages[:MAX_LIMIT],
+        "packages_total": len(packages),
+        "images": images[:MAX_LIMIT],
+        "images_total": len(images),
         "workloads": items,
         "total": len(rows),
-        "truncated": len(rows) > len(items),
+        "truncated": start + len(page) < len(rows),
         "acceptance": [
             {
                 "id": e.id,
@@ -329,8 +370,6 @@ def _finding_item(row: sqlite3.Row) -> dict:
 _HOST_CAPABILITIES = frozenset(
     {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO", "DAC_READ_SEARCH", "BPF", "ALL"}
 )
-_EXPOSURE_RANK = {"external": 0, "unknown": 1, "cluster": 2, "none": 3}
-_NO_FACTS_RANK = 4
 
 
 def host_access(facts: WorkloadFacts) -> bool:
@@ -391,16 +430,7 @@ def attack_surface(
         if _matches_facts(row.facts, exposure, privileged, host, rights)
         and (min_severity is None or row.counts["CRITICAL"] > 0 or (min_severity == "HIGH" and row.counts["HIGH"] > 0))
     ]
-    kept.sort(
-        key=lambda row: (
-            _EXPOSURE_RANK[row.facts.exposure.level] if row.facts else _NO_FACTS_RANK,
-            -row.counts["CRITICAL"],
-            -row.counts["HIGH"],
-            row.namespace,
-            row.name,
-            row.container,
-        )
-    )
+    kept.sort(key=exposure_key)
     start = max(offset, 0)
     page = kept[start : start + clamp(limit)]
     return {

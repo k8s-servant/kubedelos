@@ -59,7 +59,9 @@ def test_open_newer_schema_is_refused(tmp_path):
     raw.close()
     with pytest.raises(ToolError) as exc:
         Db(path, None).open()
-    assert str(exc.value) == f"the database at {path} was written by a newer kubedelos; upgrade kubedelos"
+    assert str(exc.value) == (
+        f"the database at {path} was written by a newer kubedelos; upgrade kubedelos or restart the MCP server"
+    )
 
 
 def test_clamp():
@@ -84,6 +86,41 @@ def test_list_clusters_sorted_with_default(tmp_path):
     pinned = Db(path, "zeta")
     conn = pinned.open()
     assert tools.list_clusters(conn, pinned, NOW)["default"] == "zeta"
+    conn.close()
+
+
+def test_list_clusters_default_is_none_for_an_unknown_context(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    seed(path, {"zeta": 5, "alpha": 9})
+    db = Db(path, "nope")
+    conn = db.open()
+    assert tools.list_clusters(conn, db, NOW)["default"] is None
+    conn.close()
+
+
+EMPTY_DB_CALLS = {
+    "run_summary": lambda conn, db: tools.run_summary(conn, db, NOW),
+    "fix_first": lambda conn, db: tools.fix_first(conn, db, NOW),
+    "find_vulnerability": lambda conn, db: tools.find_vulnerability(conn, db, NOW, "CVE-1"),
+    "workload": lambda conn, db: tools.workload(conn, db, NOW, "ns", "a"),
+    "list_findings": lambda conn, db: tools.list_findings(conn, db, NOW),
+    "attack_surface": lambda conn, db: tools.attack_surface(conn, db, NOW),
+    "compare_runs": lambda conn, db: tools.compare_runs(conn, db, NOW),
+    "accepted_risks": lambda conn, db: tools.accepted_risks(conn, db, NOW),
+}
+
+
+@pytest.mark.parametrize("context", [None, "my-cluster"])
+@pytest.mark.parametrize("tool", sorted(EMPTY_DB_CALLS))
+def test_empty_database_says_to_scan_first(tmp_path, tool, context):
+    path = tmp_path / "kubedelos.db"
+    connect(path).close()
+    db = Db(path, context)
+    conn = db.open()
+    with pytest.raises(ToolError) as exc:
+        EMPTY_DB_CALLS[tool](conn, db)
+    assert str(exc.value) == f'no scans yet in {path}; run "kubedelos ui" and start a scan first'
+    assert tools.list_clusters(conn, db, NOW) == {"clusters": [], "default": None}
     conn.close()
 
 
@@ -168,6 +205,7 @@ def test_run_summary_fields(world):
     result = tools.run_summary(conn, db, NOW)
     assert result["cluster"] == "my-cluster"
     assert result["run"]["number"] == 2 and result["run"]["fact_sources"] is None
+    assert result["run"]["images_failed"] == 1 and result["run"]["coverage_gaps"] == 1
     assert result["kpis"] == dataclasses.asdict(queries.kpis(conn, run_id))
     assert result["kpis"]["critical"] == 1 and result["kpis"]["images_failed"] == 1
     assert result["coverage_gaps"] == ["namespace secret-ns was skipped"]
@@ -180,6 +218,7 @@ def test_run_summary_without_previous_run(world):
     new_run(repo, "my-cluster")
     result = tools.run_summary(conn, db, NOW, cluster="my-cluster", run=1)
     assert result["previous_run"] is None and result["failed"] == [] and result["coverage_gaps"] == []
+    assert result["run"]["images_failed"] == 0 and result["run"]["coverage_gaps"] == 0
 
 
 def _many_fixes(repo, run_id, n):
@@ -260,12 +299,13 @@ def test_find_vulnerability_includes_facts_and_acceptance(world):
     assert [p["pkg_name"] for p in result["packages"]] == ["openssl"]
     assert result["images"] == ["img-a", "img-b"]
     assert [(w["namespace"], w["name"], w["image"]) for w in result["workloads"]] == [
-        ("api", "gateway", "img-a"),
-        ("web", "site", "img-a"),
-        ("web", "worker", "img-b"),
+        ("api", "gateway", "img-a"),  # no facts ranks with unknown exposure: 1 Critical, 1 High
+        ("web", "worker", "img-b"),  # no facts: 1 Critical
+        ("web", "site", "img-a"),  # exposure none ranks last
     ]
     assert result["workloads"][0]["facts"] is None
-    assert result["workloads"][1]["facts"] == make_facts(root=True).model_dump(mode="json")
+    assert result["workloads"][2]["facts"] == make_facts(root=True).model_dump(mode="json")
+    assert (result["images_total"], result["packages_total"]) == (2, 1)
     assert set(result["workloads"][0]) == {"namespace", "kind", "name", "container", "image", "facts"}
     assert result["total"] == 3 and result["truncated"] is False
     assert result["acceptance"] == [
@@ -280,6 +320,48 @@ def test_find_vulnerability_limit_truncates(world):
     _cve_world(repo)
     result = tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=2)
     assert len(result["workloads"]) == 2 and result["total"] == 3 and result["truncated"] is True
+    rest = tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=2, offset=2)
+    assert [w["name"] for w in rest["workloads"]] == ["site"] and rest["total"] == 3 and rest["truncated"] is False
+    clamped = tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=2, offset=-5)
+    assert clamped["workloads"] == result["workloads"]
+
+
+def test_find_vulnerability_orders_by_exposure_like_attack_surface(world):
+    """30 workloads of one image: the external ones sort last by name, and still come first."""
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    many = [_wl("n", f"w{i:02d}") for i in range(30)]
+    facts = {wl: _facts(level="external" if i >= 27 else "none") for i, wl in enumerate(many) if i % 5}
+    add_workloads(repo, run_id, "img-a", many, [finding("CVE-1", "HIGH")], facts=facts)
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=5)
+    assert [w["name"] for w in result["workloads"]] == ["w27", "w28", "w29", "w00", "w05"]  # then no facts
+    assert result["total"] == 30 and result["truncated"] is True
+    surface = tools.attack_surface(conn, db, NOW, limit=100)
+    everything = [w["name"] for w in tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=100)["workloads"]]
+    assert everything == [i["name"] for i in surface["items"]]
+
+
+def test_find_vulnerability_caps_images_and_packages(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    for i in range(120):
+        add_image(repo, run_id, f"img{i:03d}", [finding("CVE-1", "HIGH", pkg=f"p{i:03d}")])
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
+    assert len(result["images"]) == tools.MAX_LIMIT and result["images_total"] == 120
+    assert len(result["packages"]) == tools.MAX_LIMIT and result["packages_total"] == 120
+    assert result["images"][0] == "img000" and result["packages"][0]["pkg_name"] == "p000"
+
+
+def test_find_vulnerability_normalises_the_id(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_image(repo, run_id, "img-a", [finding("CVE-2024-1", "HIGH"), finding("GHSA-abcd-efgh", "HIGH", pkg="z")])
+    for given in (" cve-2024-1 ", "Cve-2024-1", "CVE-2024-1\n"):
+        result = tools.find_vulnerability(conn, db, NOW, given)
+        assert result["vuln_id"] == "CVE-2024-1" and result["images"] == ["img-a"], given
+    assert tools.find_vulnerability(conn, db, NOW, " GHSA-abcd-efgh ")["images"] == ["img-a"]
+    other = tools.find_vulnerability(conn, db, NOW, "ghsa-abcd-efgh")
+    assert other["vuln_id"] == "ghsa-abcd-efgh" and other["images"] == []  # only a CVE- id is upper-cased
 
 
 def test_find_vulnerability_unknown_cve_is_empty(world):
@@ -436,7 +518,8 @@ def test_attack_surface_filters_and_order(world):
     conn, repo, db = world
     _surface_world(repo)
     result = tools.attack_surface(conn, db, NOW)
-    assert _names(result) == [("web", "ext"), ("web", "unk"), ("api", "clu"), ("api", "nof")]
+    # No facts ranks with unknown exposure; nof has two Criticals to unk's one, so it comes first.
+    assert _names(result) == [("web", "ext"), ("api", "nof"), ("web", "unk"), ("api", "clu")]
     assert result["facts_collected"] is True and result["total"] == 4 and result["truncated"] is False
     assert result["cluster"] == "my-cluster" and result["run"]["number"] == 1
     first = result["items"][0]
@@ -453,8 +536,8 @@ def test_attack_surface_filters_and_order(world):
         "facts",
     }
     assert (first["critical"], first["high"], first["host_access"], first["image"]) == (1, 0, True, "img-a")
-    assert result["items"][2]["host_access"] is True and result["items"][2]["high"] == 2
-    assert result["items"][3]["facts"] is None and result["items"][3]["host_access"] is None
+    assert result["items"][3]["host_access"] is True and result["items"][3]["high"] == 2
+    assert result["items"][1]["facts"] is None and result["items"][1]["host_access"] is None
     json.dumps(result)
     assert _names(tools.attack_surface(conn, db, NOW, exposure=["external", "cluster"])) == [
         ("web", "ext"),
@@ -472,10 +555,10 @@ def test_attack_surface_filters_and_order(world):
     ]
     assert _names(tools.attack_surface(conn, db, NOW, rights=["pod_exec"])) == []
     only_crit = tools.attack_surface(conn, db, NOW, min_severity="CRITICAL")
-    assert _names(only_crit) == [("web", "ext"), ("web", "unk"), ("api", "nof")]
+    assert _names(only_crit) == [("web", "ext"), ("api", "nof"), ("web", "unk")]
     assert _names(tools.attack_surface(conn, db, NOW, min_severity="HIGH", exposure=["cluster"])) == [("api", "clu")]
     page = tools.attack_surface(conn, db, NOW, limit=2, offset=1)
-    assert _names(page) == [("web", "unk"), ("api", "clu")] and page["total"] == 4 and page["truncated"] is True
+    assert _names(page) == [("api", "nof"), ("web", "unk")] and page["total"] == 4 and page["truncated"] is True
     assert _names(tools.attack_surface(conn, db, NOW, limit=2, offset=-5))[0] == ("web", "ext")
 
 
@@ -487,6 +570,18 @@ def test_attack_surface_orders_by_severity_within_exposure(world):
     add_workloads(repo, run_id, "img-b", [b], [finding("CVE-2", "CRITICAL")], facts={b: _facts(level="none")})
     add_workloads(repo, run_id, "img-c", [c], [], facts={c: _facts(level="none")})
     assert _names(tools.attack_surface(conn, db, NOW)) == [("n", "b"), ("n", "a"), ("n", "c")]
+
+
+def test_no_facts_ranks_with_unknown_exposure(world):
+    """A workload without facts is as exposed as an unknown one: ahead of cluster and none, whatever its counts."""
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    unk, nof, clu, non = _wl("n", "unk"), _wl("n", "nof"), _wl("n", "clu"), _wl("n", "non")
+    add_workloads(repo, run_id, "img-a", [unk], [finding("CVE-1", "HIGH")], facts={unk: _facts(level="unknown")})
+    add_workloads(repo, run_id, "img-b", [nof], [finding("CVE-1", "CRITICAL")])
+    add_workloads(repo, run_id, "img-c", [clu, non], [finding("CVE-1", "CRITICAL"), finding("CVE-2", "CRITICAL")],
+                  facts={clu: _facts(level="cluster"), non: _facts(level="none")})  # fmt: skip
+    assert _names(tools.attack_surface(conn, db, NOW)) == [("n", "nof"), ("n", "unk"), ("n", "clu"), ("n", "non")]
 
 
 def test_attack_surface_without_facts(world):

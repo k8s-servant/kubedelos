@@ -29,7 +29,9 @@ def test_prompts_name_their_tools():
         prompts.attack_paths(),
         [
             'attack_surface(exposure=["external", "unknown"], min_severity="HIGH")',
-            'attack_surface(min_severity="HIGH")',
+            'attack_surface(min_severity="HIGH", limit=100)',
+            "offset",
+            "truncated",
             "facts_collected",
             "ingress_isolated",
             "host access",
@@ -45,20 +47,59 @@ def test_prompts_name_their_tools():
 
 def test_attack_paths_also_lists_workloads_without_facts():
     text = prompts.attack_paths(cluster="my-cluster")
-    assert 'attack_surface(min_severity="HIGH", cluster="my-cluster")' in text
+    assert 'attack_surface(min_severity="HIGH", limit=100, cluster="my-cluster")' in text
     assert "facts_collected" in text and "facts is null" in text
+    assert "page on with offset while truncated is true" in " ".join(text.split())
+
+
+def test_empty_optional_arguments_are_omitted():
+    assert prompts.fix_first_briefing(cluster="") == prompts.fix_first_briefing()
+    assert prompts.attack_paths(workload="", cluster="") == prompts.attack_paths()
+    assert prompts.explain_cve("CVE-1", cluster="") == prompts.explain_cve("CVE-1")
+
+
+def _forbidden_imports(source):
+    """The imports in ``source`` that could reach the database: relative ones, the store, or the tools module."""
+
+    def forbidden(name):
+        return name == "kubedelos.store" or name.startswith("kubedelos.store.") or name == "kubedelos.mcp_server.tools"
+
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            found += [alias.name for alias in node.names if forbidden(alias.name)]
+        elif isinstance(node, ast.ImportFrom):
+            if node.level > 0:
+                found.append("." * node.level + (node.module or ""))
+                continue
+            names = [node.module or ""] + [f"{node.module}.{alias.name}" for alias in node.names]
+            found += [name for name in names if forbidden(name)]
+    return found
 
 
 def test_prompts_do_not_import_the_store_or_the_tools():
-    tree = ast.parse(inspect.getsource(prompts))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
-            imported |= {f"{node.module}.{alias.name}" for alias in node.names}
-    assert not {m for m in imported if m.startswith("kubedelos.store") or m == "kubedelos.mcp_server.tools"}
+    assert _forbidden_imports(inspect.getsource(prompts)) == []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "import kubedelos.store.db",
+        "from kubedelos.store import queries",
+        "from kubedelos import store",
+        "from kubedelos.mcp_server import tools",
+        "from kubedelos.mcp_server.tools import Db",
+        "from . import tools",
+        "from .tools import Db",
+        "from ..store import db",
+    ],
+)
+def test_import_guard_rejects(source):
+    assert _forbidden_imports(source)
+
+
+def test_import_guard_allows_others():
+    assert _forbidden_imports("import re\nfrom kubedelos.models import Workload\nfrom kubedelos import storage") == []
 
 
 def test_attack_paths_with_workload_uses_workload_tool():
@@ -134,6 +175,12 @@ async def test_hostile_names_stay_data(db, monkeypatch):
     for prompt in fetched:
         assert prompt.messages and HOSTILE not in str(prompt)
         assert prompt.messages[0].content.text.rstrip().endswith(CLOSING)
+
+
+async def test_empty_prompt_argument_over_mcp(db):
+    async with Client(build_server(db)) as client:
+        empty = await client.get_prompt("attack_paths", {"workload": "", "cluster": ""})
+    assert empty.messages[0].content.text == prompts.attack_paths()
 
 
 async def test_invalid_prompt_argument_is_an_error_over_mcp(db):

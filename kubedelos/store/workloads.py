@@ -85,7 +85,7 @@ def workloads(
             ref=row["ref"],
             status=row["status"],
             facts=parse_facts(row["facts"]),
-            counts=by_ref.get(row["ref"], zero),
+            counts=dict(by_ref.get(row["ref"], zero)),  # a copy, so no two rows share one dict
         )
         for row in rows
     ]

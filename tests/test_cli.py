@@ -628,3 +628,9 @@ def test_mcp_command_builds_server_from_settings(tmp_path, monkeypatch, capsys):
     assert len(seen) == 1
     assert seen[0].path == tmp_path / "kubedelos.db" and seen[0].default_cluster == "my-cluster"
     assert capsys.readouterr().out == ""
+
+
+def test_importing_the_cli_does_not_load_the_mcp_sdk():
+    code = "import kubedelos.cli, sys; print(any(m == 'mcp' or m.startswith('mcp.') for m in sys.modules))"
+    proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+    assert proc.stdout.strip() == "False"

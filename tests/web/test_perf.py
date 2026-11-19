@@ -15,6 +15,7 @@ from kubedelos.mcp_server import tools
 from kubedelos.store import diff, queries, workloads
 from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
+from tests.mcp_server.conftest import make_facts
 from tests.web.conftest import BASE_URL, PORT, TOKEN
 from tests.web.seed import CONTEXT, seed_acceptances, seed_large
 
@@ -25,6 +26,12 @@ FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|f|r|w)\b"
 REACHED = re.compile(r"^SEARCH (finding|f) ")
 KEYED = re.compile(r"\(image_result_id=")
 PRIOR_RUNS = 4  # earlier runs that share the CVEs, so a lookup that reads every run's rows shows in the plan
+
+
+def _seed_facts(conn) -> None:
+    """v1 facts on every workload row, so the MCP timings include parsing them."""
+    with conn:
+        conn.execute("UPDATE workload SET facts = ?", (make_facts(level="external").model_dump_json(),))
 
 
 def _plans(conn, call) -> list[str]:
@@ -143,6 +150,7 @@ def test_mcp_cve_lookup_under_300ms(tmp_path):
             " SELECT id, ?, 'libc', '1.0', '1.1', 'HIGH' FROM image_result WHERE run_id = ? AND status = 'ok'",
             (vuln_id, run_id),
         )
+    _seed_facts(conn)
     db = tools.Db(tmp_path / "large.db", CONTEXT)
     timings = []
     for _ in range(3):
@@ -151,6 +159,7 @@ def test_mcp_cve_lookup_under_300ms(tmp_path):
         timings.append(time.perf_counter() - start)
     conn.close()
     assert result["total"] > 100, result["total"]
+    assert result["workloads"][0]["facts"] is not None
     assert statistics.median(timings) < BUDGET, timings
 
 
@@ -161,6 +170,7 @@ def test_mcp_attack_surface_under_300ms(tmp_path):
     for _ in range(PRIOR_RUNS):
         seed_large(conn)
     seed_large(conn)
+    _seed_facts(conn)
     db = tools.Db(tmp_path / "large.db", CONTEXT)
     timings = []
     for _ in range(3):
@@ -169,4 +179,5 @@ def test_mcp_attack_surface_under_300ms(tmp_path):
         timings.append(time.perf_counter() - start)
     conn.close()
     assert result["total"] > 0, result["total"]
+    assert result["items"][0]["facts"] is not None
     assert statistics.median(timings) < BUDGET, timings

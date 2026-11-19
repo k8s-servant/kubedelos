@@ -77,6 +77,14 @@ def test_counts_by_severity(seeded):
     assert clean.counts == dict.fromkeys(("CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"), 0)
 
 
+def test_rows_without_counts_do_not_share_a_dict(seeded):
+    conn, run_id = seeded
+    rows = workloads.workloads(conn, run_id, counts=False)
+    assert all(r.counts == dict.fromkeys(workloads.SEVERITIES, 0) for r in rows)
+    rows[0].counts["CRITICAL"] = 9
+    assert rows[1].counts["CRITICAL"] == 0
+
+
 def test_cve_packages(seeded):
     conn, run_id = seeded
     packages = workloads.cve_packages(conn, run_id, "CVE-2")
