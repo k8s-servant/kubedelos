@@ -34,6 +34,7 @@ dependencies = [
   "jinja2>=3.1,<4",             # UI templates
   "uvicorn>=0.54,<1",           # UI server
   "apscheduler>=3.11,<4",       # serve: the sweep schedule
+  "mcp>=2.3,<3",                # kubedelos mcp: the read-only MCP server
 ]
 
 [project.optional-dependencies]

@@ -27,6 +27,8 @@ from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_user_ref
+from kubedelos.mcp_server.server import run_stdio
+from kubedelos.mcp_server.tools import Db
 from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
@@ -205,6 +207,19 @@ def _log_access() -> None:
         web_log = logging.getLogger("kubedelos.web")
         web_log.addHandler(handler)
         web_log.setLevel(logging.INFO)
+
+
+@app.command()
+def mcp(
+    context: Annotated[str | None, typer.Option(help="Cluster the tools use when called without one.")] = None,
+    data_dir: Annotated[Path | None, typer.Option(help="Directory holding the kubedelos database.")] = None,
+) -> None:
+    """Serve a read-only MCP server over stdio, for your agent to query the local scan database.
+
+    Stdout is the protocol channel, so this prints nothing there; errors go to stderr. It never reaches the cluster.
+    """
+    settings = _load_settings(data_dir=data_dir)
+    run_stdio(Db(settings.db_path, context))
 
 
 @app.command()

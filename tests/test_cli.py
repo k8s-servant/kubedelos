@@ -29,7 +29,7 @@ def test_scanning_lives_in_the_ui_not_the_cli():
     # Scans start from the UI and the in-cluster schedule; CI gating is left to plain Trivy.
     commands = {c.name or c.callback.__name__ for c in app.registered_commands}
     groups = {g.name for g in app.registered_groups}
-    assert commands | groups == {"version", "ui", "serve", "trivy", "registry"}
+    assert commands | groups == {"version", "ui", "serve", "mcp", "trivy", "registry"}
     r = CliRunner().invoke(app, ["scan"])
     assert r.exit_code == 2 and "No such command" in r.output
 
@@ -617,3 +617,14 @@ def test_sigterm_stops_running_scans(tmp_path):
     assert proc.returncode == 130
     assert _gone(int(pid_file.read_text()))
     assert _gone(int(child_file.read_text()))
+
+
+def test_mcp_command_builds_server_from_settings(tmp_path, monkeypatch, capsys):
+    seen = []
+    monkeypatch.setattr(cli, "run_stdio", seen.append)
+    monkeypatch.delenv("KUBEDELOS_DATA_DIR", raising=False)
+    r = CliRunner().invoke(app, ["mcp", "--context", "my-cluster", "--data-dir", str(tmp_path)])
+    assert r.exit_code == 0 and r.stdout == ""
+    assert len(seen) == 1
+    assert seen[0].path == tmp_path / "kubedelos.db" and seen[0].default_cluster == "my-cluster"
+    assert capsys.readouterr().out == ""
