@@ -5,10 +5,11 @@ nothing here prints.
 """
 
 from contextlib import closing
-from typing import Any
+from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import MCPServer
 from mcp_types import ToolAnnotations
+from pydantic import Field
 
 from kubedelos.mcp_server import tools
 from kubedelos.mcp_server.tools import Db
@@ -38,6 +39,40 @@ def build_server(db: Db) -> MCPServer:
     def list_clusters() -> dict[str, Any]:
         with closing(db.open()) as conn:
             return tools.list_clusters(conn, db, tools._now())
+
+    @server.tool(
+        name="run_summary",
+        description=(
+            "Summarise one scan run: the counts of Critical and High findings, affected and failed images, the "
+            "coverage gaps of the inventory, the failure kinds, and the previous comparable run. Without cluster or "
+            "run it reports the newest run of the default cluster. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def run_summary(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.run_summary(conn, db, tools._now(), cluster, run)
+
+    @server.tool(
+        name="fix_first",
+        description=(
+            "The fixes that clear the most Critical and High findings, in the order the dashboard shows them: view "
+            '"fix" lists CVE, package and fixed version; view "image" lists images, worst first. At most 100 items; '
+            "total and truncated say whether the list was cut. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def fix_first(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+        view: Annotated[Literal["fix", "image"], Field(description="Group by fix or by image.")] = "fix",
+        limit: Annotated[int, Field(description="Items to return; 25 by default, 100 at most.")] = 25,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.fix_first(conn, db, tools._now(), cluster, run, view, limit)
 
     return server
 

@@ -621,7 +621,7 @@ def test_sigterm_stops_running_scans(tmp_path):
 
 def test_mcp_command_builds_server_from_settings(tmp_path, monkeypatch, capsys):
     seen = []
-    monkeypatch.setattr(cli, "run_stdio", seen.append)
+    monkeypatch.setattr("kubedelos.mcp_server.server.run_stdio", seen.append)
     monkeypatch.delenv("KUBEDELOS_DATA_DIR", raising=False)
     r = CliRunner().invoke(app, ["mcp", "--context", "my-cluster", "--data-dir", str(tmp_path)])
     assert r.exit_code == 0 and r.stdout == ""

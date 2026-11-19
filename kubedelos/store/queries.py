@@ -84,6 +84,14 @@ def newest_run(conn: sqlite3.Connection, context: str, *, cluster_scope: bool) -
     return _build(conn, row) if row else None
 
 
+def run_by_number(conn: sqlite3.Connection, context: str, number: int) -> Run | None:
+    """The result run with this number in the context, whatever its scope; None when there is none."""
+    row = conn.execute(
+        f"{_RUN_SQL} WHERE context = ? AND number = ? AND status IN {_STATUS_SQL}", (context, number)
+    ).fetchone()
+    return _build(conn, row) if row else None
+
+
 def get_run(conn: sqlite3.Connection, context: str, run_id: int) -> Run:
     row = conn.execute(f"{_RUN_SQL} WHERE id = ?", (run_id,)).fetchone()
     if row is None:

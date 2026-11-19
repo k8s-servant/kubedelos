@@ -27,7 +27,6 @@ from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.inventory import parse_user_ref
-from kubedelos.mcp_server.server import run_stdio
 from kubedelos.mcp_server.tools import Db
 from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
@@ -218,6 +217,8 @@ def mcp(
 
     Stdout is the protocol channel, so this prints nothing there; errors go to stderr. It never reaches the cluster.
     """
+    from kubedelos.mcp_server.server import run_stdio  # here, so other commands do not load the MCP SDK
+
     settings = _load_settings(data_dir=data_dir)
     run_stdio(Db(settings.db_path, context))
 
