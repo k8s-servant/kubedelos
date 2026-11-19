@@ -11,7 +11,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from kubedelos.store import diff, queries
+from kubedelos.store import diff, queries, workloads
 from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
 from tests.web.conftest import BASE_URL, PORT, TOKEN
@@ -44,6 +44,10 @@ def test_query_plans_use_indexes(tmp_path):
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
     seed_acceptances(conn)
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
+    ref, vuln_id = conn.execute(
+        "SELECT r.ref, f.vuln_id FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ?",
+        (run_id,),
+    ).fetchone()
     calls = {
         "newest_run": lambda: queries.newest_run(conn, CONTEXT, cluster_scope=True),
         "previous_comparable": lambda: queries.previous_comparable(conn, run),
@@ -64,6 +68,11 @@ def test_query_plans_use_indexes(tmp_path):
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),
         "result_runs": lambda: queries.result_runs(conn, CONTEXT),
+        "workloads": lambda: workloads.workloads(conn, run_id, namespace="ns-01", name="app1"),
+        "workloads cve": lambda: workloads.workloads(conn, run_id, vuln_id=vuln_id),
+        "cve_packages": lambda: workloads.cve_packages(conn, run_id, vuln_id),
+        "cve_images": lambda: workloads.cve_images(conn, run_id, vuln_id),
+        "top_findings": lambda: workloads.top_findings(conn, run_id, ref),
         "findings_export": lambda: queries.findings_export(conn, run_id, queries.FindingFilter()).fetchmany(10),
     }
     offenders = {}

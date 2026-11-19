@@ -6,7 +6,19 @@ import pytest
 
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
+from kubedelos.models import (
+    Exposure,
+    Finding,
+    ImageRef,
+    ImageResult,
+    InventoryItem,
+    Network,
+    PodSecurity,
+    Rights,
+    Severity,
+    Workload,
+    WorkloadFacts,
+)
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 
@@ -69,3 +81,24 @@ def add_image(repo, run_id, ref, findings=(), namespaces=("ns",), *, status="ok"
 
 def add_gap(repo, run_id, text):
     repo.add_warnings(run_id, [InventoryWarning(text=text, coverage=True)])
+
+
+def make_facts(*, root=True, level="none"):
+    """Facts that differ by ``root`` and ``level``, so a test can tell which workload's facts it got back."""
+    return WorkloadFacts(
+        pod=PodSecurity(
+            privileged=False, allow_privilege_escalation=False, runs_as_root=root, read_only_root_fs=True,
+            host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=None,
+        ),
+        exposure=Exposure(level=level),
+        network=Network(ingress_isolated=False, egress_isolated=None),
+        rights=Rights(status="off"),
+    )  # fmt: skip
+
+
+def add_workloads(repo, run_id, ref, workloads, findings=(), facts=None, *, status="ok"):
+    """Add one image run by ``workloads`` (``Workload`` objects); ``facts`` maps some of them to ``WorkloadFacts``."""
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
+    item = InventoryItem(image=image, platform="linux/amd64", workloads=list(workloads), facts=facts or {})
+    result = ImageResult(image=image, platform="linux/amd64", status=status, findings=list(findings))
+    repo.add_result(run_id, item, result)

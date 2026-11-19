@@ -1,0 +1,140 @@
+"""Reads that put workloads next to findings: which workloads run an image with a CVE, what facts they carry and how
+many findings each has, for the MCP server's per-workload tools.
+
+Every query is parameterised and keyed by ``image_result.run_id`` (and then by the run's image rows), so it never reads
+another run. A finding is counted in the units of ``queries.FINDING_UNITS_SQL``, the same as the dashboard and the
+findings page, so the numbers agree with the UI.
+"""
+
+import json
+import sqlite3
+from dataclasses import dataclass
+
+from pydantic import ValidationError
+
+from kubedelos.models import Severity, WorkloadFacts
+from kubedelos.store.queries import FINDING_UNITS_SQL
+
+SEVERITIES = tuple(s.value for s in Severity)
+
+_RUN_FILTER = "WHERE r.run_id = :run"
+assert _RUN_FILTER in FINDING_UNITS_SQL  # noqa: S101 - guards the narrowing below against a change to the units
+# The finding units of the given images only (``:refs`` is a JSON array), grouped exactly as ``FINDING_UNITS_SQL``.
+_REF_UNITS_SQL = FINDING_UNITS_SQL.replace(
+    _RUN_FILTER,
+    f"{_RUN_FILTER} AND r.ref IN (SELECT value FROM json_each(:refs))",  # noqa: S608 - a constant
+)
+
+
+@dataclass(frozen=True)
+class WorkloadRow:
+    """One container of one workload in a run, with the image it runs, its facts and its finding counts."""
+
+    namespace: str
+    kind: str
+    name: str
+    container: str
+    ref: str
+    status: str  # the image result's status; "error" if any platform of the image failed
+    facts: WorkloadFacts | None
+    counts: dict[str, int]  # finding units by severity, every severity present
+
+
+def parse_facts(text: str | None) -> WorkloadFacts | None:
+    """The facts stored on a workload row, or None for NULL, invalid JSON, a validation error or another version."""
+    if not text:
+        return None
+    try:
+        facts = WorkloadFacts.model_validate_json(text)
+    except ValidationError:
+        return None
+    return facts if facts.v == 1 else None
+
+
+def workloads(
+    conn: sqlite3.Connection,
+    run_id: int,
+    *,
+    vuln_id: str | None = None,
+    namespace: str | None = None,
+    name: str | None = None,
+    kind: str | None = None,
+) -> list[WorkloadRow]:
+    """The run's workload containers, by namespace, kind, name and container, narrowed by exact matches.
+
+    ``vuln_id`` keeps the workloads whose image has that CVE. A second platform repeats an image's workloads; they are
+    merged into one row.
+    """
+    rows = conn.execute(
+        "SELECT w.namespace, w.kind, w.name, w.container, r.ref, MAX(w.facts) AS facts,"
+        " CASE WHEN MAX(r.status = 'error') THEN 'error' ELSE MAX(r.status) END AS status"
+        " FROM image_result r JOIN workload w ON w.image_result_id = r.id"
+        " WHERE r.run_id = :run"
+        " AND (:namespace IS NULL OR w.namespace = :namespace)"
+        " AND (:name IS NULL OR w.name = :name)"
+        " AND (:kind IS NULL OR w.kind = :kind)"
+        " AND (:vuln IS NULL OR EXISTS (SELECT 1 FROM finding f WHERE f.image_result_id = r.id AND f.vuln_id = :vuln))"
+        " GROUP BY w.namespace, w.kind, w.name, w.container, r.ref"
+        " ORDER BY w.namespace, w.kind, w.name, w.container, r.ref",
+        {"run": run_id, "namespace": namespace, "name": name, "kind": kind, "vuln": vuln_id},
+    ).fetchall()
+    counts = _counts(conn, run_id, sorted({row["ref"] for row in rows}))
+    return [
+        WorkloadRow(
+            namespace=row["namespace"],
+            kind=row["kind"],
+            name=row["name"],
+            container=row["container"],
+            ref=row["ref"],
+            status=row["status"],
+            facts=parse_facts(row["facts"]),
+            counts=counts[row["ref"]],
+        )
+        for row in rows
+    ]
+
+
+def _counts(conn: sqlite3.Connection, run_id: int, refs: list[str]) -> dict[str, dict[str, int]]:
+    """Finding units by severity for each of ``refs``; an image with none has every severity at zero."""
+    by_ref = {ref: dict.fromkeys(SEVERITIES, 0) for ref in refs}
+    if not refs:
+        return by_ref
+    rows = conn.execute(
+        f"WITH units AS ({_REF_UNITS_SQL}) SELECT ref, severity, COUNT(*) AS n FROM units GROUP BY ref, severity",  # noqa: S608
+        {"run": run_id, "refs": json.dumps(refs)},
+    )
+    for row in rows:
+        by_ref[row["ref"]][row["severity"]] = row["n"]
+    return by_ref
+
+
+def cve_packages(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> list[dict]:
+    """The distinct packages, versions, severities and texts the run reports for ``vuln_id`` (an exact match)."""
+    rows = conn.execute(
+        "SELECT DISTINCT f.pkg_name, f.installed_version, f.fixed_version, f.severity, f.title, f.primary_url"
+        " FROM image_result r CROSS JOIN finding f ON f.image_result_id = r.id"  # CROSS: the run's images first
+        " WHERE r.run_id = ? AND f.vuln_id = ?"
+        " ORDER BY f.pkg_name, f.installed_version, f.fixed_version, f.severity",
+        (run_id, vuln_id),
+    )
+    return [dict(row) for row in rows]
+
+
+def cve_images(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> list[str]:
+    """The distinct image refs of the run that have ``vuln_id``, sorted (an image with no workload included)."""
+    rows = conn.execute(
+        "SELECT DISTINCT r.ref FROM image_result r CROSS JOIN finding f ON f.image_result_id = r.id"  # CROSS: as above
+        " WHERE r.run_id = ? AND f.vuln_id = ? ORDER BY r.ref",
+        (run_id, vuln_id),
+    )
+    return [row["ref"] for row in rows]
+
+
+def top_findings(conn: sqlite3.Connection, run_id: int, ref: str, limit: int = 10) -> list[dict]:
+    """The image's worst finding units, in the findings page's severity order (severity, then CVE, then package)."""
+    rows = conn.execute(
+        f"WITH units AS ({_REF_UNITS_SQL}) SELECT vuln_id, pkg_name, severity, fixed_version FROM units"  # noqa: S608
+        " ORDER BY sev_rank DESC, vuln_id, pkg_name, installed_version LIMIT :limit",
+        {"run": run_id, "refs": json.dumps([ref]), "limit": limit},
+    )
+    return [dict(row) for row in rows]

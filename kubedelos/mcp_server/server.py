@@ -74,6 +74,87 @@ def build_server(db: Db) -> MCPServer:
         with closing(db.open()) as conn:
             return tools.fix_first(conn, db, tools._now(), cluster, run, view, limit)
 
+    @server.tool(
+        name="find_vulnerability",
+        description=(
+            "Where one CVE is in a run: its packages and fixed versions, the images that have it, the workloads that "
+            "run those images with their attack-surface facts (null when not collected), and the active risk "
+            "acceptances for it. An unknown CVE returns empty lists. At most 100 workloads; total and truncated say "
+            "whether the list was cut. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def find_vulnerability(
+        vuln_id: Annotated[str, Field(description="The vulnerability id as Trivy writes it, e.g. CVE-2024-12345.")],
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+        limit: Annotated[int, Field(description="Workloads to return; 25 by default, 100 at most.")] = 25,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.find_vulnerability(conn, db, tools._now(), vuln_id, cluster, run, limit)
+
+    @server.tool(
+        name="workload",
+        description=(
+            "One workload's containers in a run: the image each runs, its finding counts by severity, its "
+            "attack-surface facts (null when not collected) and its ten worst findings. A name shared by several kinds "
+            "lists them all. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def workload(
+        namespace: Annotated[str, Field(description="The workload's namespace, matched exactly.")],
+        name: Annotated[str, Field(description="The workload's name, matched exactly.")],
+        kind: Annotated[
+            str | None, Field(description="Deployment, StatefulSet and so on; every kind when omitted.")
+        ] = None,
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.workload(conn, db, tools._now(), namespace, name, kind, cluster, run)
+
+    @server.tool(
+        name="list_findings",
+        description=(
+            "Page through a run's findings in the order the dashboard shows them (worst severity first), each "
+            "counted once per image, CVE and package. Risk-accepted findings are hidden unless accepted is "
+            '"all" or "only"; accepted_left_out counts the hidden ones. At most 100 per page; total and truncated '
+            "say whether more pages follow. " + UNTRUSTED
+        ),
+        annotations=READ_ONLY,
+    )
+    def list_findings(
+        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
+        severity: Annotated[
+            list[str] | None, Field(description="Severities to keep (CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN), any case.")
+        ] = None,
+        namespace: Annotated[str | None, Field(description="Only images running in this namespace.")] = None,
+        pkg_class: Annotated[Literal["all", "os", "library"], Field(description="OS or library packages.")] = "all",
+        q: Annotated[str | None, Field(description="Text to find in the image, CVE id or package name.")] = None,
+        fixable: Annotated[Literal["any", "yes", "no"], Field(description="Whether a fixed version exists.")] = "any",
+        accepted: Annotated[Literal["hide", "only", "all"], Field(description="Risk-accepted findings.")] = "hide",
+        page: Annotated[int, Field(description="Page number, from 1.")] = 1,
+        per_page: Annotated[int, Field(description="Findings per page; 25 by default, 100 at most.")] = 25,
+    ) -> dict[str, Any]:
+        with closing(db.open()) as conn:
+            return tools.list_findings(
+                conn,
+                db,
+                tools._now(),
+                cluster,
+                run,
+                severity,
+                namespace,
+                pkg_class,
+                q,
+                fixable,
+                accepted,
+                page,
+                per_page,
+            )
+
     return server
 
 

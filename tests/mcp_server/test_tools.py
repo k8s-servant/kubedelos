@@ -1,7 +1,7 @@
 import dataclasses
 import json
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 from mcp.server.mcpserver.exceptions import ToolError
@@ -9,10 +9,21 @@ from mcp.server.mcpserver.exceptions import ToolError
 from kubedelos.config import Settings
 from kubedelos.mcp_server import tools
 from kubedelos.mcp_server.tools import Db
-from kubedelos.store import queries
+from kubedelos.models import Workload
+from kubedelos.store import accepted, queries
 from kubedelos.store.db import MIGRATIONS, connect
 from kubedelos.store.repo import Repo
-from tests.mcp_server.conftest import NOW, Clock, add_gap, add_image, finding, new_run, seed
+from tests.mcp_server.conftest import (
+    NOW,
+    Clock,
+    add_gap,
+    add_image,
+    add_workloads,
+    finding,
+    make_facts,
+    new_run,
+    seed,
+)
 
 
 def test_open_missing_database_says_how_to_create_it(tmp_path):
@@ -220,3 +231,159 @@ def test_fix_first_items_are_json_ready(world):
     add_image(repo, run_id, "img", [finding("CVE-1", "HIGH")])
     json.dumps(tools.fix_first(conn, db, NOW))
     json.dumps(tools.run_summary(conn, db, NOW))
+
+
+def _wl(ns, name, kind="Deployment", container="c"):
+    return Workload(namespace=ns, kind=kind, name=name, container=container)
+
+
+def _cve_world(repo):
+    run_id = new_run(repo, "my-cluster")
+    site, api = _wl("web", "site"), _wl("api", "gateway")
+    add_workloads(repo, run_id, "img-a", [site, api], [finding("CVE-1", "CRITICAL"), finding("CVE-2", "HIGH", pkg="z")],
+                  facts={site: make_facts(root=True)})  # fmt: skip
+    add_workloads(repo, run_id, "img-b", [_wl("web", "worker")], [finding("CVE-1", "CRITICAL")])
+    return run_id
+
+
+def test_find_vulnerability_includes_facts_and_acceptance(world):
+    conn, repo, db = world
+    run_id = _cve_world(repo)
+    soon = date(2026, 2, 10)
+    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, context="my-cluster",
+                        now=NOW, namespace="web")  # fmt: skip
+    gone = accepted.add(conn, vuln_id="CVE-1", reason="old", owner="me", expires=date(2026, 2, 1), context="my-cluster",
+                        now=NOW)  # fmt: skip
+    accepted.revoke(conn, gone, NOW)
+    result = tools.find_vulnerability(conn, db, NOW, " CVE-1 ")
+    assert (result["cluster"], result["run"]["number"], result["vuln_id"]) == ("my-cluster", 1, "CVE-1")
+    assert [p["pkg_name"] for p in result["packages"]] == ["openssl"]
+    assert result["images"] == ["img-a", "img-b"]
+    assert [(w["namespace"], w["name"], w["image"]) for w in result["workloads"]] == [
+        ("api", "gateway", "img-a"),
+        ("web", "site", "img-a"),
+        ("web", "worker", "img-b"),
+    ]
+    assert result["workloads"][0]["facts"] is None
+    assert result["workloads"][1]["facts"] == make_facts(root=True).model_dump(mode="json")
+    assert set(result["workloads"][0]) == {"namespace", "kind", "name", "container", "image", "facts"}
+    assert result["total"] == 3 and result["truncated"] is False
+    assert result["acceptance"] == [
+        {"id": live, "namespace": "web", "repo": None, "pkg_name": None, "reason": "risk", "owner": "me",
+         "expires_at": "2026-02-10"},
+    ]  # fmt: skip
+    json.dumps(result)
+    assert run_id == 1
+
+
+def test_find_vulnerability_limit_truncates(world):
+    conn, repo, db = world
+    _cve_world(repo)
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1", limit=2)
+    assert len(result["workloads"]) == 2 and result["total"] == 3 and result["truncated"] is True
+
+
+def test_find_vulnerability_unknown_cve_is_empty(world):
+    conn, repo, db = world
+    _cve_world(repo)
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-404")
+    assert result["packages"] == [] and result["images"] == [] and result["workloads"] == []
+    assert result["acceptance"] == [] and result["total"] == 0 and result["truncated"] is False
+
+
+def test_workload_lists_containers_with_top_findings(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    many = [finding(f"CVE-{i:02d}", "HIGH", pkg=f"p{i}") for i in range(12)] + [finding("CVE-X", "CRITICAL")]
+    site = _wl("web", "site")
+    add_workloads(repo, run_id, "img-a", [site, _wl("web", "site", "StatefulSet", "side")], many,
+                  facts={site: make_facts()})  # fmt: skip
+    add_workloads(repo, run_id, "img-b", [_wl("web", "site", container="init")])
+    result = tools.workload(conn, db, NOW, "web", "site")
+    assert result["cluster"] == "my-cluster" and result["run"]["number"] == 1
+    containers = result["containers"]
+    assert [(c["kind"], c["container"], c["image"]) for c in containers] == [
+        ("Deployment", "c", "img-a"),
+        ("Deployment", "init", "img-b"),
+        ("StatefulSet", "side", "img-a"),
+    ]
+    first = containers[0]
+    assert first["counts"] == {"CRITICAL": 1, "HIGH": 12, "MEDIUM": 0, "LOW": 0, "UNKNOWN": 0}
+    assert first["facts"] == make_facts().model_dump(mode="json") and containers[1]["facts"] is None
+    top = first["top_findings"]
+    assert len(top) == 10 and top[0]["vuln_id"] == "CVE-X"
+    assert set(top[0]) == {"vuln_id", "pkg_name", "severity", "fixed_version"}
+    assert containers[1]["top_findings"] == []
+    only = tools.workload(conn, db, NOW, "web", "site", kind="StatefulSet")
+    assert [c["kind"] for c in only["containers"]] == ["StatefulSet"]
+    json.dumps(result)
+
+
+def test_workload_missing_is_an_error(world):
+    conn, repo, db = world
+    new_run(repo, "my-cluster")
+    with pytest.raises(ToolError) as exc:
+        tools.workload(conn, db, NOW, "web", "nope")
+    assert str(exc.value) == "no workload web/nope in run 1"
+
+
+def _findings_world(repo):
+    run_id = new_run(repo, "my-cluster")
+    add_image(repo, run_id, "img-a", [finding("CVE-1", "CRITICAL"), finding("CVE-2", "HIGH", pkg="zlib", fixed="")],
+              namespaces=("web",))  # fmt: skip
+    add_image(repo, run_id, "img-b", [finding("CVE-3", "LOW", pkg="curl").model_copy(update={"pkg_class": "library"})],
+              namespaces=("api",))  # fmt: skip
+    return run_id
+
+
+def test_list_findings_filters_and_paging(world):
+    conn, repo, db = world
+    _findings_world(repo)
+    everything = tools.list_findings(conn, db, NOW)
+    assert [i["vuln_id"] for i in everything["items"]] == ["CVE-1", "CVE-2", "CVE-3"]
+    assert everything["total"] == 3 and everything["page"] == 1 and everything["per_page"] == 25
+    assert everything["truncated"] is False and everything["accepted_left_out"] == 0
+    first = everything["items"][0]
+    assert first["ref"] == "img-a" and first["severity"] == "CRITICAL" and first["namespaces"] == ["web"]
+    assert first["accepted"] is False and "total" not in first and "sev_rank" not in first
+    assert [i["vuln_id"] for i in tools.list_findings(conn, db, NOW, severity=["high", "Low"])["items"]] == [
+        "CVE-2",
+        "CVE-3",
+    ]
+    assert [i["vuln_id"] for i in tools.list_findings(conn, db, NOW, namespace="api")["items"]] == ["CVE-3"]
+    assert [i["vuln_id"] for i in tools.list_findings(conn, db, NOW, fixable="no")["items"]] == ["CVE-2"]
+    assert [i["vuln_id"] for i in tools.list_findings(conn, db, NOW, q="curl")["items"]] == ["CVE-3"]
+    assert [i["vuln_id"] for i in tools.list_findings(conn, db, NOW, pkg_class="library")["items"]] == ["CVE-3"]
+    paged = tools.list_findings(conn, db, NOW, page=2, per_page=2)
+    assert [i["vuln_id"] for i in paged["items"]] == ["CVE-3"] and paged["total"] == 3 and paged["truncated"] is False
+    assert tools.list_findings(conn, db, NOW, per_page=2)["truncated"] is True
+    assert tools.list_findings(conn, db, NOW, per_page=5000)["per_page"] == 100
+    assert tools.list_findings(conn, db, NOW, page=9)["items"] == []
+    json.dumps(everything)
+
+
+def test_list_findings_accepted_modes(world):
+    conn, repo, db = world
+    _findings_world(repo)
+    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="o", expires=date(2026, 3, 1), context="my-cluster", now=NOW)
+    hidden = tools.list_findings(conn, db, NOW)
+    assert [i["vuln_id"] for i in hidden["items"]] == ["CVE-2", "CVE-3"] and hidden["accepted_left_out"] == 1
+    only = tools.list_findings(conn, db, NOW, accepted="only")
+    assert [i["vuln_id"] for i in only["items"]] == ["CVE-1"] and only["items"][0]["accepted"] is True
+    assert tools.list_findings(conn, db, NOW, accepted="all")["total"] == 3
+
+
+def test_list_findings_bad_severity(world):
+    conn, repo, db = world
+    new_run(repo, "my-cluster")
+    with pytest.raises(ToolError) as exc:
+        tools.list_findings(conn, db, NOW, severity=["URGENT"])
+    assert str(exc.value) == "unknown severity URGENT; use CRITICAL, HIGH, MEDIUM, LOW or UNKNOWN"
+
+
+def test_page_zero_is_page_one(world):
+    conn, repo, db = world
+    _findings_world(repo)
+    zero = tools.list_findings(conn, db, NOW, page=0)
+    assert zero["page"] == 1 and zero["items"] == tools.list_findings(conn, db, NOW, page=1)["items"]
+    assert tools.list_findings(conn, db, NOW, page=-4)["page"] == 1

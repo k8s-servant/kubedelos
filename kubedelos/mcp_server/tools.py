@@ -5,6 +5,7 @@ protocol round trip. Errors that the agent should read are raised as ``ToolError
 """
 
 import dataclasses
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -14,7 +15,8 @@ from typing import Any, Literal
 from mcp.server.mcpserver.exceptions import ToolError
 
 from kubedelos import analytics
-from kubedelos.store import queries
+from kubedelos.models import WorkloadFacts
+from kubedelos.store import accepted, queries, workloads
 from kubedelos.store.db import MIGRATIONS, connect_readonly
 
 DEFAULT_LIMIT = 25
@@ -175,3 +177,147 @@ def fix_first(
         "no_fix_images": fixes.no_fix_images,
         "accepted": fixes.accepted,
     }
+
+
+def _facts_payload(facts: WorkloadFacts | None) -> dict | None:
+    """The facts as v1 JSON, or None; never a made-up default, so "not collected" stays distinguishable."""
+    return facts.model_dump(mode="json") if facts else None
+
+
+def find_vulnerability(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    vuln_id: str,
+    cluster: str | None = None,
+    run: int | None = None,
+    limit: int = DEFAULT_LIMIT,
+) -> dict:
+    name = resolve_cluster(conn, db, cluster)
+    selected = select_run(conn, name, run)
+    vuln_id = vuln_id.strip()
+    rows = workloads.workloads(conn, selected.id, vuln_id=vuln_id)
+    items = [
+        {
+            "namespace": row.namespace,
+            "kind": row.kind,
+            "name": row.name,
+            "container": row.container,
+            "image": row.ref,
+            "facts": _facts_payload(row.facts),
+        }
+        for row in rows[: clamp(limit)]
+    ]
+    active = [e for e in accepted.register(conn, name, selected.id, now.date(), vuln_id) if e.state == "active"]
+    return {
+        "cluster": name,
+        "run": run_payload(selected, now),
+        "vuln_id": vuln_id,
+        "packages": workloads.cve_packages(conn, selected.id, vuln_id),
+        "images": workloads.cve_images(conn, selected.id, vuln_id),
+        "workloads": items,
+        "total": len(rows),
+        "truncated": len(rows) > len(items),
+        "acceptance": [
+            {
+                "id": e.id,
+                "namespace": e.namespace,
+                "repo": e.repo,
+                "pkg_name": e.pkg_name,
+                "reason": e.reason,
+                "owner": e.owner,
+                "expires_at": e.expires.isoformat(),
+            }
+            for e in active
+        ],
+    }
+
+
+def workload(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    namespace: str,
+    name: str,
+    kind: str | None = None,
+    cluster: str | None = None,
+    run: int | None = None,
+) -> dict:
+    cluster_name = resolve_cluster(conn, db, cluster)
+    selected = select_run(conn, cluster_name, run)
+    rows = workloads.workloads(conn, selected.id, namespace=namespace, name=name, kind=kind)
+    if not rows:
+        raise ToolError(f"no workload {namespace}/{name} in run {selected.number}")
+    top = {ref: workloads.top_findings(conn, selected.id, ref) for ref in sorted({row.ref for row in rows})}
+    return {
+        "cluster": cluster_name,
+        "run": run_payload(selected, now),
+        "containers": [
+            {
+                "kind": row.kind,
+                "container": row.container,
+                "image": row.ref,
+                "counts": row.counts,
+                "facts": _facts_payload(row.facts),
+                "top_findings": top[row.ref],
+            }
+            for row in rows
+        ],
+    }
+
+
+def _severity_names(names: list[str] | None) -> tuple[str, ...]:
+    """``names`` upper-cased and checked against the severities; an unknown one is an error the agent can read."""
+    wanted = tuple(name.strip().upper() for name in names or ())
+    for given, upper in zip(names or (), wanted, strict=True):
+        if upper not in workloads.SEVERITIES:
+            raise ToolError(f"unknown severity {given}; use {', '.join(workloads.SEVERITIES[:-1])} or UNKNOWN")
+    return wanted
+
+
+def list_findings(
+    conn: sqlite3.Connection,
+    db: Db,
+    now: datetime,
+    cluster: str | None = None,
+    run: int | None = None,
+    severity: list[str] | None = None,
+    namespace: str | None = None,
+    pkg_class: Literal["all", "os", "library"] = "all",
+    q: str | None = None,
+    fixable: Literal["any", "yes", "no"] = "any",
+    accepted: Literal["hide", "only", "all"] = "hide",
+    page: int = 1,
+    per_page: int = DEFAULT_LIMIT,
+) -> dict:
+    name = resolve_cluster(conn, db, cluster)
+    selected = select_run(conn, name, run)
+    f = queries.FindingFilter(
+        severities=_severity_names(severity),
+        namespace=namespace or None,
+        pkg=pkg_class,
+        q=q or None,
+        has_fix=fixable,
+        accepted=accepted,
+    )
+    page, per_page = max(page, 1), clamp(per_page)
+    rows, total, left_out = queries.findings_page(conn, selected.id, f, page, per_page, today=now.date())
+    return {
+        "cluster": name,
+        "run": run_payload(selected, now),
+        "items": [_finding_item(row) for row in rows],
+        "total": total,
+        "truncated": page * per_page < total,
+        "page": page,
+        "per_page": per_page,
+        "accepted_left_out": left_out,
+    }
+
+
+def _finding_item(row: sqlite3.Row) -> dict:
+    """One findings-page row as JSON: the unit's columns, its namespaces and targets as lists, ``accepted`` a bool."""
+    item = {key: row[key] for key in row.keys() if key not in ("total", "left_out", "sev_rank")}  # noqa: SIM118
+    item["namespaces"] = json.loads(row["namespaces"])
+    item["targets"] = row["targets"].split(",") if row["targets"] else []
+    item["accepted"] = bool(row["accepted"])
+    return item
