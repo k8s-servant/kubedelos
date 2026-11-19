@@ -196,7 +196,7 @@ def find_vulnerability(
     name = resolve_cluster(conn, db, cluster)
     selected = select_run(conn, name, run)
     vuln_id = vuln_id.strip()
-    rows = workloads.workloads(conn, selected.id, vuln_id=vuln_id)
+    rows = workloads.workloads(conn, selected.id, vuln_id=vuln_id, counts=False)
     items = [
         {
             "namespace": row.namespace,
@@ -271,7 +271,9 @@ def _severity_names(names: list[str] | None) -> tuple[str, ...]:
     wanted = tuple(name.strip().upper() for name in names or ())
     for given, upper in zip(names or (), wanted, strict=True):
         if upper not in workloads.SEVERITIES:
-            raise ToolError(f"unknown severity {given}; use {', '.join(workloads.SEVERITIES[:-1])} or UNKNOWN")
+            raise ToolError(
+                f"unknown severity {given}; use {', '.join(workloads.SEVERITIES[:-1])} or {workloads.SEVERITIES[-1]}"
+            )
     return wanted
 
 

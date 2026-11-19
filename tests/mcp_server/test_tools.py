@@ -248,7 +248,7 @@ def _cve_world(repo):
 
 def test_find_vulnerability_includes_facts_and_acceptance(world):
     conn, repo, db = world
-    run_id = _cve_world(repo)
+    _cve_world(repo)
     soon = date(2026, 2, 10)
     live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, context="my-cluster",
                         now=NOW, namespace="web")  # fmt: skip
@@ -273,7 +273,6 @@ def test_find_vulnerability_includes_facts_and_acceptance(world):
          "expires_at": "2026-02-10"},
     ]  # fmt: skip
     json.dumps(result)
-    assert run_id == 1
 
 
 def test_find_vulnerability_limit_truncates(world):

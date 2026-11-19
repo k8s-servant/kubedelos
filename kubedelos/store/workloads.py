@@ -13,17 +13,11 @@ from dataclasses import dataclass
 from pydantic import ValidationError
 
 from kubedelos.models import Severity, WorkloadFacts
-from kubedelos.store.queries import FINDING_UNITS_SQL
+from kubedelos.store import queries
+from kubedelos.store.queries import REF_UNIT_COUNTS_SQL, REF_UNITS_SQL
 
 SEVERITIES = tuple(s.value for s in Severity)
-
-_RUN_FILTER = "WHERE r.run_id = :run"
-assert _RUN_FILTER in FINDING_UNITS_SQL  # noqa: S101 - guards the narrowing below against a change to the units
-# The finding units of the given images only (``:refs`` is a JSON array), grouped exactly as ``FINDING_UNITS_SQL``.
-_REF_UNITS_SQL = FINDING_UNITS_SQL.replace(
-    _RUN_FILTER,
-    f"{_RUN_FILTER} AND r.ref IN (SELECT value FROM json_each(:refs))",  # noqa: S608 - a constant
-)
+_SEVERITY_OF_RANK = {4 - i: name for i, name in enumerate(queries.SEVERITIES)}  # as ``queries.kpis`` maps it
 
 
 @dataclass(frozen=True)
@@ -59,11 +53,13 @@ def workloads(
     namespace: str | None = None,
     name: str | None = None,
     kind: str | None = None,
+    counts: bool = True,
 ) -> list[WorkloadRow]:
     """The run's workload containers, by namespace, kind, name and container, narrowed by exact matches.
 
     ``vuln_id`` keeps the workloads whose image has that CVE. A second platform repeats an image's workloads; they are
-    merged into one row.
+    merged into one row. ``counts=False`` skips the finding counts (every severity reads zero), which cost a pass over
+    the images' findings.
     """
     rows = conn.execute(
         "SELECT w.namespace, w.kind, w.name, w.container, r.ref, MAX(w.facts) AS facts,"
@@ -78,7 +74,8 @@ def workloads(
         " ORDER BY w.namespace, w.kind, w.name, w.container, r.ref",
         {"run": run_id, "namespace": namespace, "name": name, "kind": kind, "vuln": vuln_id},
     ).fetchall()
-    counts = _counts(conn, run_id, sorted({row["ref"] for row in rows}))
+    by_ref = _counts(conn, run_id, sorted({row["ref"] for row in rows}) if counts else [])
+    zero = dict.fromkeys(SEVERITIES, 0)
     return [
         WorkloadRow(
             namespace=row["namespace"],
@@ -88,7 +85,7 @@ def workloads(
             ref=row["ref"],
             status=row["status"],
             facts=parse_facts(row["facts"]),
-            counts=counts[row["ref"]],
+            counts=by_ref.get(row["ref"], zero),
         )
         for row in rows
     ]
@@ -100,11 +97,11 @@ def _counts(conn: sqlite3.Connection, run_id: int, refs: list[str]) -> dict[str,
     if not refs:
         return by_ref
     rows = conn.execute(
-        f"WITH units AS ({_REF_UNITS_SQL}) SELECT ref, severity, COUNT(*) AS n FROM units GROUP BY ref, severity",  # noqa: S608
+        f"WITH units AS ({REF_UNIT_COUNTS_SQL}) SELECT ref, sev_rank, COUNT(*) AS n FROM units GROUP BY ref, sev_rank",  # noqa: S608
         {"run": run_id, "refs": json.dumps(refs)},
     )
     for row in rows:
-        by_ref[row["ref"]][row["severity"]] = row["n"]
+        by_ref[row["ref"]][_SEVERITY_OF_RANK[row["sev_rank"]]] = row["n"]
     return by_ref
 
 
@@ -133,8 +130,8 @@ def cve_images(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> list[str]
 def top_findings(conn: sqlite3.Connection, run_id: int, ref: str, limit: int = 10) -> list[dict]:
     """The image's worst finding units, in the findings page's severity order (severity, then CVE, then package)."""
     rows = conn.execute(
-        f"WITH units AS ({_REF_UNITS_SQL}) SELECT vuln_id, pkg_name, severity, fixed_version FROM units"  # noqa: S608
-        " ORDER BY sev_rank DESC, vuln_id, pkg_name, installed_version LIMIT :limit",
+        f"WITH units AS ({REF_UNITS_SQL}) SELECT vuln_id, pkg_name, severity, fixed_version"  # noqa: S608
+        " FROM units ORDER BY sev_rank DESC, vuln_id, pkg_name, installed_version LIMIT :limit",
         {"run": run_id, "refs": json.dumps([ref]), "limit": limit},
     )
     return [dict(row) for row in rows]

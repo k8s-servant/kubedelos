@@ -11,6 +11,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from kubedelos.mcp_server import tools
 from kubedelos.store import diff, queries, workloads
 from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
@@ -126,3 +127,28 @@ def test_pages_under_300ms(settings):
         timings = {path: _median(client, path) for path in pages}
     report = ", ".join(f"{path} {seconds * 1000:.0f} ms" for path, seconds in timings.items())
     assert all(seconds < BUDGET for seconds in timings.values()), report
+
+
+@pytest.mark.perf
+def test_mcp_cve_lookup_under_300ms(tmp_path):
+    """``find_vulnerability`` for a CVE that every scanned image has."""
+    conn = connect(tmp_path / "large.db")
+    for _ in range(PRIOR_RUNS):
+        seed_large(conn)
+    run_id = seed_large(conn)
+    vuln_id = "CVE-2099-0001"
+    with conn:  # a base-image CVE: every image that was scanned has it
+        conn.execute(
+            "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, fixed_version, severity)"
+            " SELECT id, ?, 'libc', '1.0', '1.1', 'HIGH' FROM image_result WHERE run_id = ? AND status = 'ok'",
+            (vuln_id, run_id),
+        )
+    db = tools.Db(tmp_path / "large.db", CONTEXT)
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        result = tools.find_vulnerability(conn, db, tools._now(), vuln_id, limit=100)
+        timings.append(time.perf_counter() - start)
+    conn.close()
+    assert result["total"] > 100, result["total"]
+    assert statistics.median(timings) < BUDGET, timings
