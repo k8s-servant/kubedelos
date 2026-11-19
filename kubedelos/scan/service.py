@@ -16,7 +16,7 @@ from datetime import timedelta
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
-from kubedelos.kube.inventory import InventoryWarning, collect
+from kubedelos.kube.inventory import InventoryWarning, collect_inventory
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_valid_ref
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.store import db, runlock
@@ -66,7 +66,8 @@ def run_scan(
     cancel = cancel if cancel is not None else threading.Event()
 
     on_progress(Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
-    items, warnings = collect(api, settings)
+    inventory = collect_inventory(api, settings)
+    items = inventory.items
     # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
     with runlock.hold(settings.data_dir) as owner:
         # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
@@ -80,7 +81,8 @@ def run_scan(
             requested_by=requested_by,
         )
         try:
-            repo.add_warnings(run_id, warnings)
+            repo.add_warnings(run_id, inventory.warnings)
+            repo.set_fact_sources(run_id, inventory.fact_sources)
             save = functools.partial(repo.add_result, run_id)
             access = RegistryAccess(settings, api)  # per run, so the Secret contents it read go with the run
             errors = _scan(
@@ -95,7 +97,7 @@ def run_scan(
             raise
         status = "cancelled" if cancel.is_set() else "partial" if errors else "ok"
         repo.finish_run(run_id, status)
-    return ScanOutcome(run_id=run_id, warnings=warnings, status=status)
+    return ScanOutcome(run_id=run_id, warnings=inventory.warnings, status=status)
 
 
 class RetryRefused(Exception):
