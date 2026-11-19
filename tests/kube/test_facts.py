@@ -7,8 +7,12 @@ from kubernetes.client import (
     V1EnvVar,
     V1EnvVarSource,
     V1HostPathVolumeSource,
+    V1IPBlock,
     V1LabelSelector,
     V1LabelSelectorRequirement,
+    V1NetworkPolicyEgressRule,
+    V1NetworkPolicyIngressRule,
+    V1NetworkPolicyPeer,
     V1PodSecurityContext,
     V1PodSpec,
     V1ProjectedVolumeSource,
@@ -257,8 +261,8 @@ def test_merge_network_isolation_riskier_is_not_isolated():
 ADMIN = {"app": "web"}
 
 
-def _exposure(services, ingresses=None, routes=None, labels=None, ns="default"):
-    return exposure(labels if labels is not None else ADMIN, services, ingresses, routes)
+def _exposure(services, ingresses=(), routes=(), labels=None, ns="default"):
+    return exposure(labels if labels is not None else ADMIN, ns, services, ingresses, routes)
 
 
 def test_selectorless_and_externalname_services_match_nothing():
@@ -315,7 +319,7 @@ def test_internal_load_balancer_is_cluster(key, value):
     assert result.services == (ExposedService(name="lb", type="LoadBalancer", internal_lb=True),)
 
 
-def test_ingress_and_httproute_backends_make_external_and_collect_hosts():
+def test_ingress_and_httproute_backends_make_external_and_collect_hosts():  # hosts only from matching rules
     services = [service("web", "default", ADMIN)]
     ingresses = [
         ingress("i1", "default", rules=[("b.example.com", "web"), ("x.example.com", "other")]),
@@ -328,7 +332,7 @@ def test_ingress_and_httproute_backends_make_external_and_collect_hosts():
     ]
     result = _exposure(services, ingresses, routes)
     assert result.level == "external"
-    assert result.hosts == ("a.example.com", "b.example.com", "x.example.com")
+    assert result.hosts == ("a.example.com", "b.example.com")
 
 
 def test_ingress_to_unmatched_service_stays_cluster():
@@ -340,7 +344,7 @@ def test_ingress_to_unmatched_service_stays_cluster():
 
 def test_httproute_to_other_kind_is_ignored():
     routes = [httproute("r", "default", ["a.example.com"], [("web", "ServiceImport", "multicluster.x-k8s.io")])]
-    assert _exposure([service("web", "default", ADMIN)], None, routes).level == "cluster"
+    assert _exposure([service("web", "default", ADMIN)], [], routes).level == "cluster"
 
 
 def test_httproute_backend_with_omitted_kind_and_group_is_a_service():
@@ -350,21 +354,21 @@ def test_httproute_backend_with_omitted_kind_and_group_is_a_service():
         "spec": {"hostnames": ["a.example.com"], "rules": [{"backendRefs": [ref]}]},
     }
     assert httproute("r", "default", backends=[("web", None, None)])["spec"]["rules"][0]["backendRefs"] == [ref]
-    result = _exposure([service("web", "default", ADMIN)], None, [route])
+    result = _exposure([service("web", "default", ADMIN)], [], [route])
     assert result.level == "external"
     assert result.hosts == ("a.example.com",)
 
 
 def test_httproute_backend_in_another_namespace_is_ignored():
     routes = [httproute("r", "default", ["a.example.com"], [("web", "Service", "", "other")])]
-    assert _exposure([service("web", "default", ADMIN)], None, routes).level == "cluster"
+    assert _exposure([service("web", "default", ADMIN)], [], routes).level == "cluster"
     same = [httproute("r", "default", ["a.example.com"], [("web", "Service", "", "default")])]
-    assert _exposure([service("web", "default", ADMIN)], None, same).level == "external"
+    assert _exposure([service("web", "default", ADMIN)], [], same).level == "external"
 
 
 def test_httproute_without_rules_or_hostnames_is_read_defensively():
     route = {"metadata": {"namespace": "default"}, "spec": {}}
-    assert _exposure([service("web", "default", ADMIN)], None, [route]).level == "cluster"
+    assert _exposure([service("web", "default", ADMIN)], [], [route]).level == "cluster"
 
 
 def test_services_unlistable_is_unknown():
@@ -439,3 +443,118 @@ def test_no_selecting_policy_is_not_isolated():
 
 def test_policies_unlistable_is_unknown_isolation():
     assert network(ADMIN, None) == Network(ingress_isolated=None, egress_isolated=None)
+
+
+def _lb(annotations, ns="default"):
+    return _exposure([service("lb", ns, ADMIN, type="LoadBalancer", annotations=annotations)])
+
+
+@pytest.mark.parametrize(
+    "annotations",
+    [
+        {
+            "service.beta.kubernetes.io/aws-load-balancer-scheme": "internet-facing",
+            "service.beta.kubernetes.io/aws-load-balancer-internal": "true",
+        },
+        {"networking.gke.io/load-balancer-type": "External", "cloud.google.com/load-balancer-type": "Internal"},
+        {"service.beta.kubernetes.io/azure-load-balancer-internal": "false"},
+        {"service.beta.kubernetes.io/azure-load-balancer-internal": "yes"},
+        {"service.beta.kubernetes.io/aws-load-balancer-scheme": "private"},
+        {"service.beta.kubernetes.io/aws-load-balancer-internal": "internal"},
+        {
+            "service.beta.kubernetes.io/azure-load-balancer-internal": "true",
+            "networking.gke.io/load-balancer-type": "x",
+        },
+    ],
+)
+def test_ambiguous_load_balancer_annotations_are_external(annotations):
+    assert _lb(annotations).level == "external"
+
+
+def test_legacy_key_counts_without_the_authoritative_key():
+    assert _lb({"cloud.google.com/load-balancer-type": "Internal"}).level == "cluster"
+    assert _lb({"service.beta.kubernetes.io/aws-load-balancer-internal": "TRUE"}).level == "cluster"
+
+
+def test_unlistable_ingresses_or_routes_make_a_matched_service_unknown():
+    web = [service("web", "default", ADMIN)]
+    assert _exposure(web, None, []).level == "unknown"
+    assert _exposure(web, [], None).level == "unknown"
+    assert _exposure(web, [], []).level == "cluster"
+    assert _exposure([], None, None).level == "none"
+    assert _exposure([service("np", "default", ADMIN, type="NodePort")], None, None).level == "external"
+
+
+def test_httproute_in_another_namespace_can_reach_a_service():
+    web = [service("web", "web", ADMIN)]
+    cross = httproute("r", "edge", ["a.example.com"], [("web", "Service", "", "web")])
+    assert _exposure(web, [], [cross], ns="web").level == "external"
+    assert _exposure(web, [], [cross], ns="web").hosts == ("a.example.com",)
+    same_ns_default = httproute("r", "edge", ["a.example.com"], [("web",)])
+    assert _exposure(web, [], [same_ns_default], ns="web").level == "cluster"
+
+
+def test_httproute_nameless_ref_is_skipped():
+    route = {
+        "metadata": {"namespace": "default"},
+        "spec": {"rules": [{"backendRefs": [{"kind": "Service"}, {"name": ""}]}]},
+    }
+    assert _exposure([service("web", "default", ADMIN)], [], [route]).level == "cluster"
+
+
+def _peer(**kw):
+    return V1NetworkPolicyPeer(**kw)
+
+
+@pytest.mark.parametrize(
+    "rule",
+    [
+        V1NetworkPolicyIngressRule(),
+        V1NetworkPolicyIngressRule(_from=[]),
+        V1NetworkPolicyIngressRule(_from=[_peer(ip_block=V1IPBlock(cidr="0.0.0.0/0"))]),
+        V1NetworkPolicyIngressRule(_from=[_peer(ip_block=V1IPBlock(cidr="::/0"))]),
+        V1NetworkPolicyIngressRule(_from=[_peer(namespace_selector=V1LabelSelector())]),
+        V1NetworkPolicyIngressRule(_from=[_peer(namespace_selector=V1LabelSelector(), pod_selector=V1LabelSelector())]),
+        V1NetworkPolicyIngressRule(ports=[]),
+    ],
+)
+def test_allow_all_ingress_rule_leaves_the_pod_not_isolated(rule):
+    result = network(ADMIN, [network_policy("open", "default", ADMIN, policy_types=["Ingress"], ingress=[rule])])
+    assert result.ingress_isolated is False
+    assert result.ingress_policies == ("open",)
+
+
+def test_restrictive_peers_still_isolate():
+    peers = [
+        _peer(ip_block=V1IPBlock(cidr="0.0.0.0/0", _except=["10.0.0.0/8"])),
+        _peer(namespace_selector=V1LabelSelector(match_labels={"a": "b"})),
+        _peer(namespace_selector=V1LabelSelector(), pod_selector=V1LabelSelector(match_labels={"a": "b"})),
+        _peer(pod_selector=V1LabelSelector()),
+    ]
+    rule = V1NetworkPolicyIngressRule(_from=peers)
+    assert network(ADMIN, [network_policy("p", "default", ADMIN, ingress=[rule])]).ingress_isolated is True
+
+
+def test_deny_all_isolates():
+    result = network(ADMIN, [network_policy("deny", "default", ADMIN, policy_types=["Ingress", "Egress"])])
+    assert result == Network(
+        ingress_isolated=True, egress_isolated=True, ingress_policies=("deny",), egress_policies=("deny",)
+    )
+
+
+def test_allow_all_egress_rule_leaves_the_pod_not_isolated():
+    policy = network_policy("open", "default", ADMIN, policy_types=["Egress"], egress=[V1NetworkPolicyEgressRule()])
+    assert network(ADMIN, [policy]).egress_isolated is False
+
+
+def test_one_allow_all_policy_beats_a_restrictive_one():
+    restrictive = network_policy(
+        "r",
+        "default",
+        ADMIN,
+        ingress=[V1NetworkPolicyIngressRule(_from=[_peer(pod_selector=V1LabelSelector(match_labels={"a": "b"}))])],
+    )
+    open_ = network_policy("o", "default", ADMIN, ingress=[V1NetworkPolicyIngressRule()])
+    result = network(ADMIN, [restrictive, open_])
+    assert result.ingress_isolated is False
+    assert result.ingress_policies == ("o", "r")

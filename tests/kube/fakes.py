@@ -28,6 +28,7 @@ from kubernetes.client import (
     V1Namespace,
     V1NetworkPolicy,
     V1NetworkPolicyEgressRule,
+    V1NetworkPolicyPeer,
     V1NetworkPolicySpec,
     V1Node,
     V1NodeStatus,
@@ -199,23 +200,33 @@ def httproute(
     }
 
 
+def _egress_rules(egress: bool | list) -> list | None:
+    if egress is True:
+        peer = V1NetworkPolicyPeer(pod_selector=V1LabelSelector(match_labels={"x": "y"}))
+        return [V1NetworkPolicyEgressRule(to=[peer])]
+    return egress or None
+
+
 def network_policy(
     name: str,
     ns: str,
     match_labels: dict | None = None,
     match_expressions: list[tuple[str, str, list[str]]] | None = None,  # (key, operator, values)
     policy_types: list[str] | None = None,
-    egress: bool = False,
+    egress: bool | list = False,
+    ingress: list | None = None,
 ) -> V1NetworkPolicy:
     """A policy selecting pods by labels. ``policy_types`` is passed through verbatim (None leaves it unset, as a
-    manifest without ``policyTypes``); ``egress`` adds one egress rule to the spec and leaves ``policy_types`` alone."""
+    manifest without ``policyTypes``); ``egress=True`` adds one restrictive egress rule (to pods labelled ``x=y``), a
+    list sets the egress rules, and ``ingress`` sets the ingress rules; ``policy_types`` is left alone."""
     expressions = [V1LabelSelectorRequirement(key=k, operator=op, values=v) for k, op, v in match_expressions or []]
     return V1NetworkPolicy(
         metadata=V1ObjectMeta(name=name, namespace=ns),
         spec=V1NetworkPolicySpec(
             pod_selector=V1LabelSelector(match_labels=match_labels, match_expressions=expressions or None),
             policy_types=policy_types,
-            egress=[V1NetworkPolicyEgressRule()] if egress else None,
+            ingress=ingress,
+            egress=_egress_rules(egress),
         ),
     )
 

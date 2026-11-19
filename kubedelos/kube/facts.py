@@ -142,10 +142,20 @@ def _expression_matches(expression, labels: dict[str, str]) -> bool:
 
 
 def exposure(
-    labels: dict[str, str], services: list | None, ingresses: list | None, httproutes: list[dict] | None
+    labels: dict[str, str],
+    namespace: str,
+    services: list | None,
+    ingresses: list | None,
+    httproutes: list[dict] | None,
 ) -> Exposure:
-    """How far a pod with ``labels`` is reachable. ``services`` None means they could not be listed (unknown);
-    None ingresses or HTTPRoutes are judged on what was read. All objects are those of the pod's namespace."""
+    """How far a pod with ``labels`` in ``namespace`` is reachable.
+
+    ``services`` and ``ingresses`` must be those of the pod's namespace (an Ingress cannot point across namespaces);
+    ``httproutes`` are those of every scanned namespace, as a route may point at a Service elsewhere. ``services``
+    None means they could not be listed (unknown). ``ingresses`` or ``httproutes`` None means the list was forbidden
+    or failed; the caller passes ``[]`` when the kind does not exist (the CRD is absent). When Services match but
+    nothing proves external reach and one of those lists is None, the level is unknown: an unread Ingress or route
+    could have made it external."""
     if services is None:
         return Exposure(level="unknown")
     matched = [s for s in services if _service_selects(s, labels)]
@@ -153,14 +163,13 @@ def exposure(
     hosts: set[str] = set()
     routed = False
     for ing in ingresses or []:
-        found = _ingress_backends(ing)
-        if found & names:
-            routed = True
-            hosts.update(r.host for r in ing.spec.rules or [] if r.host)
+        ing_hosts, reaches = _ingress_reach(ing, names)
+        routed = routed or reaches
+        hosts.update(ing_hosts)
     for route in httproutes or []:
-        if _route_backends(route) & names:
+        if _route_backends(route, namespace) & names:
             routed = True
-            hosts.update(route.get("spec", {}).get("hostnames") or [])
+            hosts.update((route.get("spec") or {}).get("hostnames") or [])
     exposed = [
         ExposedService(name=s.metadata.name, type=s.spec.type or "ClusterIP", internal_lb=_internal_lb(s))
         for s in matched
@@ -168,8 +177,12 @@ def exposure(
     external_ips = sorted({ip for s in matched for ip in s.spec.external_ips or []})
     if routed or external_ips or any(_publicly_reachable(e) for e in exposed):
         level = "external"
+    elif not matched:
+        level = "none"  # a route needs a Service
+    elif ingresses is None or httproutes is None:
+        level = "unknown"
     else:
-        level = "cluster" if matched else "none"
+        level = "cluster"
     return Exposure(
         level=level,
         services=tuple(sorted(exposed, key=lambda e: e.name)),
@@ -185,46 +198,73 @@ def _service_selects(service, labels: dict[str, str]) -> bool:
     return all(labels.get(k) == v for k, v in spec.selector.items())
 
 
+_AWS_SCHEME = "service.beta.kubernetes.io/aws-load-balancer-scheme"
+_GKE_TYPE = "networking.gke.io/load-balancer-type"
+
+
 def _internal_lb(service) -> bool:
+    """Whether every recognised provider annotation says internal. A provider's authoritative key decides alone
+    when present; its legacy key counts only without it. Any other value, or no annotation, means external."""
     if service.spec.type != "LoadBalancer":
         return False
-    annotations = service.metadata.annotations or {}
-    return any(str(annotations.get(k, "")).lower() == v for k, v in INTERNAL_LB_ANNOTATIONS.items())
+    annotations = {k: str(v).lower() for k, v in (service.metadata.annotations or {}).items()}
+    azure = annotations.get("service.beta.kubernetes.io/azure-load-balancer-internal")
+    decisions = []
+    if azure is not None:
+        decisions.append(azure == "true")
+    for authoritative, legacy, legacy_internal in (
+        (_AWS_SCHEME, "service.beta.kubernetes.io/aws-load-balancer-internal", "true"),
+        (_GKE_TYPE, "cloud.google.com/load-balancer-type", "internal"),
+    ):
+        if authoritative in annotations:
+            decisions.append(annotations[authoritative] == "internal")
+        elif legacy in annotations:
+            decisions.append(annotations[legacy] == legacy_internal)
+    return bool(decisions) and all(decisions)
 
 
 def _publicly_reachable(e: ExposedService) -> bool:
     return e.type == "NodePort" or (e.type == "LoadBalancer" and not e.internal_lb)
 
 
-def _ingress_backends(ing) -> set[str]:
+def _ingress_reach(ing, names: set[str]) -> tuple[set[str], bool]:
+    """The hosts of the Ingress rules that reach one of ``names``, and whether the Ingress reaches any."""
     spec = ing.spec
-    backends = [spec.default_backend] if spec.default_backend else []
+    reaches = bool(spec.default_backend and spec.default_backend.service and spec.default_backend.service.name in names)
+    hosts: set[str] = set()
     for rule in spec.rules or []:
-        backends += [p.backend for p in (rule.http.paths if rule.http else None) or []]
-    return {b.service.name for b in backends if b and b.service}
+        paths = (rule.http.paths if rule.http else None) or []
+        if any(p.backend and p.backend.service and p.backend.service.name in names for p in paths):
+            reaches = True
+            if rule.host:
+                hosts.add(rule.host)
+    return hosts, reaches
 
 
-def _route_backends(route: dict) -> set[str]:
-    """Names of the same-namespace Services an HTTPRoute sends to; kind and group default to Service and ``""``.
-    A ref into another namespace needs a ReferenceGrant, which is not read, so it does not count."""
-    namespace = (route.get("metadata") or {}).get("namespace")
+def _route_backends(route: dict, namespace: str) -> set[str]:
+    """Names of the Services in ``namespace`` an HTTPRoute sends to; kind and group default to Service and ``""``.
+    A ref's namespace defaults to the route's. Whether a ReferenceGrant allows a cross-namespace ref is not checked:
+    counting it can only over-report, which is the conservative side."""
+    route_ns = (route.get("metadata") or {}).get("namespace")
     names: set[str] = set()
     for rule in (route.get("spec") or {}).get("rules") or []:
         for ref in rule.get("backendRefs") or []:
-            if ref.get("kind", "Service") != "Service" or ref.get("group", "") != "":
+            if ref.get("kind", "Service") != "Service" or ref.get("group", "") != "" or not ref.get("name"):
                 continue
-            if ref.get("namespace", namespace) != namespace:
-                continue
-            names.add(ref.get("name"))
+            if (ref.get("namespace") or route_ns) == namespace:
+                names.add(ref["name"])
     return names
 
 
 def network(labels: dict[str, str], policies: list | None) -> Network:
-    """Whether NetworkPolicies isolate a pod with ``labels``; None ``policies`` means they could not be listed."""
+    """Whether NetworkPolicies isolate a pod with ``labels``; None ``policies`` means they could not be listed.
+    ``policies`` must be those of the pod's namespace. Policies are additive, so a selecting policy with an
+    allow-all rule leaves that direction open (its name is still listed)."""
     if policies is None:
         return Network(ingress_isolated=None, egress_isolated=None)
     ingress: list[str] = []
     egress: list[str] = []
+    open_in = open_out = False
     for policy in policies:
         spec = policy.spec
         if not selector_matches(spec.pod_selector, labels):
@@ -232,14 +272,35 @@ def network(labels: dict[str, str], policies: list | None) -> Network:
         types = spec.policy_types or ["Ingress", *(["Egress"] if spec.egress else [])]
         if "Ingress" in types:
             ingress.append(policy.metadata.name)
+            open_in = open_in or any(_allows_all(r._from) for r in spec.ingress or [])
         if "Egress" in types:
             egress.append(policy.metadata.name)
+            open_out = open_out or any(_allows_all(r.to) for r in spec.egress or [])
     return Network(
-        ingress_isolated=bool(ingress),
-        egress_isolated=bool(egress),
+        ingress_isolated=bool(ingress) and not open_in,
+        egress_isolated=bool(egress) and not open_out,
         ingress_policies=tuple(sorted(ingress)),
         egress_policies=tuple(sorted(egress)),
     )
+
+
+def _allows_all(peers) -> bool:
+    """Whether a rule admits every peer: no peers listed (ports alone restrict nothing about who), or one that
+    covers everything."""
+    return not peers or any(_peer_is_everyone(p) for p in peers)
+
+
+def _peer_is_everyone(peer) -> bool:
+    block = peer.ip_block
+    if block and block.cidr in ("0.0.0.0/0", "::/0") and not block._except:
+        return True
+    return _empty_selector(peer.namespace_selector, required=True) and _empty_selector(peer.pod_selector)
+
+
+def _empty_selector(selector, required: bool = False) -> bool:
+    if selector is None:
+        return not required
+    return not selector.match_labels and not selector.match_expressions
 
 
 def _tri_riskier(a: Tri, b: Tri) -> Tri:
