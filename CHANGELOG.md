@@ -112,6 +112,9 @@
 
 ### Documentation
 
+- The README opens with a dashboard screenshot (light and dark), shows a scan as a short GIF and the fix-first list with
+  the factors behind a score; the UI guide shows the findings page sorted by risk. All come from a real scan of a
+  throwaway kind cluster running old public images; `scripts/demo/` recreates them.
 - The docs have an index ([docs/README.md](docs/README.md)) and an [install guide](docs/install.md): requirements,
   installing from GitHub until the first release, cluster permissions, registry logins, the chart from a clone, where
   files are kept, upgrading and uninstalling. The README has a table of contents and stays an overview; the page-by-page
