@@ -21,6 +21,17 @@ python3 -m venv .venv
 .venv/bin/ruff check . && .venv/bin/ruff format --check .
 ```
 
+### Dependencies
+
+The container image installs its Python packages only from the hashed lock files in `requirements/`. When you add or
+change a dependency in `pyproject.toml`, regenerate them with [uv](https://docs.astral.sh/uv/) and commit the result:
+
+```bash
+scripts/lock-image.sh
+```
+
+`tests/test_packaging.py` fails when the locks no longer satisfy `pyproject.toml`.
+
 ## Workflow
 
 1. For anything bigger than a small fix, open an issue first so we can agree on the approach.

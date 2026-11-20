@@ -22,6 +22,7 @@ python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'      # setup
 .venv/bin/pytest                                                # tests
 KUBEDELOS_REQUIRE_HELM=1 .venv/bin/pytest tests/chart           # chart render tests (skipped without helm)
 scripts/image-smoke.sh IMAGE                                    # image smoke test (needs docker; IMAGE built locally)
+scripts/lock-image.sh                                           # regenerate the image's hashed locks (needs uv)
 scripts/e2e-chart.sh                                            # chart on a throwaway kind cluster (kind, helm, docker)
 .venv/bin/ruff check . && .venv/bin/ruff format --check .       # lint
 .venv/bin/pre-commit run --all-files                            # ruff, gitleaks, hygiene hooks
@@ -46,7 +47,8 @@ scripts/e2e-chart.sh                                            # chart on a thr
   `KUBEDELOS_DATA_DIR`.
 - **TDD:** write a failing test first; one test file per module.
 - **Python 3.12+.** Dependencies use a lower bound at the current stable release and an
-  upper bound at the next major (`>=X.Y,<X+1`).
+  upper bound at the next major (`>=X.Y,<X+1`). After changing one, run `scripts/lock-image.sh`: the image installs
+  only from the hashed locks in `requirements/`, and `tests/test_packaging.py` fails when they fall out of step.
 - **Ruff:** line length 120. Keep `ruff check` and `ruff format --check` clean.
 - **Comments:** every module starts with a docstring explaining what and why.
 - **GitHub Actions:** pin every action to a full SHA with a `# vX.Y.Z` comment, set
