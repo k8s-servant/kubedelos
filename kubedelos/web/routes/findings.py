@@ -40,7 +40,8 @@ COLUMNS = (
     ("namespace", "Namespaces"),
     (None, "Status"),
 )
-RISK_COLUMN = ("risk", "Risk")  # the first column, as on the dashboard, when the run's score says more than its severity
+# The first column, as on the dashboard, when the run's score says more than its severity.
+RISK_COLUMN = ("risk", "Risk")
 
 
 def _row(request: Request, r, namespace: str | None) -> dict:
