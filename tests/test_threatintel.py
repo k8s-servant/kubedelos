@@ -357,6 +357,15 @@ def test_a_shrunk_feed_is_accepted_once_the_old_copy_is_a_week_old(conn):
     assert _feeds(conn)["kev"] == (after.isoformat(), "2026.11.19", 1)
 
 
+def test_accepting_a_shrunk_feed_after_the_grace_is_logged(conn, caplog):
+    threatintel.refresh(conn, Feeds(kev=_kev(4)).client(), NOW)
+    after = NOW + timedelta(days=8)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), after)["kev"] == "updated"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert warnings == ["threat feed kev shrank from 4 to 1 rows; accepted because the stored copy is 8 days old"]
+
+
 def test_the_refusal_says_the_old_copy_is_kept_for_a_week(conn, caplog):
     threatintel.refresh(conn, Feeds(kev=_kev(4)).client(), NOW)
     with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):

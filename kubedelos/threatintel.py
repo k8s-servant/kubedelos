@@ -197,10 +197,19 @@ def _store(conn: sqlite3.Connection, name: str, version: str | None, rows: dict,
         if _is_fresh(conn, name, now):
             return False
         stored = conn.execute("SELECT rows, fetched_at FROM threat_feed WHERE name = ?", (name,)).fetchone()
-        if stored is not None and len(rows) * 2 < stored[0] and now - datetime.fromisoformat(stored[1]) < SHRINK_GRACE:
-            raise FeedError(
-                f"{len(rows)} rows, fewer than half of the stored {stored[0]}; the old copy is kept until it is older"
-                f" than {SHRINK_GRACE.days} days"
+        if stored is not None and len(rows) * 2 < stored[0]:
+            age = now - datetime.fromisoformat(stored[1])
+            if age < SHRINK_GRACE:
+                raise FeedError(
+                    f"{len(rows)} rows, fewer than half of the stored {stored[0]}; the old copy is kept until it is"
+                    f" older than {SHRINK_GRACE.days} days"
+                )
+            logger.warning(
+                "threat feed %s shrank from %d to %d rows; accepted because the stored copy is %d days old",
+                name,
+                stored[0],
+                len(rows),
+                age.days,
             )
         _FETCH[name][2](conn, rows)
         conn.execute("DELETE FROM threat_intel WHERE kev = 0 AND epss IS NULL")
