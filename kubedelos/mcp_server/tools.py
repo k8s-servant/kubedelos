@@ -226,7 +226,8 @@ _NO_FACTS_RANK = _EXPOSURE_RANK["unknown"]  # not collected is as exposed as cou
 def exposure_key(row: workloads.WorkloadRow) -> tuple:
     """The order the workload lists share: most exposed first (no facts with unknown), then Critical, then High.
 
-    ``attack_surface`` and ``find_vulnerability`` both sort by it, so their rankings agree.
+    ``attack_surface`` sorts by it alone. ``find_vulnerability`` sorts by risk score first while ``risk.shown`` is
+    true, and by it otherwise (and to break score ties).
     """
     return (
         _EXPOSURE_RANK[row.facts.exposure.level] if row.facts else _NO_FACTS_RANK,

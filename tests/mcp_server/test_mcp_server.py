@@ -61,6 +61,15 @@ async def test_tools_are_listed_read_only(db):
     assert UNTRUSTED in INSTRUCTIONS
 
 
+async def test_the_ranked_tools_describe_the_risk_order(db):
+    async with Client(build_server(db)) as client:
+        described = {t.name: t.description for t in (await client.list_tools()).tools}
+    for name in ("fix_first", "find_vulnerability"):
+        assert "risk.shown" in described[name], name
+        assert "score" in described[name], name
+    assert "null until a KEV feed copy exists" in described["find_vulnerability"]
+
+
 async def test_list_clusters_over_mcp(db, monkeypatch):
     monkeypatch.setattr(tools, "_now", lambda: NOW)
     conn = db.open()

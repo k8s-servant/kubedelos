@@ -73,7 +73,9 @@ def build_server(db: Db) -> MCPServer:
         description=(
             "The fixes that clear the most Critical and High findings, in the order the dashboard shows them: view "
             '"fix" lists CVE, package and fixed version; view "image" lists images, worst first. At most 100 items; '
-            "total and truncated say whether the list was cut. " + UNTRUSTED
+            "total and truncated say whether the list was cut. While risk.shown is true the items are ordered by score "
+            "(0-100, kubedelos's own ranking, not a CVE severity) and factors explain it; otherwise by Critical and "
+            "High counts as above. The risk object says whether scores are shown. " + UNTRUSTED
         ),
         annotations=READ_ONLY,
     )
@@ -94,7 +96,10 @@ def build_server(db: Db) -> MCPServer:
             "acceptances for it. The id is matched exactly and case-sensitively; a CVE- id is upper-cased first. An "
             "unknown CVE returns empty lists. Workloads are ranked like attack_surface: exposure first (external, "
             "then unknown or no facts, cluster, none), then Critical and High counts. At most 100 workloads; total "
-            "and truncated say whether the list was cut, and offset pages on. packages and images hold at most 100 "
+            "and truncated say whether the list was cut, and offset pages on. While risk.shown is true the workloads "
+            "are ordered by score (0-100, kubedelos's own ranking, not a CVE severity) with factors explaining it, "
+            "then as above; the risk object says whether scores are shown, and kev is null until a KEV feed copy "
+            "exists. packages and images hold at most 100 "
             "each; packages_total and images_total count them all. " + UNTRUSTED
         ),
         annotations=READ_ONLY,
