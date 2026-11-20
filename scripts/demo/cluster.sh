@@ -10,7 +10,7 @@ KCFG="$DEMO_DIR/kubeconfig"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 
 if [ "${1:-}" = --delete ]; then
-  kind delete cluster --name "$NAME"
+  kind delete cluster --name "$NAME" --kubeconfig "$KCFG"
   exit 0
 fi
 
