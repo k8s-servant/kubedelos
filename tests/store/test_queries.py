@@ -33,6 +33,7 @@ from kubedelos.store.queries import (
     auth_failed_refs,
     failed_images,
     failure_kinds,
+    findings_export,
     findings_page,
     fix_by_fix,
     fix_by_image,
@@ -1109,3 +1110,56 @@ def test_fix_by_image_scored_uses_the_top_unit(db):
     assert rows[0].factors == risk.score("CRITICAL", intel, BATCH).factors
     assert rows[1].factors == risk.score("CRITICAL", risk.NO_INTEL, BATCH).factors
     assert [(r.critical, r.high, r.fixable) for r in rows] == [(1, 2, 3), (2, 0, 2)]
+
+
+def _risk_dataset(conn, repo, run_id):
+    """Three images (batch, exposed, no workload) with a few CVEs of mixed severity, two of them in the feed."""
+    sevs = ["CRITICAL", "HIGH", "MEDIUM", "LOW"]
+    for ref, facts, namespace in (("img0", BATCH, "ns"), ("img1", EXPOSED, "ns"), ("img2", None, None)):
+        findings = [_fk(f"CVE-{i % 25:03}", sevs[i % 4], pkg=f"p{i % 5}", version=str(i)) for i in range(80)]
+        _add_with_facts(repo, run_id, ref, findings, facts, namespace=namespace)
+    _intel(conn, "CVE-003", kev=True, epss=0.9)
+    _intel(conn, "CVE-010", epss=0.6)
+
+
+def test_findings_risk_sort(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _risk_dataset(conn, repo, run_id)
+    for desc in (True, False):
+        f = FindingFilter(sort="risk", scored=True, desc=desc)
+        whole, total, _ = findings_page(conn, run_id, f, 1, per_page=1000)
+        assert total == 240
+        scores = [r["score"] for r in whole]
+        assert scores == sorted(scores, reverse=desc)
+        assert len(set(scores)) > 3
+        paged = []
+        for page in (1, 2, 3, 4, 5):  # pages 3 to 5 are read from the far end
+            rows, page_total, _ = findings_page(conn, run_id, f, page, per_page=60)
+            assert page_total == 240
+            paged += _keys(rows)
+        assert paged == _keys(whole), desc
+        assert len(set(paged)) == 240
+
+
+def test_findings_risk_without_score_is_severity_order(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _risk_dataset(conn, repo, run_id)
+    for desc in (True, False):
+        risky, _, _ = findings_page(conn, run_id, FindingFilter(sort="risk", desc=desc), 1, per_page=1000)
+        plain, _, _ = findings_page(conn, run_id, FindingFilter(sort="severity", desc=desc), 1, per_page=1000)
+        assert _keys(risky) == _keys(plain)
+        assert all(r["score"] is None for r in risky)
+
+
+def test_export_always_has_score(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_with_facts(repo, run_id, "a", [_fx("CVE-1", "CRITICAL")], EXPOSED)
+    plain = findings_export(conn, run_id, FindingFilter()).fetchall()
+    assert [r["score"] for r in plain] == [None]
+    scored = findings_export(conn, run_id, FindingFilter(sort="risk", scored=True)).fetchall()
+    assert [r["score"] for r in scored] == [risk.score("CRITICAL", risk.NO_INTEL, EXPOSED).points]
+    rows, _, _ = findings_page(conn, run_id, FindingFilter(), 1)
+    assert rows[0]["score"] is None

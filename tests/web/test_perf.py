@@ -73,6 +73,9 @@ def test_query_plans_use_indexes(tmp_path):
         "fix_by_image scored": lambda: queries.fix_by_image(conn, run_id, scored=True),
         "worst_images": lambda: queries.worst_images(conn, run_id),
         "findings_page": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(), 2, per_page=10),
+        "findings_page risk": lambda: queries.findings_page(
+            conn, run_id, queries.FindingFilter(sort="risk", scored=True), 2, per_page=10
+        ),
         "findings_page accepted": lambda: queries.findings_page(
             conn, run_id, queries.FindingFilter(accepted="only"), 1
         ),

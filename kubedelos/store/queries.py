@@ -312,6 +312,9 @@ WHERE r.run_id = :run
 GROUP BY r.ref
 """  # noqa: S608 - only module constants are interpolated
 
+# The CTE that gives ``_score_sql`` its workload points.
+_WP_CTE = f"wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL})"
+
 # The joins ``_score_sql`` reads, for a unit row ``{u}``: the CVE's feed row by its primary key, and the image's
 # workload points. An image with no workload row has no ``wp`` row and scores as unknown.
 _SCORE_JOINS_SQL = "LEFT JOIN threat_intel ti ON ti.vuln_id = {u}.vuln_id LEFT JOIN wp ON wp.ref = {u}.ref"
@@ -396,7 +399,7 @@ def _fix_list(
     line. ``units`` holds the units that are not accepted; ``accepted`` is how many were left out. There is always one
     row: an empty list leaves the listing's columns NULL. ``scored`` gives each unit its ``score``; it moves no count.
     """
-    every = f"wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}), every AS MATERIALIZED ({_scored(_FIX_UNITS_SQL)})"
+    every = f"{_WP_CTE}, every AS MATERIALIZED ({_scored(_FIX_UNITS_SQL)})"
     if not scored:
         every = f"every AS MATERIALIZED ({_FIX_UNITS_SQL})"
     return conn.execute(
@@ -482,7 +485,7 @@ def _samples(
     every = f"every AS MATERIALIZED ({_SAMPLE_UNITS_SQL})"
     columns, picked, order, rows_order = "", "", "g.ref", "k.ref"
     if scored:
-        every = f"wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}), every AS MATERIALIZED ({_scored(_SAMPLE_UNITS_SQL)})"
+        every = f"{_WP_CTE}, every AS MATERIALIZED ({_scored(_SAMPLE_UNITS_SQL)})"
         columns, picked = ", MAX(u.score) AS score, MAX(u.sev_rank) AS sev_rank", ", {t}.score, {t}.sev_rank"
         order, rows_order = _SAMPLE_ORDER_SQL, "k.rn"
     rows = conn.execute(
@@ -520,7 +523,7 @@ _SAMPLE_ORDER_SQL = "g.score DESC, g.sev_rank DESC, g.ref"
 # The top unit of each of the page's images (``:refs``), for its factors: the highest score, then severity, then CVE.
 # The same units as the list, narrowed to those images through the run's image rows, and left out when accepted.
 _TOP_UNITS_SQL = f"""
-WITH wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}),
+WITH {_WP_CTE},
 every AS MATERIALIZED ({
     _scored(
         _FIX_UNITS_TEMPLATE.format(
@@ -764,9 +767,10 @@ class FindingFilter:
     has_fix: Literal["any", "yes", "no"] = "any"
     pkg: Literal["all", "os", "library"] = "all"
     q: str | None = None
-    sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] = "severity"
+    sort: Literal["severity", "cve", "package", "image", "namespace", "fixed", "risk"] = "severity"
     desc: bool = True
     accepted: Literal["hide", "only", "all"] = "hide"
+    scored: bool = False  # give each unit its risk score (the ``risk`` sort orders by it; unscored it is severity)
 
 
 # The distinct namespaces of each image in the run, as a sorted JSON array plus the smallest one (for sorting). Inner
@@ -788,6 +792,7 @@ _SORT_TERMS = {
     "image": (("{p}ref", True),),
     "namespace": (("{p}first_ns IS NULL", False), ("{p}first_ns", True)),
     "fixed": (("NULLIF({p}fixed_version, '') IS NULL", False), ("{p}fixed_version", True)),
+    "risk": (("{p}score IS NULL", False), ("{p}score", True)),
 }
 _TIE_BREAK_TERMS = tuple((f"{{p}}{c}", False) for c in ("vuln_id", "ref", "pkg_name", "installed_version"))
 
@@ -795,7 +800,8 @@ _TIE_BREAK_TERMS = tuple((f"{{p}}{c}", False) for c in ("vuln_id", "ref", "pkg_n
 def _order_sql(f: FindingFilter, prefix: str = "", *, reverse: bool = False) -> str:
     """The ORDER BY list for ``f``; ``reverse`` gives the exact opposite order, to read a deep page from the far end."""
     terms = []
-    for expr, follows in _SORT_TERMS[f.sort] + _TIE_BREAK_TERMS:
+    sort = f.sort if f.scored or f.sort != "risk" else "severity"
+    for expr, follows in _SORT_TERMS[sort] + _TIE_BREAK_TERMS:
         descending = (follows and f.desc) != reverse
         terms.append(f"{expr.format(p=prefix)} {'DESC' if descending else 'ASC'}")
     return ", ".join(terms)
@@ -875,10 +881,15 @@ def _filtered_cte(
     by_namespace = bool(f.namespace) or f.sort == "namespace"
     source = "units u LEFT JOIN ns ON ns.ref = u.ref" if by_namespace else "units u"
     first_ns = ", ns.first_ns" if by_namespace else ""
+    score, wp = "NULL AS score", ""
+    if f.scored:
+        score, wp = f"{_score_sql('u')} AS score", f" {_WP_CTE},"
+        source += " " + _SCORE_JOINS_SQL.format(u="u")
     cte = (
-        f"WITH units AS MATERIALIZED ({units_sql}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),"  # noqa: S608
+        f"WITH units AS MATERIALIZED ({units_sql}), ns AS MATERIALIZED ({_REF_NAMESPACES_SQL}),{wp}"  # noqa: S608
         f" {ACCEPTED_CTES},"
-        f" kept AS (SELECT u.*{first_ns}, {_IS_ACCEPTED_SQL.format(u='u')} AS accepted FROM {source}{clause}),"
+        f" kept AS (SELECT u.*{first_ns}, {score}, {_IS_ACCEPTED_SQL.format(u='u')} AS accepted"
+        f" FROM {source}{clause}),"
         f" filtered AS (SELECT * FROM kept WHERE {_KEEP_SQL[f.accepted]})"
     )
     return cte, params
@@ -903,7 +914,7 @@ def _page_sql(cte: str, f: FindingFilter) -> str:
         "   OFFSET (SELECT MAX(0, total - :offset - :limit) FROM n))),"
         f" detail AS ({_PAGE_DETAIL_SQL})"
         " SELECT n.total, n.left_out, p.ref, p.vuln_id, p.pkg_name, p.installed_version, p.fixed_version, p.sev_rank,"
-        " p.pkg_class, p.accepted,"
+        " p.pkg_class, p.accepted, p.score,"
         f" {severity} AS severity, COALESCE(ns.namespaces, '[]') AS namespaces,"
         " d.repo, d.tag, d.digest, d.title, d.primary_url, d.targets"
         " FROM n LEFT JOIN page p ON 1 LEFT JOIN ns ON ns.ref = p.ref"
