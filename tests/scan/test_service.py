@@ -6,6 +6,7 @@ from typing import ClassVar
 
 import pytest
 from kubernetes.client import V1Namespace, V1ObjectMeta
+from kubernetes.client.exceptions import ApiException
 
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import Inventory
@@ -200,7 +201,7 @@ def test_service_rejects_invalid_refs(env, monkeypatch, bad):
     settings, repo, calls = env
     good = InventoryItem(image=ImageRef(ref="reg.io/a:1", repo="reg.io/a", tag="1"), platform="linux/amd64")
     evil = InventoryItem(image=ImageRef(ref=bad, repo=bad), platform="linux/amd64")
-    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([good, evil], [], {}))
+    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([good, evil], [], {}, 1, 1))
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     progress = []
     out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
@@ -216,7 +217,7 @@ def test_service_rejects_invalid_refs(env, monkeypatch, bad):
 def test_service_skips_trivy_when_only_invalid_refs(env, monkeypatch):
     settings, repo, calls = env
     evil = InventoryItem(image=ImageRef(ref="-oyaml", repo="-oyaml"), platform="linux/amd64")
-    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([evil], [], {}))
+    monkeypatch.setattr(service, "collect_inventory", lambda api, settings: Inventory([evil], [], {}, 1, 1))
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings, api=_api(), repo=repo)
     assert calls == [] and FakeCache.started == 0
@@ -664,3 +665,82 @@ def test_run_scan_skips_the_feeds_when_they_are_off(env, monkeypatch):
     progress: list = []
     service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
     assert "threat-feeds" not in _phases(progress)
+
+
+def _texts(repo, run_id):
+    return [r["text"] for r in repo.run_warnings(run_id)]
+
+
+def test_a_scope_that_selects_no_namespace_fails_the_run(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    settings = settings.model_copy(update={"namespaces": ["missing"]})
+    with pytest.raises(service.EmptyScope, match="no namespace matched the scope"):
+        service.run_scan(settings, api=_api(), repo=repo)
+    run_id = repo.latest_run_id()
+    assert _status(repo, run_id) == "failed"
+    assert _texts(repo, run_id) == [
+        "namespace missing not found",
+        "no namespace matched the scope; nothing was scanned",
+    ]
+    assert calls == []
+
+
+def test_a_scope_whose_pods_are_all_forbidden_fails_the_run(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = _api()
+    api.forbidden = {"default"}
+    with pytest.raises(service.EmptyScope, match="every namespace in scope was forbidden"):
+        service.run_scan(settings, api=api, repo=repo)
+    run_id = repo.latest_run_id()
+    assert _status(repo, run_id) == "failed"
+    assert _texts(repo, run_id)[-1] == "every namespace in scope was forbidden (1); nothing was scanned"
+
+
+def test_a_partly_forbidden_scope_still_scans(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = _api()
+    api.namespaces.append(V1Namespace(metadata=V1ObjectMeta(name="locked")))
+    api.forbidden = {"locked"}
+    settings = settings.model_copy(update={"namespaces": ["default", "locked"]})
+    out = service.run_scan(settings, api=api, repo=repo)
+    assert out.status == "ok"
+    assert "skipped namespace locked: forbidden" in _texts(repo, out.run_id)
+
+
+def test_a_namespace_without_pods_is_an_ok_empty_run(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = FakeKubeApi(namespaces=[V1Namespace(metadata=V1ObjectMeta(name="default"))], pods={})
+    out = service.run_scan(settings, api=api, repo=repo)
+    assert out.status == "ok"
+
+
+def test_an_inventory_error_records_a_failed_run(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = _api()
+    api.bad_request = {"list_namespaces"}
+    settings = settings.model_copy(update={"namespace_selector": "team in (a"})
+    with pytest.raises(ValueError, match="invalid label selector"):
+        service.run_scan(settings, api=api, repo=repo)
+    run_id = repo.latest_run_id()
+    assert run_id is not None and _status(repo, run_id) == "failed"
+    assert _texts(repo, run_id) == [
+        "listing the cluster failed: invalid label selector 'team in (a': Bad Request; nothing was scanned"
+    ]
+
+
+def test_an_api_error_while_listing_records_only_its_status(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    api = _api()
+    api.bad_request = {"list_pods"}
+    with pytest.raises(ApiException):
+        service.run_scan(settings, api=api, repo=repo)
+    # ApiException's str() dumps the response headers and body: only the status and reason are stored.
+    assert _texts(repo, repo.latest_run_id()) == [
+        "listing the cluster failed: HTTP 400 Bad Request; nothing was scanned"
+    ]

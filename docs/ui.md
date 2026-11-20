@@ -113,7 +113,8 @@ follows the system light or dark theme.
   saving), N of M images, scanned, cached and failed counts, the last finished image, and an estimate once 5 images
   have been scanned. When the scan ends, the page reloads once to show the finished run. Cancel stops the scan once the
   images in flight finish. The run history lists every run, newest first, 25 per page, with status, scope, packages,
-  images, failures and duration; only `ok` and `partial` runs link to their results. Ctrl-C on `kubedelos ui` cancels
+  images, failures and duration; only `ok` and `partial` runs link to their results, and a failed run that holds
+  nothing says why under its status ("no namespace matched the scope; nothing was scanned"). Ctrl-C on `kubedelos ui` cancels
   a running scan, waits up to 10 seconds for the images in flight, then kills any Trivy process still running.
   Each finished run's duration links to its scan times.
 - **Scan times (`/scans/<run>/times`)**: where a run's scanning time went. Each image's scan is timed, from start to

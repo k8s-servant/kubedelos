@@ -103,7 +103,7 @@
         <tbody>
           {%- for row in rows %}
           <tr>
-            <td><span class="chip{% if row.chip %} {{ row.chip }}{% endif %}">{{ row.status }}</span></td>
+            <td><span class="chip{% if row.chip %} {{ row.chip }}{% endif %}">{{ row.status }}</span>{% if row.reason %}<div class="hint">{{ row.reason }}</div>{% endif %}</td>
             <td>{% if row.href %}<a href="{{ row.href }}">Run {{ row.number }}</a> · <a class="compare" href="{{ row.compare_href }}">compare</a> · <a href="{{ row.report_href }}">report</a>{% else %}Run {{ row.number }}{% endif %}</td>
             <td>{{ describe_scope(row.scope) }}</td>
             <td>{{ describe_pkg_types(row.pkg_types) }}</td>

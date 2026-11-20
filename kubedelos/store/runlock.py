@@ -17,9 +17,7 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-from kubedelos.store.repo import Repo
-
-STALE_NOTE = "closed by kubedelos: no live process owned this run"
+from kubedelos.store.repo import STALE_NOTE, Repo
 
 _OWNER_RE = re.compile(r"[0-9a-f]+")  # tokens are hex; anything else (a path, say) never names a lock file
 

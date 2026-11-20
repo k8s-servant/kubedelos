@@ -22,6 +22,10 @@ CACHE_VERSION = f"{TRIVY_VERSION}+c1"
 # A cache key is either a bare digest or "<repo>@<digest>"; anything else is a mutable tag ref.
 _DIGEST_KEY_RE = re.compile(r"(?:^|@)sha256:[0-9a-f]{64}\Z")  # \Z: unlike $, no match before a trailing newline
 RETRY_NOTE_PREFIX = "retried "  # starts the run note a retry of failed images leaves
+# The notes that say why a failed run holds nothing: a scan that never got past listing the cluster ends its note with
+# NOTHING_SCANNED, and a run no live process owned is closed with STALE_NOTE.
+NOTHING_SCANNED = "; nothing was scanned"
+STALE_NOTE = "closed by kubedelos: no live process owned this run"
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _FINISH_RUN_SQL = (

@@ -127,6 +127,11 @@
 
 ### Bug Fixes
 
+- A scan whose scope selects no namespace, or where every namespace refuses the pod list, now ends `failed` with a note
+  instead of an `ok` run with no images that read as "no findings". The run is recorded before the cluster is listed,
+  so a selector the API server rejects or an unreachable cluster also leaves a `failed` run with its reason (an API
+  error is stored as its status and reason only). The Scans history shows that reason, and the note on a run closed
+  because no live process owned it, under the run's status.
 - The Scans form lines up: the parallel images box is styled like the other inputs (as are the retry form's number boxes), inputs, pills and the Scan button share one height and top edge, and the rescan hint fits on one line.
 - Two kubedelos processes opening the same new or older database at once no longer fail with "duplicate column name" or "database is locked": each migration runs under the write lock and is skipped when the other process has already applied it.
 - Image exclusions match images whose registry host is written in uppercase or as `index.docker.io`, the way image names are normalised.

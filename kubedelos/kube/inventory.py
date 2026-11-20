@@ -54,6 +54,8 @@ class Inventory:
     items: list[InventoryItem]
     warnings: list[InventoryWarning]
     fact_sources: FactSources
+    namespaces_selected: int  # namespaces in scope
+    namespaces_listed: int  # of those, the ones whose pods could be listed
 
 
 def _normalise(name: str) -> str:
@@ -463,7 +465,7 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
     kept = [item for item in items.values() if not is_excluded(item.image, settings.exclude_images)]
     if excluded := len(items) - len(kept):
         warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching the image exclusions", coverage=False))
-    return Inventory(kept, warnings, fact_sources)
+    return Inventory(kept, warnings, fact_sources, len(namespaces), len(scanned))
 
 
 def _record(tally: _Tally, listed: tuple[list | None, str]) -> list | None:

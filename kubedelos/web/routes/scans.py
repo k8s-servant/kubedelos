@@ -118,6 +118,7 @@ def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> 
         "duration": duration_text(run.started_at, run.finished_at),
         "times_href": link(request, f"/scans/{run.id}/times") if run.status != "running" else None,
         "by": requester(run.requested_by, run.trigger) or NO_REQUESTER,
+        "reason": run.reason,
     }
 
 
