@@ -1,7 +1,7 @@
 # Container image for `kubedelos serve`: the wheel in a virtualenv plus the pinned Trivy, checksum-verified at build
 # time, so the running pod downloads nothing and writes only to /data and /tmp.
 # Literal digest (not an ARG) so Dependabot can bump it.
-FROM python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54df1a4e57015b960e AS base
+FROM python:3.15-alpine@sha256:0f9552bb28711333da16915ec146f5e6bb44a7fdac9ced15dc17c2e0206346dd AS base
 
 FROM base AS builder
 WORKDIR /build
