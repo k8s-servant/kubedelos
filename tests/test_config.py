@@ -263,3 +263,10 @@ def test_attack_surface_setting_defaults_on_and_reads_env(monkeypatch):
     assert Settings().attack_surface is True
     monkeypatch.setenv("KUBEDELOS_ATTACK_SURFACE", "false")
     assert Settings().attack_surface is False
+
+
+def test_threat_feeds_setting_defaults_on_and_reads_env(monkeypatch):
+    monkeypatch.delenv("KUBEDELOS_THREAT_FEEDS", raising=False)  # tests/conftest.py turns the feeds off
+    assert Settings().threat_feeds is True
+    monkeypatch.setenv("KUBEDELOS_THREAT_FEEDS", "false")
+    assert Settings().threat_feeds is False

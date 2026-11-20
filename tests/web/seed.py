@@ -3,12 +3,17 @@
 ``Repo`` inserts one image at a time inside its own transaction, which is far too slow for 100,000 findings, so this
 writes the rows directly. Everything is derived from the row indexes, so two calls build two identical, comparable runs
 (the second one sees the first as its previous run).
+
+``seed_large(..., facts=True)`` also writes attack-surface facts and ``risk_points`` on every workload row, and
+``seed_intel`` fills ``threat_intel`` to the real feeds' size, so the timed pages show the risk score.
 """
 
 import sqlite3
 from datetime import UTC, datetime, timedelta
 
+from kubedelos import risk
 from kubedelos.config import Settings
+from kubedelos.models import Exposure, HostPath, Network, PodSecurity, Rights, WorkloadFacts
 
 CONTEXT = "my-cluster"
 # Half of the rows are Critical or High: the pessimistic mix, where the fix lists have the most units to group.
@@ -19,6 +24,42 @@ DUPLICATED_PLATFORMS = 10
 FAILED_PERCENT = 2
 
 _START = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _pod(**changes) -> PodSecurity:
+    base = {
+        "privileged": False, "allow_privilege_escalation": False, "runs_as_root": False, "read_only_root_fs": True,
+        "host_network": False, "host_pid": False, "host_ipc": False, "service_account": "default",
+        "automount_token": None,
+    }  # fmt: skip
+    return PodSecurity(**base | changes)
+
+
+# A mix of exposure levels, host access and rights, so the risk sort has many distinct scores to order.
+_FACTS = (
+    WorkloadFacts(
+        pod=_pod(), exposure=Exposure(level="external"), network=Network(ingress_isolated=False, egress_isolated=None),
+        rights=Rights(status="ok", reads_secrets=True, reads_secrets_scope="cluster"),
+    ),
+    WorkloadFacts(
+        pod=_pod(runs_as_root=None), exposure=Exposure(level="cluster"),
+        network=Network(ingress_isolated=True, egress_isolated=None), rights=Rights(status="ok"),
+    ),
+    WorkloadFacts(
+        pod=_pod(privileged=True, host_path_volumes=(HostPath(path="/var/run", read_only=False),)),
+        exposure=Exposure(level="cluster"), network=Network(ingress_isolated=False, egress_isolated=None),
+        rights=Rights(status="partial", pod_exec=True),
+    ),
+    WorkloadFacts(
+        pod=_pod(automount_token=False), exposure=Exposure(level="none"),
+        network=Network(ingress_isolated=None, egress_isolated=None), rights=Rights(status="off"),
+    ),
+    WorkloadFacts(
+        pod=_pod(runs_as_root=True, added_capabilities=("NET_ADMIN",)), exposure=Exposure(level="unknown"),
+        network=Network(ingress_isolated=None, egress_isolated=None), rights=Rights(status="unknown"),
+    ),
+)  # fmt: skip
+_FACTS_ROWS = tuple((facts.model_dump_json(), risk.workload_points(facts)) for facts in _FACTS)
 
 
 def _finding(image: int, i: int, per_image: int) -> tuple:
@@ -42,8 +83,13 @@ def _finding(image: int, i: int, per_image: int) -> tuple:
     )
 
 
-def seed_large(conn: sqlite3.Connection, *, images: int = 1000, findings: int = 100_000, namespaces: int = 50) -> int:
-    """Write one ``ok`` whole-cluster run of ``images`` images and ``findings`` finding rows; return its id."""
+def seed_large(
+    conn: sqlite3.Connection, *, images: int = 1000, findings: int = 100_000, namespaces: int = 50, facts: bool = False
+) -> int:
+    """Write one ``ok`` whole-cluster run of ``images`` images and ``findings`` finding rows; return its id.
+
+    ``facts`` writes facts and ``risk_points`` on every workload row, cycling through a mix of exposure levels.
+    """
     run_count = conn.execute("SELECT COUNT(*) FROM scan_run").fetchone()[0]
     finished = (_START + timedelta(hours=run_count + 1)).isoformat()
     with conn:
@@ -76,15 +122,17 @@ def seed_large(conn: sqlite3.Connection, *, images: int = 1000, findings: int = 
                 ),
             ).lastrowid  # fmt: skip
             for j in range(1 + image % 3):
+                surface = _FACTS_ROWS[(image + j) % len(_FACTS_ROWS)] if facts else (None, None)
                 workload_rows.append(
-                    (result_id, f"ns-{(image + j * 17) % namespaces:02}", "Deployment", f"app{image}", "main")
+                    (result_id, f"ns-{(image + j * 17) % namespaces:02}", "Deployment", f"app{image}", "main", *surface)
                 )
             if error:
                 continue
             count = per_image + (k < extra)
             finding_rows.extend((result_id, *_finding(image, i, per_image)) for i in range(count))
         conn.executemany(
-            "INSERT INTO workload (image_result_id, namespace, kind, name, container) VALUES (?, ?, ?, ?, ?)",
+            "INSERT INTO workload (image_result_id, namespace, kind, name, container, facts, risk_points)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?)",
             workload_rows,
         )
         conn.executemany(
@@ -118,4 +166,28 @@ def seed_acceptances(conn: sqlite3.Connection, count: int = ACCEPTANCES) -> None
             "INSERT INTO acceptance (vuln_id, context, namespace, repo, reason, owner, expires_at, created_at)"
             " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
+        )
+
+
+INTEL_FILLER = 400_000  # with the 6,000 seeded CVEs, about the real feed (409,087 EPSS rows on 2026-11-20)
+
+
+def seed_intel(conn: sqlite3.Connection, filler: int = INTEL_FILLER) -> None:
+    """Feed rows the size of the real feeds: EPSS for every seeded CVE, KEV for 1% of them, plus ``filler`` other CVEs
+    (EPSS only), and a ``threat_feed`` row for each feed."""
+    seeded = [
+        (f"CVE-2026-{vuln:05}", int(vuln % 100 == 0), "2026-01-01" if vuln % 100 == 0 else None, epss, epss)
+        for vuln in range(VULNS)
+        for epss in ((vuln % 97) / 96,)
+    ]
+    other = [(f"CVE-2019-{n:06}", 0, None, (n % 1000) / 1000, (n % 1000) / 1000) for n in range(filler)]
+    fetched = _START.isoformat()
+    with conn:
+        conn.executemany(
+            "INSERT INTO threat_intel (vuln_id, kev, kev_added, epss, epss_percentile) VALUES (?, ?, ?, ?, ?)",
+            seeded + other,
+        )
+        conn.executemany(
+            "INSERT INTO threat_feed (name, fetched_at, version, rows) VALUES (?, ?, NULL, ?)",
+            (("kev", fetched, VULNS // 100), ("epss", fetched, len(seeded) + len(other))),
         )

@@ -6,6 +6,7 @@ out by default (``accepted=hide``) and the page says how many; each row links to
 """
 
 import json
+from dataclasses import replace
 from math import ceil
 from typing import Literal
 from urllib.parse import urlencode
@@ -22,7 +23,7 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, short_name, shown_context
+from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, risk_view, short_name, shown_context
 
 router = APIRouter()
 
@@ -37,8 +38,9 @@ COLUMNS = (
     (None, "Class"),
     ("image", "Image"),
     ("namespace", "Namespaces"),
-    (None, "Risk"),
+    (None, "Status"),
 )
+RISK_COLUMN = ("risk", "Risk")  # inserted before Status when the run's score says more than its severity
 
 
 def _row(request: Request, r, namespace: str | None) -> dict:
@@ -60,10 +62,11 @@ def _row(request: Request, r, namespace: str | None) -> dict:
         "image": short_name(r["ref"]),
         "namespaces": namespaces[:NAMESPACES_SHOWN],
         "more_namespaces": max(0, len(namespaces) - NAMESPACES_SHOWN),
+        "score": r["score"],
     }
 
 
-Sort = Literal["severity", "cve", "package", "image", "namespace", "fixed"]
+Sort = Literal["severity", "cve", "package", "image", "namespace", "fixed", "risk"]
 
 
 def view_filter(
@@ -89,7 +92,7 @@ def view_filter(
         pkg=pkg,
         q=q or None,
         sort=sort_key,
-        desc=direction == "desc" if direction else sort_key == "severity",
+        desc=direction == "desc" if direction else sort_key in ("severity", "risk"),
         accepted=accepted,
     )
 
@@ -105,7 +108,7 @@ def findings(
     has_fix: Literal["any", "yes", "no"] = "any",
     pkg: Literal["all", "os", "library"] = "all",
     q: str | None = None,
-    sort: Literal["severity", "cve", "package", "image", "namespace", "fixed"] | None = None,
+    sort: Sort | None = None,
     accepted: Literal["hide", "only", "all"] = "hide",
     direction: Literal["asc", "desc"] | None = Query(None, alias="dir"),
     page: int = Query(1, ge=1, le=10**9),
@@ -122,7 +125,11 @@ def findings(
             run = newest_run(conn, context, cluster_scope=False)
         if run is None:
             return render(request, "findings.html", ctx)
-        flt = view_filter(severity, namespace, cve, package, has_fix, pkg, q, sort, accepted, direction)
+        risk = risk_view(conn, run.id)
+        flt = replace(
+            view_filter(severity, namespace, cve, package, has_fix, pkg, q, sort, accepted, direction),
+            scored=risk["risk_shown"],
+        )
         sort_key, desc = flt.sort, flt.desc
         today = request.app.state.clock().date()
         rows, total, left_out = findings_page(conn, run.id, flt, page, PER_PAGE, today=today)
@@ -162,9 +169,10 @@ def findings(
             else None,
             "aria_sort": ("descending" if desc else "ascending") if key == sort_key else None,
         }
-        for key, label in COLUMNS
+        for key, label in ((*COLUMNS[:-1], RISK_COLUMN, *COLUMNS[-1:]) if risk["risk_shown"] else COLUMNS)
     ]
     ctx.update(
+        risk,
         run=run,
         rows=[_row(request, r, flt.namespace) for r in rows],
         left_out=left_out if accepted == "hide" else 0,

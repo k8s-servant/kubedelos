@@ -634,3 +634,14 @@ def test_importing_the_cli_does_not_load_the_mcp_sdk():
     code = "import kubedelos.cli, sys; print(any(m == 'mcp' or m.startswith('mcp.') for m in sys.modules))"
     proc = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
     assert proc.stdout.strip() == "False"
+
+
+def test_ui_refreshes_the_threat_feeds_in_the_background_before_serving(ui_env, monkeypatch):
+    from kubedelos import cli
+
+    order = []
+    monkeypatch.setattr(cli.threatintel, "refresh_in_background", lambda settings: order.append("feeds"))
+    monkeypatch.setattr(cli.server, "serve", lambda *args: order.append("serve"))
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert order == ["feeds", "serve"]

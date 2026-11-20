@@ -10,9 +10,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from pydantic import ValidationError
-
-from kubedelos.models import Severity, WorkloadFacts
+from kubedelos.models import Severity, WorkloadFacts, parse_facts
 from kubedelos.store import queries
 from kubedelos.store.queries import REF_UNIT_COUNTS_SQL, REF_UNITS_SQL
 
@@ -32,17 +30,6 @@ class WorkloadRow:
     status: str  # the image result's status; "error" if any platform of the image failed
     facts: WorkloadFacts | None
     counts: dict[str, int]  # finding units by severity, every severity present
-
-
-def parse_facts(text: str | None) -> WorkloadFacts | None:
-    """The facts stored on a workload row, or None for NULL, invalid JSON, a validation error or another version."""
-    if not text:
-        return None
-    try:
-        facts = WorkloadFacts.model_validate_json(text)
-    except ValidationError:
-        return None
-    return facts if facts.v == 1 else None
 
 
 def workloads(
@@ -125,6 +112,25 @@ def cve_images(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> list[str]
         (run_id, vuln_id),
     )
     return [row["ref"] for row in rows]
+
+
+def cve_severity_by_ref(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> dict[str, str]:
+    """The highest severity the run reports for ``vuln_id`` in each image that has it, by ref."""
+    rows = conn.execute(
+        "SELECT DISTINCT r.ref, f.severity FROM image_result r CROSS JOIN finding f ON f.image_result_id = r.id"
+        " WHERE r.run_id = ? AND f.vuln_id = ?",
+        (run_id, vuln_id),
+    )
+    worst: dict[str, str] = {}
+    for ref, severity in rows:
+        if ref not in worst or _severity_order(severity) < _severity_order(worst[ref]):
+            worst[ref] = severity
+    return worst
+
+
+def _severity_order(severity: str) -> int:
+    """0 for Critical down to the last place for Unknown (and anything Trivy might add)."""
+    return SEVERITIES.index(severity) if severity in SEVERITIES else len(SEVERITIES)
 
 
 def top_findings(conn: sqlite3.Connection, run_id: int, ref: str, limit: int = 10) -> list[dict]:

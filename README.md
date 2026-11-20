@@ -18,7 +18,8 @@ and over time:
   and workloads scaled to zero. Access is read-only and Secrets are not read (in `serve`, except opt-in pod pull
   secrets, see below). Each unique image is scanned once per platform.
 - **What to fix first.** The dashboard puts the Critical and High findings that have a fix on top, grouped by fix or by
-  image, with the images worst hit and the images that failed to scan, plus a hint on which registry to log in to.
+  image and ordered by a risk score that weighs exposure and known exploitation, with the images worst hit and the
+  images that failed to scan, plus a hint on which registry to log in to.
 - **What changed.** Every run is kept in a local SQLite database, so the dashboard shows the change since the last
   comparable run, and the findings of any earlier run can be opened again.
 - **One command, nothing to install in the cluster.** `kubedelos ui` opens a local web UI against your current
@@ -261,6 +262,16 @@ Gateway API routes), whether NetworkPolicies isolate it, and what its ServiceAcc
 objects and reads no Secret; `KUBEDELOS_ATTACK_SURFACE=false` turns it off. See [Attack-surface
 facts](docs/attack-surface.md).
 
+### What to fix first
+
+Severity alone ranks a Critical CVE in a pod nothing can reach above a High one that attackers already exploit, in a pod
+on the internet with a cluster-admin token. So kubedelos gives each finding a risk score from 0 to 100: severity, plus
+points for known exploitation (CISA KEV and EPSS), how far the workload is exposed, whether it can reach the node and
+what its ServiceAccount may do. The fix-first lists are ordered by it, the findings page sorts by it (`sort=risk`), and
+each score comes with the factors behind it. Missing facts count as unknown, never as safe. The two feeds are
+downloaded at most once a day with plain GETs that send nothing about the cluster; `KUBEDELOS_THREAT_FEEDS=false`
+turns them off. See [Risk score](docs/risk-score.md).
+
 ## Ask your agent
 
 `kubedelos mcp` is a read-only MCP server over stdio, so the agent you already use (Claude Code, VS Code Copilot) can
@@ -290,6 +301,8 @@ page can change the scope, parallelism and package types for one scan.
 | `KUBEDELOS_DATA_DIR` | the user data dir (`~/.local/share/kubedelos` on Linux, `~/Library/Application Support/kubedelos` on macOS): `kubedelos.db` |
 | `KUBEDELOS_OWNER_ANNOTATION` | `kubedelos.io/owner-email` |
 | `KUBEDELOS_TEAM_LABEL` | `kubedelos.io/team` |
+| `KUBEDELOS_ATTACK_SURFACE` | `true`: record the [attack-surface facts](docs/attack-surface.md) with each scan |
+| `KUBEDELOS_THREAT_FEEDS` | `true`: download CISA KEV and EPSS at most once a day for the [risk score](docs/risk-score.md) |
 
 List variables take a JSON list, not a comma-separated string (`KUBEDELOS_PKG_TYPES` is the exception: `os,library`):
 

@@ -69,7 +69,13 @@ CHIP = {
 }
 LIST_FIELDS = ("namespaces", "exclude_namespaces", "exclude_images")
 READOUT_FAILURES = 5  # the newest failures the progress readout lists; the failures page has them all
-PHASES = {"inventory": "inventory", "trivy-db": "Trivy DB", "scanning": "scanning", "saving": "saving"}
+PHASES = {
+    "threat-feeds": "threat feeds",
+    "inventory": "inventory",
+    "trivy-db": "Trivy DB",
+    "scanning": "scanning",
+    "saving": "saving",
+}
 _MAX_FORM_FIELDS = 100
 _MAX_BODY = 64 * 1024
 UNREADABLE = "the form could not be read"

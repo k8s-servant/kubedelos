@@ -1,7 +1,8 @@
 """The UI's performance rule: indexed query plans, and every page under 300 ms on a 100,000-finding database.
 
 The plan test runs by default on a small seed: ``EXPLAIN QUERY PLAN`` does not need the large data to show a full table
-scan. The timing test is marked ``perf`` (deselected by default) because it seeds two runs of 100,000 findings.
+scan. The timing tests are marked ``perf`` (deselected by default) because they seed runs of 100,000 findings. The page
+test seeds attack-surface facts and threat feeds the size of the real ones, so every page is timed with the risk score.
 """
 
 import re
@@ -17,12 +18,12 @@ from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
 from tests.mcp_server.conftest import make_facts
 from tests.web.conftest import BASE_URL, PORT, TOKEN
-from tests.web.seed import CONTEXT, seed_acceptances, seed_large
+from tests.web.seed import CONTEXT, seed_acceptances, seed_intel, seed_large
 
 BUDGET = 0.3
-SORTS = ("severity", "cve", "package", "image", "namespace", "fixed")
-# A full pass over a big table, also through a covering index. The queries alias these tables as f, r and w.
-FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|f|r|w)\b")
+SORTS = ("severity", "cve", "package", "image", "namespace", "fixed", "risk")
+# A full pass over a big table, also through a covering index. The queries alias these tables as f, r, w and ti.
+FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|threat_intel|f|r|w|ti)\b")
 REACHED = re.compile(r"^SEARCH (finding|f) ")
 KEYED = re.compile(r"\(image_result_id=")
 PRIOR_RUNS = 4  # earlier runs that share the CVEs, so a lookup that reads every run's rows shows in the plan
@@ -51,6 +52,13 @@ def test_query_plans_use_indexes(tmp_path):
         seed_large(conn, images=40, findings=2000, namespaces=5)
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
     seed_acceptances(conn)
+    with conn:  # feed rows for some of the run's CVEs, so the scored lists join threat_intel for real
+        conn.execute(
+            "INSERT INTO threat_intel (vuln_id, kev, epss) SELECT f.vuln_id, MAX(f.id % 2), 0.6"
+            " FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ? AND f.id % 3 = 0"
+            " GROUP BY f.vuln_id",
+            (run_id,),
+        )
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
     ref, vuln_id = conn.execute(
         "SELECT r.ref, f.vuln_id FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ?",
@@ -62,8 +70,16 @@ def test_query_plans_use_indexes(tmp_path):
         "kpis": lambda: queries.kpis(conn, run_id),
         "fix_by_fix": lambda: queries.fix_by_fix(conn, run_id),
         "fix_by_image": lambda: queries.fix_by_image(conn, run_id),
+        "fix_by_fix scored": lambda: queries.fix_by_fix(conn, run_id, scored=True),
+        "fix_by_image scored": lambda: queries.fix_by_image(conn, run_id, scored=True),
         "worst_images": lambda: queries.worst_images(conn, run_id),
         "findings_page": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(), 2, per_page=10),
+        "findings_page risk": lambda: queries.findings_page(
+            conn, run_id, queries.FindingFilter(sort="risk", scored=True), 2, per_page=10
+        ),
+        "findings_page scored": lambda: queries.findings_page(
+            conn, run_id, queries.FindingFilter(scored=True), 2, per_page=10
+        ),
         "findings_page accepted": lambda: queries.findings_page(
             conn, run_id, queries.FindingFilter(accepted="only"), 1
         ),
@@ -82,6 +98,9 @@ def test_query_plans_use_indexes(tmp_path):
         "cve_images": lambda: workloads.cve_images(conn, run_id, vuln_id),
         "top_findings": lambda: workloads.top_findings(conn, run_id, ref),
         "findings_export": lambda: queries.findings_export(conn, run_id, queries.FindingFilter()).fetchmany(10),
+        "findings_export scored": lambda: queries.findings_export(
+            conn, run_id, queries.FindingFilter(scored=True)
+        ).fetchmany(10),
     }
     offenders = {}
     for name, call in calls.items():
@@ -111,16 +130,28 @@ def _median(client: TestClient, path: str) -> float:
 def test_pages_under_300ms(settings):
     conn = connect(settings.db_path)
     for _ in range(PRIOR_RUNS):  # earlier comparable runs: the dashboard computes deltas and history is not free
-        seed_large(conn)
-    run_id = seed_large(conn)
+        seed_large(conn, facts=True)
+    run_id = seed_large(conn, facts=True)
     seed_acceptances(conn)
+    seed_intel(conn)
     with conn:  # every image timed, so the times page sorts the whole run
         conn.execute("UPDATE image_result SET duration_s = id % 900 + 0.5")
-    _, total, _ = queries.findings_page(conn, run_id, queries.FindingFilter(), 1)
-    conn.close()
-    last = -(-total // 100)
+
+    def pages_of(f: queries.FindingFilter) -> int:
+        _, total, _ = queries.findings_page(conn, run_id, f, 1)
+        return -(-total // 100)
+
+    last = pages_of(queries.FindingFilter())
     middle = (last + 1) // 2
+    by_q = (pages_of(queries.FindingFilter(q="lib")) + 1) // 2
+    by_namespace = (pages_of(queries.FindingFilter(namespace="ns-07")) + 1) // 2
+    conn.close()
     pages = ["/", "/?by=image", "/findings", "/findings?q=lib&sort=package", f"/findings?page={last}"]
+    pages += [f"/findings?q=lib&page={by_q}", f"/findings?q=lib&sort=risk&dir=asc&page={by_q}"]
+    pages += [
+        f"/findings?namespace=ns-07&page={by_namespace}",
+        f"/findings?namespace=ns-07&sort=risk&page={by_namespace}",
+    ]
     pages += [f"/findings?sort={s}&dir={d}&page={middle}" for s in SORTS for d in ("asc", "desc")]
     pages += ["/namespaces", "/namespaces?sort=namespace&q=ns-1&has=HIGH"]
     pages += ["/report", "/reports", "/settings", f"/scans/{run_id}/times"]
@@ -132,7 +163,10 @@ def test_pages_under_300ms(settings):
         for path in pages:
             client.get(path)  # warm the page cache and the templates
         timings = {path: _median(client, path) for path in pages}
+        page = client.get(f"/findings?sort=risk&page={middle}").text
+        assert "risk-cell" in page and "risk-note" not in page  # the score is shown, with facts and feeds both
     report = ", ".join(f"{path} {seconds * 1000:.0f} ms" for path, seconds in timings.items())
+    print(report)  # with -s, the times behind a passing run
     assert all(seconds < BUDGET for seconds in timings.values()), report
 
 

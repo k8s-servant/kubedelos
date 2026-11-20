@@ -281,3 +281,32 @@ def test_findings_keep_the_shown_context_in_links_and_the_filter_form(client, se
     form = html[html.index('<form method="get" action="/findings"') : html.index("</form>")]
     assert '<input type="hidden" name="context" value="prod-eu">' in form
     assert f'href="/findings?context=prod-eu&amp;run_id={run_id}"' in html  # clear filters
+
+
+def test_sort_by_risk_orders_by_score_and_shows_the_column(client, risk_run, add_feeds):
+    run_id, _, _ = risk_run
+    add_feeds()
+    html = client.get("/findings", params={"run_id": run_id, "sort": "risk"}).text
+    assert 'aria-sort="descending"' in html and "Risk</a></th>" in html
+    assert html.index("CVE-HOT") < html.index("CVE-COLD")
+    assert '<td class="risk-cell">53</td>' in html and '<td class="risk-cell">45</td>' in html
+    assert "sort=risk" in client.get("/findings", params={"run_id": run_id, "sort": "risk", "dir": "asc"}).text
+    asc = client.get("/findings", params={"run_id": run_id, "sort": "risk", "dir": "asc"}).text
+    assert asc.index("CVE-COLD") < asc.index("CVE-HOT")
+
+
+def test_sort_by_risk_is_severity_order_with_no_column_when_the_score_is_hidden(client, seed):
+    run_id = _run(seed)
+    _put(seed, run_id, "reg.example.com/app:1", [_f("CVE-LOW", "LOW"), _f("CVE-CRIT", "CRITICAL")])
+    response = client.get("/findings", params={"run_id": run_id, "sort": "risk"})
+    assert response.status_code == 200
+    html = response.text
+    assert html.index("CVE-CRIT") < html.index("CVE-LOW")
+    assert "Risk</a>" not in html and "risk-cell" not in html
+    assert "Risk scores are hidden for this run" in html
+
+
+def test_facts_without_feeds_show_the_column_and_the_feeds_note(client, risk_run):
+    run_id, _, _ = risk_run
+    html = client.get("/findings", params={"run_id": run_id}).text
+    assert "risk-cell" in html and "No threat feed has been downloaded yet" in html

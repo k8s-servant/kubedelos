@@ -5,3 +5,17 @@
 {% macro versions(text) -%}
 {%- for version in (text or "").split(",") %}<span class="v">{{ version.strip() }}</span>{{ ", " if not loop.last }}{% endfor -%}
 {%- endmacro %}
+
+{#- The factors of a risk score as chips, "<detail> +<points>"; only the factors that add points are listed. -#}
+{% macro factor_chips(factors) -%}
+<ul class="factors">
+  {%- for f in factors if f.points %}
+  <li class="chip chip-factor">{{ f.detail }} +{{ f.points }}</li>
+  {%- endfor %}
+</ul>
+{%- endmacro %}
+
+{#- A score you can open to see what it is made of. -#}
+{% macro risk_score(score, factors) -%}
+<details class="risk-score"><summary>{{ score }}</summary>{{ factor_chips(factors) }}</details>
+{%- endmacro %}

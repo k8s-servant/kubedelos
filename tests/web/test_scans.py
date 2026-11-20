@@ -365,6 +365,8 @@ def test_progress_fragment_shows_counts_and_image(client, app, fake):
     assert 'name="csrf_token"' in html
     fake.on_progress(Progress(total=12, done=6, errors=1, current=None, phase="trivy-db", cached=2))
     assert "Trivy DB" in _progress(client)
+    fake.on_progress(Progress(total=0, done=0, errors=0, current=None, phase="threat-feeds"))
+    assert "threat feeds" in _progress(client)
 
 
 def test_progress_fragment_shows_the_eta(client, app, monkeypatch):

@@ -61,6 +61,15 @@ async def test_tools_are_listed_read_only(db):
     assert UNTRUSTED in INSTRUCTIONS
 
 
+async def test_the_ranked_tools_describe_the_risk_order(db):
+    async with Client(build_server(db)) as client:
+        described = {t.name: t.description for t in (await client.list_tools()).tools}
+    for name in ("fix_first", "find_vulnerability"):
+        assert "risk.shown" in described[name], name
+        assert "score" in described[name], name
+    assert "null until a KEV feed copy exists" in described["find_vulnerability"]
+
+
 async def test_list_clusters_over_mcp(db, monkeypatch):
     monkeypatch.setattr(tools, "_now", lambda: NOW)
     conn = db.open()
@@ -94,10 +103,17 @@ async def test_tools_never_touch_the_cluster(db, monkeypatch):
         raise AssertionError("the MCP server must not load a kubeconfig")
 
     monkeypatch.setattr(kubedelos.kube.client, "load", boom)
+    conn = connect(db.path)
+    with conn:
+        conn.execute("INSERT INTO threat_intel VALUES ('CVE-1', 1, '2025-03-04', 0.9, 0.9)")
+        conn.execute("INSERT INTO threat_feed VALUES ('kev', '2026-01-31T08:00:00+00:00', 'v1', 1)")
+    conn.close()
+    before = db.path.read_bytes()
     async with Client(build_server(db)) as client:
         for tool in (await client.list_tools()).tools:
             result = await client.call_tool(tool.name, MINIMAL_ARGS.get(tool.name, {}))
             assert not result.is_error, tool.name
+            assert db.path.read_bytes() == before, tool.name
 
 
 async def test_run_summary_over_mcp(db, monkeypatch):

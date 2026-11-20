@@ -17,6 +17,7 @@ import io
 import json
 import re
 from collections.abc import Iterator
+from dataclasses import replace
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
@@ -36,7 +37,7 @@ from kubedelos.store.queries import (
     run_namespaces,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.pages import MAX_ID, open_db, render, shown_context
+from kubedelos.web.pages import MAX_ID, open_db, render, risk_view, shown_context
 from kubedelos.web.routes.findings import view_filter
 
 router = APIRouter()
@@ -54,6 +55,7 @@ COLUMNS = (
     "accepted",
     "title",
     "url",
+    "risk",
 )
 BATCH = 1000
 REPORT_FIXES = 50
@@ -80,7 +82,7 @@ def _cells(r) -> list[object]:
     accepted = "yes" if r["accepted"] else "no"
     return [
         r["severity"], r["vuln_id"], r["pkg_name"], r["installed_version"], r["fixed_version"], r["pkg_class"],
-        r["ref"], namespaces, accepted, r["title"], r["primary_url"],
+        r["ref"], namespaces, accepted, r["title"], r["primary_url"], r["score"],
     ]  # fmt: skip
 
 
@@ -100,6 +102,7 @@ def findings_csv(
             run = get_run(conn, context, run_id)
         except RunNotShown as exc:
             return _not_shown(request, exc)
+        flt = replace(flt, scored=risk_view(conn, run.id)["risk_shown"])
     path = request.app.state.settings.db_path
     today = request.app.state.clock().date()
 
@@ -133,9 +136,11 @@ def report(request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID)) 
         if run is None:
             return render(request, "report.html", ctx)
         counts = kpis(conn, run.id)
-        fixes = fix_by_fix(conn, run.id, REPORT_FIXES, today=now.date())
+        risk = risk_view(conn, run.id)
+        fixes = fix_by_fix(conn, run.id, REPORT_FIXES, today=now.date(), scored=risk["risk_shown"])
         failed, failed_total = failed_images(conn, run.id, REPORT_FAILED) if counts.images_failed else ([], 0)
     ctx.update(
+        risk,
         shown=run,
         kpis=counts,
         fixes=fixes,

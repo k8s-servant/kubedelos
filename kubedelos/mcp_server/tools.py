@@ -7,6 +7,7 @@ protocol round trip. Errors that the agent should read are raised as ``ToolError
 import dataclasses
 import json
 import sqlite3
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -14,9 +15,10 @@ from typing import Any, Literal
 
 from mcp.server.mcpserver.exceptions import ToolError
 
-from kubedelos import analytics
+from kubedelos import analytics, risk
 from kubedelos.models import WorkloadFacts
-from kubedelos.store import accepted, diff, queries, workloads
+from kubedelos.risk import NO_INTEL, host_access
+from kubedelos.store import accepted, diff, intel, queries, workloads
 from kubedelos.store.db import MIGRATIONS, connect_readonly
 
 DEFAULT_LIMIT = 25
@@ -174,8 +176,15 @@ def fix_first(
 ) -> dict:
     name = resolve_cluster(conn, db, cluster)
     selected = select_run(conn, name, run)
-    fixes = (queries.fix_by_image if view == "image" else queries.fix_by_fix)(conn, selected.id, limit=clamp(limit))
-    items = [_jsonable(dataclasses.asdict(row)) for row in fixes.rows]
+    shown = intel.risk_shown(conn, selected.id)
+    fixes = (queries.fix_by_image if view == "image" else queries.fix_by_fix)(
+        conn, selected.id, limit=clamp(limit), scored=shown
+    )
+    items = []
+    for row in fixes.rows:
+        item = _jsonable(dataclasses.asdict(row))
+        item["factors"] = _factors_payload(row.factors)
+        items.append(item)
     return {
         "cluster": name,
         "run": run_payload(selected, now),
@@ -186,6 +195,22 @@ def fix_first(
         "no_fix": fixes.no_fix,
         "no_fix_images": fixes.no_fix_images,
         "accepted": fixes.accepted,
+        "risk": _risk_payload(conn, selected.id, shown),
+    }
+
+
+def _factors_payload(factors: Iterable[risk.Factor]) -> list[dict]:
+    """The score's factors as JSON: the name as ``factor``, its points and the reason."""
+    return [{"factor": f.name, "points": f.points, "detail": f.detail} for f in factors]
+
+
+def _risk_payload(conn: sqlite3.Connection, run_id: int, shown: bool) -> dict:
+    """Whether the run's scores are shown, whether it has facts, and when each threat feed was last fetched."""
+    fetched = intel.feeds(conn)
+    return {
+        "shown": shown,
+        "facts": intel.run_has_facts(conn, run_id),
+        "feeds": {name: fetched[name].isoformat() if name in fetched else None for name in ("kev", "epss")},
     }
 
 
@@ -201,7 +226,8 @@ _NO_FACTS_RANK = _EXPOSURE_RANK["unknown"]  # not collected is as exposed as cou
 def exposure_key(row: workloads.WorkloadRow) -> tuple:
     """The order the workload lists share: most exposed first (no facts with unknown), then Critical, then High.
 
-    ``attack_surface`` and ``find_vulnerability`` both sort by it, so their rankings agree.
+    ``attack_surface`` sorts by it alone. ``find_vulnerability`` sorts by risk score first while ``risk.shown`` is
+    true, and by it otherwise (and to break score ties).
     """
     return (
         _EXPOSURE_RANK[row.facts.exposure.level] if row.facts else _NO_FACTS_RANK,
@@ -232,7 +258,16 @@ def find_vulnerability(
     name = resolve_cluster(conn, db, cluster)
     selected = select_run(conn, name, run)
     vuln_id = normalise_vuln_id(vuln_id)
-    rows = sorted(workloads.workloads(conn, selected.id, vuln_id=vuln_id), key=exposure_key)
+    found = intel.intel_for(conn, [vuln_id]).get(vuln_id, NO_INTEL)
+    shown = intel.risk_shown(conn, selected.id)
+    rows = workloads.workloads(conn, selected.id, vuln_id=vuln_id)
+    scores: dict[int, risk.Score] = {}
+    if shown:
+        severities = workloads.cve_severity_by_ref(conn, selected.id, vuln_id)
+        scores = {id(row): risk.score(severities.get(row.ref, "UNKNOWN"), found, row.facts) for row in rows}
+        rows.sort(key=lambda row: (-scores[id(row)].points, *exposure_key(row)))
+    else:
+        rows.sort(key=exposure_key)
     start = max(offset, 0)
     page = rows[start : start + clamp(limit)]
     packages = workloads.cve_packages(conn, selected.id, vuln_id)
@@ -245,6 +280,8 @@ def find_vulnerability(
             "container": row.container,
             "image": row.ref,
             "facts": _facts_payload(row.facts),
+            "score": scores[id(row)].points if shown else None,
+            "factors": _factors_payload(scores[id(row)].factors) if shown else [],
         }
         for row in page
     ]
@@ -253,6 +290,11 @@ def find_vulnerability(
         "cluster": name,
         "run": run_payload(selected, now),
         "vuln_id": vuln_id,
+        "kev": found.kev if "kev" in intel.feeds(conn) else None,  # no KEV copy: unknown, never "not listed"
+        "kev_added": found.kev_added.isoformat() if found.kev_added else None,
+        "epss": found.epss,
+        "epss_percentile": found.percentile,
+        "risk": _risk_payload(conn, selected.id, shown),
         "packages": packages[:MAX_LIMIT],
         "packages_total": len(packages),
         "images": images[:MAX_LIMIT],
@@ -365,25 +407,6 @@ def _finding_item(row: sqlite3.Row) -> dict:
     item["targets"] = row["targets"].split(",") if row["targets"] else []
     item["accepted"] = bool(row["accepted"])
     return item
-
-
-# Capabilities that allow escaping the container or controlling the node.
-_HOST_CAPABILITIES = frozenset(
-    {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO", "DAC_READ_SEARCH", "BPF", "ALL"}
-)
-
-
-def host_access(facts: WorkloadFacts) -> bool:
-    """Whether the pod can reach the node: host namespaces, privilege, a writable hostPath or a powerful capability."""
-    pod = facts.pod
-    return (
-        pod.privileged
-        or pod.host_pid
-        or pod.host_network
-        or pod.host_ipc
-        or any(not volume.read_only for volume in pod.host_path_volumes)
-        or any(cap.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for cap in pod.added_capabilities)
-    )
 
 
 def _matches_facts(

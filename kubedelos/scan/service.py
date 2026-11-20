@@ -1,4 +1,5 @@
-"""Orchestrates one scan run: inventory, cache lookup, the Trivy DB cache, parallel scans and persistence.
+"""Orchestrates one scan run: the threat feeds (at most once a day), inventory, cache lookup, the Trivy DB cache,
+parallel scans and persistence.
 
 ``rescan=True`` scans every image again instead of taking the ones scanned in the last 24 hours from the result
 cache, and stores the fresh results there for the scans after it.
@@ -8,11 +9,13 @@ new result in place of its failure and recounts the run.
 """
 
 import functools
+import logging
 import threading
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 
+from kubedelos import threatintel
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
@@ -27,7 +30,9 @@ from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import scan_many
 
 CUSTOM_TRIVY = "custom"
-PHASES = ("inventory", "scanning", "trivy-db", "saving")
+PHASES = ("threat-feeds", "inventory", "scanning", "trivy-db", "saving")
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -65,6 +70,12 @@ def run_scan(
     repo = repo if repo is not None else Repo(db.connect(settings.db_path))
     cancel = cancel if cancel is not None else threading.Event()
 
+    if settings.threat_feeds:
+        on_progress(Progress(total=0, done=0, errors=0, current=None, phase="threat-feeds"))
+        try:
+            threatintel.refresh_feeds(settings)  # at most once a day; logs and keeps the old copy on failure
+        except Exception as exc:  # a feed never fails a scan
+            logger.warning("threat feeds not updated: %s", exc)
     on_progress(Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
     inventory = collect_inventory(api, settings)
     items = inventory.items

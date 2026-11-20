@@ -103,3 +103,14 @@ def test_top_findings_are_ordered_and_bounded(seeded):
     assert set(top[0]) == {"vuln_id", "pkg_name", "severity", "fixed_version"}
     assert len(workloads.top_findings(conn, run_id, "img-a", limit=2)) == 2
     assert workloads.top_findings(conn, run_id, "img-c") == []
+
+
+def test_cve_severity_by_ref_is_the_highest_severity_per_image(tmp_path):
+    conn = connect(tmp_path / "kubedelos.db")
+    repo = Repo(conn)
+    run_id = new_run(repo, "my-cluster")
+    add_workloads(repo, run_id, "img-a", [_wl("a", "x")], [finding("CVE-1", "LOW"), finding("CVE-1", "HIGH", pkg="z")])
+    add_workloads(repo, run_id, "img-b", [_wl("a", "y")], [finding("CVE-1", "MEDIUM"), finding("CVE-2", "CRITICAL")])
+    assert workloads.cve_severity_by_ref(conn, run_id, "CVE-1") == {"img-a": "HIGH", "img-b": "MEDIUM"}
+    assert workloads.cve_severity_by_ref(conn, run_id, "CVE-9") == {}
+    conn.close()

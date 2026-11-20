@@ -1,5 +1,5 @@
-{#- The Settings page: every setting in effect with its value and where it came from, then the files, the Trivy and the
-    log level. Read-only. -#}
+{#- The Settings page: every setting in effect with its value and where it came from, then the files, the Trivy, the
+    log level and when each threat feed was last fetched. Read-only. -#}
 {% extends "base.html" %}
 {% block title %}Settings · kubedelos{% endblock %}
 {% block head %}
@@ -76,7 +76,7 @@
     {%- endif %}
   </section>
   <section class="card settings-card" aria-labelledby="files-title">
-    <h2 class="card-title" id="files-title">Files and Trivy</h2>
+    <h2 class="card-title" id="files-title">Files, Trivy and threat feeds</h2>
     <div class="table-wrap">
       <table class="settings-files">
         <tbody>

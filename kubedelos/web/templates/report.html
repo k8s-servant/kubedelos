@@ -37,14 +37,15 @@
 
   <section aria-labelledby="fix-title">
     <h2 id="fix-title">Fix first</h2>
+    {% if risk_note %}<p class="risk-note">{{ risk_note }}</p>{% endif %}
     {% if not fixes.rows %}
     <p>No Critical or High findings have a released fix.</p>
     {% else %}
     <table class="report-table">
-      <thead><tr><th scope="col">Severity</th><th scope="col">CVE</th><th scope="col">Package</th><th scope="col">Fixed in</th><th scope="col" class="num">Images</th><th scope="col" class="num">Namespaces</th></tr></thead>
+      <thead><tr>{% if risk_shown %}<th scope="col" class="num">Risk</th>{% endif %}<th scope="col">Severity</th><th scope="col">CVE</th><th scope="col">Package</th><th scope="col">Fixed in</th><th scope="col" class="num">Images</th><th scope="col" class="num">Namespaces</th></tr></thead>
       <tbody>
         {%- for row in fixes.rows %}
-        <tr><td>{{ row.severity | title }}</td><td>{{ row.vuln_id }}</td><td>{{ row.pkg_name or "" }}</td><td>{{ row.fixed_version }}</td><td class="num">{{ row.images }}</td><td class="num">{{ row.namespaces }}</td></tr>
+        <tr>{% if risk_shown %}<td class="num">{{ row.score }}</td>{% endif %}<td>{{ row.severity | title }}</td><td>{{ row.vuln_id }}</td><td>{{ row.pkg_name or "" }}</td><td>{{ row.fixed_version }}</td><td class="num">{{ row.images }}</td><td class="num">{{ row.namespaces }}</td></tr>
         {%- endfor %}
       </tbody>
     </table>

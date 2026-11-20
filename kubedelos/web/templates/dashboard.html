@@ -1,7 +1,7 @@
 {#- The dashboard: the run line, the KPI tiles (all findings carries the severity bar and its legend), then Fix first
     beside Worst images. Bars are SVG with their geometry in attributes: the CSP allows no inline style. -#}
 {% extends "base.html" %}
-{% from "partials/macros.html" import versions %}
+{% from "partials/macros.html" import versions, factor_chips, risk_score %}
 {% block title %}Dashboard · kubedelos{% endblock %}
 {% block page_title %}Dashboard{% endblock %}
 {% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
@@ -99,17 +99,22 @@
         · <a href="{{ report_href }}">Print report</a>
       </p>
     </div>
+    {% if risk_note %}
+    <p class="notice risk-note">{{ risk_note }}</p>
+    {% endif %}
     {% if not fix_rows %}
     <p class="notice">No Critical or High findings have a released fix.</p>
     {% elif by == "fix" %}
-    <div class="fix-list">
+    <div class="fix-list{% if risk_shown %} fix-scored{% endif %}">
       <div class="fix-head" aria-hidden="true">
+        {%- if risk_shown %}<span>Risk</span>{% endif %}
         <span>Severity</span><span>CVE</span><span>Package</span><span>Installed</span><span>Fixed in</span>
         <span>Images</span><span>Namespaces</span>
       </div>
       {%- for row in fix_rows %}
       <details class="fix-row" data-fix="{{ row.vuln_id }}">
         <summary class="fix-summary">
+          {%- if risk_shown %}<span class="risk-num">{{ row.score }}</span>{% endif %}
           <span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span>
           {%- set url = row.primary_url | safe_url %}
           <span class="cve">{% if url %}<a href="{{ url }}" rel="noopener noreferrer">{{ row.vuln_id }}</a>{% else %}{{ row.vuln_id }}{% endif %}</span>
@@ -126,6 +131,7 @@
         {%- if row.installed | length > 1 %}
         <p class="fix-installed">Installed: {{ row.installed | join(", ") }}</p>
         {%- endif %}
+        {%- if risk_shown %}{{ factor_chips(row.factors) }}{% endif %}
         <ul class="fix-sample">
           {%- for ref, namespaces in row.sample %}
           <li><code>{{ ref }}</code>{% if namespaces %} in {{ namespaces | join(", ") }}{% endif %}</li>
@@ -140,10 +146,11 @@
     {% else %}
     <div class="table-wrap">
       <table class="fix-images">
-        <thead><tr><th>Image</th><th>Namespaces</th><th>Critical</th><th>High</th><th>With a fix</th></tr></thead>
+        <thead><tr>{% if risk_shown %}<th>Risk</th>{% endif %}<th>Image</th><th>Namespaces</th><th>Critical</th><th>High</th><th>With a fix</th></tr></thead>
         <tbody>
           {%- for row in fix_rows %}
           <tr data-image="{{ row.ref }}">
+            {%- if risk_shown %}<td class="risk-cell">{{ risk_score(row.score, row.factors) }}</td>{% endif %}
             <td><code>{{ row.ref }}</code></td>
             <td>{{ row.namespaces | join(", ") }}</td>
             <td>{{ row.critical }}</td>

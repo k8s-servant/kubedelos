@@ -7,6 +7,8 @@ unless you turn on pod pull secrets, which adds a `get`-only Role in each namesp
 [private registries](#private-registries)).
 The chart turns the [attack-surface facts](attack-surface.md) off (`KUBEDELOS_ATTACK_SURFACE=false`) because it grants
 no RBAC for their lists yet; that is a follow-up.
+It also turns the [threat feeds](risk-score.md#the-threat-feeds) off (`KUBEDELOS_THREAT_FEEDS=false`), because many
+clusters give pods no egress to the internet; see [Threat feeds](#threat-feeds) to turn them on.
 The image bundles the pinned Trivy, so the pod downloads no scanner, only the vulnerability DBs.
 
 Without any registry setting a scan reads public images, and whatever the node's own identity lets Trivy reach. For
@@ -113,6 +115,32 @@ has a Registries card that shows what is configured and, in `serve`, a "Test an 
 Per-scan Docker configs are written to `/run/kubedelos` (`KUBEDELOS_SECRETS_DIR`), a memory-backed volume, so a
 credential never reaches node disk. Turning on pod pull secrets gives kubedelos `get` on every Secret in the namespaces
 you list; read the [security note](registries/pull-secrets.md#security-note) first.
+
+## Threat feeds
+
+The [risk score](risk-score.md) uses two public feeds for known exploitation: CISA KEV from `www.cisa.gov` and EPSS
+from `epss.empiricalsecurity.com`. Each is a plain HTTPS `GET` of a fixed URL, at most once a day per feed, before a
+scan; it carries nothing about the cluster. The chart sets `KUBEDELOS_THREAT_FEEDS=false`, so without them the score
+counts known exploitation as nothing and the rest of it still works.
+
+Turn them on only when the pod can reach both hosts on port 443. If `networkPolicy.egress` restricts egress, a plain
+NetworkPolicy cannot allow them by name: it matches IP blocks, not hostnames, and both hosts sit behind CDNs whose
+addresses change. Use an `ipBlock` rule for port 443 wide enough to cover them, or a CNI policy that matches FQDNs
+(such as Cilium's `toFQDNs`).
+
+The chart has no value for this switch yet (one is the planned follow-up); set the variable on the container, which
+takes precedence over the chart's ConfigMap. The Deployment is named after the release (see [Install](#install)), so
+select it by the release label:
+
+```bash
+kubectl set env deployment -l app.kubernetes.io/instance=<release> KUBEDELOS_THREAT_FEEDS=true -n kubedelos
+```
+
+The edit survives `helm upgrade`, because the chart never sets an `env` entry on the container, but a GitOps
+controller (Argo CD, Flux) reverts it and a reinstall drops it.
+
+The feeds are fetched before the next scan. Without egress each try times out (10 s to connect), logs
+`threat feed <name> not updated: ...` and lets the scan go on. The Settings page shows when each feed was last fetched.
 
 ## Storage
 

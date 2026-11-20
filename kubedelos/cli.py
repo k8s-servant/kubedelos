@@ -22,7 +22,7 @@ import httpx
 import typer
 from pydantic import ValidationError
 
-from kubedelos import __version__
+from kubedelos import __version__, threatintel
 from kubedelos.config import Settings
 from kubedelos.hints import login_hint
 from kubedelos.kube import client as kube_client
@@ -271,6 +271,7 @@ def ui(
     if not no_browser:
         webbrowser.open(address)
     flags = frozenset(k for k, v in {"context": context, "kubeconfig": kubeconfig}.items() if v is not None)
+    threatintel.refresh_in_background(settings)  # at most once a day, and never in the way of the UI starting
     server.serve(create_app(settings, context=name, token=token, port=port, flags=flags), sock)
 
 

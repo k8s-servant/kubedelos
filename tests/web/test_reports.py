@@ -66,6 +66,7 @@ def test_csv_has_every_row_of_the_view_and_is_formula_safe(client, seed):
     rows = _csv(response)
     assert rows[0] == [
         "severity", "cve", "package", "installed", "fixed_in", "class", "image", "namespaces", "accepted", "title", "url",
+        "risk",
     ]  # fmt: skip
     assert len(rows) == 1 + 4
     first = dict(zip(rows[0], rows[1], strict=True))
@@ -205,3 +206,33 @@ def test_reports_page_without_runs_points_to_scans(client):
     html = client.get("/reports").text
     assert "No scans of" in html and 'href="/scans"' in html
     assert "<form" not in html.split("<main", 1)[1]
+
+
+def test_report_fix_table_has_a_risk_column_when_the_score_is_shown(client, risk_run, add_feeds):
+    add_feeds()
+    html = client.get("/report").text
+    assert '<th scope="col" class="num">Risk</th>' in html
+    assert html.index("CVE-HOT") < html.index("CVE-COLD")
+    assert '<td class="num">53</td>' in html
+    assert "risk-note" not in html
+
+
+def test_report_fix_table_has_no_risk_column_when_hidden(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "reg.example.com/app:1", [("CVE-1", "CRITICAL", "openssl", "2", "t")])
+    html = client.get("/report").text
+    assert ">Risk</th>" not in html
+    assert "Risk scores are hidden for this run" in html
+
+
+def test_csv_risk_cells_are_ints_when_shown(client, risk_run, add_feeds):
+    run_id, _, _ = risk_run
+    add_feeds()
+    rows = _csv(client.get("/findings.csv", params={"run_id": run_id, "sort": "risk"}))
+    assert rows[0][-1] == "risk"
+    assert [(r[1], r[-1]) for r in rows[1:]] == [("CVE-HOT", "53"), ("CVE-COLD", "45")]
+
+
+def test_csv_risk_cells_are_empty_when_hidden(client, seed):
+    rows = _csv(client.get("/findings.csv", params={"run_id": _seed(seed)}))
+    assert rows[0][-1] == "risk" and len(rows) > 1 and {r[-1] for r in rows[1:]} == {""}
