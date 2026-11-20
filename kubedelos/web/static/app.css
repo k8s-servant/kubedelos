@@ -753,6 +753,45 @@ tbody tr:hover td {
   font-weight: 500;
 }
 
+/* With a risk score the by-fix grid gains a leading score track. */
+
+.fix-scored .fix-head,
+.fix-scored .fix-summary {
+  grid-template-columns: 3rem 5.25rem 9.5rem minmax(6rem, 1.2fr) minmax(5rem, 1fr) minmax(6rem, 1.4fr) 3.5rem 5.5rem;
+}
+
+.fix-scored .fix-row,
+.fix-scored .fix-head {
+  min-width: 48rem;
+}
+
+.risk-num,
+.risk-cell {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.risk-score summary {
+  cursor: pointer;
+}
+
+.factors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0.25rem 0.5rem 0.25rem 1.5rem;
+  list-style: none;
+}
+
+.risk-score .factors {
+  padding-left: 0;
+}
+
+.risk-note {
+  color: var(--muted);
+}
+
 .fix-row {
   border-bottom: 1px solid var(--line-soft);
 }
@@ -1286,11 +1325,14 @@ select {
   }
 
   .fix-head,
-  .fix-row {
+  .fix-row,
+  .fix-scored .fix-head,
+  .fix-scored .fix-row {
     min-width: 0;
   }
 
-  .fix-summary {
+  .fix-summary,
+  .fix-scored .fix-summary {
     grid-template-columns: 1fr 1fr;
   }
 

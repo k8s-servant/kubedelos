@@ -9,6 +9,19 @@ import pytest
 from fastapi.testclient import TestClient
 
 from kubedelos.config import Settings
+from kubedelos.models import (
+    Exposure,
+    Finding,
+    ImageRef,
+    ImageResult,
+    InventoryItem,
+    Network,
+    PodSecurity,
+    Rights,
+    Severity,
+    Workload,
+    WorkloadFacts,
+)
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
 from kubedelos.web.app import create_app, create_serve_app
@@ -211,3 +224,63 @@ def signed_post(client, path, data, identity=None, origin=None):
     data = {**data, "csrf_token": serve_token(client, identity)}
     origin = origin or f"https://{client.base_url.host}"
     return client.post(path, data=data, headers=serve_headers(identity, origin), follow_redirects=False)
+
+
+FEED_FETCHED = "2026-11-15T00:00:00+00:00"
+
+
+@pytest.fixture
+def risk_run(seed):
+    """Seed a run with facts and feeds: a High on an external, root workload outranks a Critical on a closed one.
+
+    Returns ``(run_id, hot_ref, cold_ref)``. The scores are 53 (30 severity, 15 exposure, 3 root, 5 rights) and 45.
+    """
+
+    def facts(level: str, root: bool) -> WorkloadFacts:
+        return WorkloadFacts(
+            pod=PodSecurity(
+                privileged=False, allow_privilege_escalation=False, runs_as_root=root, read_only_root_fs=True,
+                host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=None,
+            ),
+            exposure=Exposure(level=level),
+            network=Network(ingress_isolated=False, egress_isolated=None),
+            rights=Rights(status="off"),
+        )  # fmt: skip
+
+    run_id = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+    refs = []
+    for name, vuln, severity, level, root in (
+        ("hot", "CVE-HOT", "HIGH", "external", True),
+        ("cold", "CVE-COLD", "CRITICAL", "none", False),
+    ):
+        ref = f"reg.example.com/{name}:1"
+        image = ImageRef(ref=ref, repo=f"reg.example.com/{name}", tag="1", digest=None)
+        workload = Workload(namespace="web", kind="Deployment", name=name, container="c")
+        item = InventoryItem(
+            image=image, platform="linux/amd64", workloads=[workload], facts={workload: facts(level, root)}
+        )
+        finding = Finding(
+            vuln_id=vuln, pkg_name="openssl", installed_version="1", fixed_version="2", severity=Severity(severity),
+            target="t", pkg_type="os",
+        )  # fmt: skip
+        seed.repo.add_result(
+            run_id, item, ImageResult(image=image, platform="linux/amd64", status="ok", findings=[finding])
+        )
+        refs.append(ref)
+    seed.repo.finish_run(run_id, "ok")
+    return run_id, refs[0], refs[1]
+
+
+@pytest.fixture
+def add_feeds(seed):
+    """Record that the KEV and EPSS feeds have a copy, as a download would."""
+
+    def add() -> None:
+        conn = seed.repo._conn
+        with conn:
+            conn.executemany(
+                "INSERT INTO threat_feed (name, fetched_at, version, rows) VALUES (?, ?, NULL, 0)",
+                [("kev", FEED_FETCHED), ("epss", FEED_FETCHED)],
+            )
+
+    return add

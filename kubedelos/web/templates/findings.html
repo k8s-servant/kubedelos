@@ -1,6 +1,6 @@
 {#- The findings page: filter form, sortable table, paging. Every link is built in the route from the current filters. -#}
 {% extends "base.html" %}
-{% from "partials/macros.html" import versions %}
+{% from "partials/macros.html" import versions, risk_score %}
 {% block title %}Findings · kubedelos{% endblock %}
 {% block page_title %}Findings{% endblock %}
 {% block run_line %}{% with page_title = self.page_title() %}{% include "partials/run_line.html" %}{% endwith %}{% endblock %}
@@ -12,6 +12,10 @@
 {% else %}
   {% if os_only %}
   <p class="notice">this run scanned OS packages only; library findings were not collected</p>
+  {% endif %}
+
+  {% if risk_note %}
+  <p class="notice risk-note">{{ risk_note }}</p>
   {% endif %}
 
   <form method="get" action="/findings" class="card filters">
@@ -108,6 +112,7 @@
             <td>{{ row.pkg_class or "unknown" }}</td>
             <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
+            {%- if risk_shown %}<td class="risk-cell">{{ row.score }}</td>{% endif %}
             <td class="risk">
               {%- if row.accepted %}<a class="chip chip-accepted" href="{{ row.accepted_href }}">accepted</a>
               {%- else %}<a class="accept" href="{{ row.accept_href }}">Accept…</a>{% endif -%}

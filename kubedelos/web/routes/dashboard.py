@@ -30,7 +30,17 @@ from kubedelos.store.queries import (
     run_label,
     worst_images,
 )
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, plural, render, short_name, shown_context
+from kubedelos.web.pages import (
+    MAX_ID,
+    context_param,
+    link,
+    open_db,
+    plural,
+    render,
+    risk_view,
+    short_name,
+    shown_context,
+)
 from kubedelos.web.routes.failed import KIND_HELP, failed_href, retry_problem
 
 router = APIRouter()
@@ -221,11 +231,18 @@ def dashboard(
         previous = previous_comparable(conn, run)
         before = (previous, kpis(conn, previous.id)) if previous else None
         today = now.date()
-        fixes = fix_by_fix(conn, run.id, today=today) if by == "fix" else fix_by_image(conn, run.id, today=today)
+        risk = risk_view(conn, run.id)
+        shown = risk["risk_shown"]
+        fixes = (
+            fix_by_fix(conn, run.id, today=today, scored=shown)
+            if by == "fix"
+            else fix_by_image(conn, run.id, today=today, scored=shown)
+        )
         kinds = failure_kinds(conn, run.id) if current.images_failed else []
         auth_refs = auth_failed_refs(conn, run.id) if kinds else []
         retryable = bool(kinds) and retry_problem(request, conn, context, run_label(conn, context, run.id)) is None
         worst = worst_images(conn, run.id)
+    ctx.update(risk)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before, c))
     ctx.update(
         failed_kinds=[

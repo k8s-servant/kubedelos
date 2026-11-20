@@ -266,10 +266,10 @@ def test_run_line_quiet_when_sources_off_or_missing(client, seed):
     off_run = _run(seed)
     _add(seed, off_run, "a", ["CRITICAL"])
     seed.repo.set_fact_sources(off_run, {"pod_security": "ok", "services": "off", "rbac": "off"})
-    assert "attack-surface facts" not in client.get("/").text
+    assert "attack-surface facts incomplete" not in client.get("/").text
 
     _run(seed)  # an older-style run with no fact_sources at all is now the latest
-    assert "attack-surface facts" not in client.get("/").text
+    assert "attack-surface facts incomplete" not in client.get("/").text
 
 
 def test_no_gaps_no_caution(client, seed):
@@ -763,3 +763,53 @@ def test_switcher_lists_every_context_with_its_last_scan(client, seed, kube_cont
     assert 'aria-current="true"' in entries[2]
     assert "never scanned" in entries[3]
     assert "ago" in entries[0]
+
+
+def test_fix_first_by_fix_orders_by_risk_and_lists_the_factors(client, risk_run, add_feeds):
+    add_feeds()
+    html = client.get("/").text
+    assert "<span>Risk</span>" in html
+    assert html.index("CVE-HOT") < html.index("CVE-COLD")  # severity alone would put the Critical first
+    assert '<span class="risk-num">53</span>' in html and '<span class="risk-num">45</span>' in html
+    assert '<li class="chip chip-factor">' in html and "+30</li>" in html and "+15</li>" in html
+    assert "risk-note" not in html
+
+
+def test_fix_first_by_image_orders_by_risk_and_opens_to_the_factors(client, risk_run, add_feeds):
+    _, hot, cold = risk_run
+    add_feeds()
+    html = client.get("/", params={"by": "image"}).text
+    assert "<th>Risk</th>" in html
+    assert html.index(hot) < html.index(cold)
+    assert '<details class="risk-score"><summary>53</summary>' in html and "+15</li>" in html
+
+
+def test_fix_first_without_facts_or_feeds_keeps_severity_order_and_says_the_score_is_hidden(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    html = client.get("/").text
+    assert "<span>Risk</span>" not in html and "risk-num" not in html
+    assert (
+        "Risk scores are hidden for this run: no attack-surface facts were collected and no threat feed has been"
+        in html
+    )
+    by_image = client.get("/", params={"by": "image"}).text
+    assert "<th>Risk</th>" not in by_image and "Risk scores are hidden" in by_image
+
+
+def test_fix_first_with_facts_but_no_feeds_says_the_feeds_are_missing(client, risk_run):
+    html = client.get("/").text
+    assert "<span>Risk</span>" in html
+    assert "No threat feed has been downloaded yet, so known exploitation (KEV, EPSS) adds nothing." in html
+    assert "Risk scores are hidden" not in html and "Attack-surface facts were not collected" not in html
+
+
+def test_fix_first_with_feeds_but_no_facts_says_the_facts_are_missing(client, seed, add_feeds):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    add_feeds()
+    html = client.get("/").text
+    assert (
+        "Attack-surface facts were not collected for this run, so exposure, host access and API rights count as" in html
+    )
+    assert "Risk scores are hidden" not in html and "No threat feed has been downloaded" not in html

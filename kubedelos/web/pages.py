@@ -20,7 +20,11 @@ from urllib.parse import urlencode
 from fastapi import Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
-from kubedelos.store import db, queue  # through the module, so a test that patches db.connect reaches every caller
+from kubedelos.store import (
+    db,
+    intel,
+    queue,
+)  # through the module, so a test that patches db.connect reaches every caller
 from kubedelos.store.queries import context_scans
 from kubedelos.web.identity import identity
 
@@ -121,6 +125,30 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
         for name in known
     ]
     return wanted
+
+
+RISK_HIDDEN = (
+    "Risk scores are hidden for this run: no attack-surface facts were collected and no threat feed has been "
+    "downloaded, so a score would only restate severity."
+)
+RISK_NO_FACTS = (
+    "Attack-surface facts were not collected for this run, so exposure, host access and API rights count as unknown."
+)
+RISK_NO_FEEDS = "No threat feed has been downloaded yet, so known exploitation (KEV, EPSS) adds nothing."
+
+
+def risk_view(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
+    """The template context for the risk score: whether to show it and the one note that says what is missing, if any."""
+    shown = intel.risk_shown(conn, run_id)
+    if not shown:
+        note: str | None = RISK_HIDDEN
+    elif not intel.run_has_facts(conn, run_id):
+        note = RISK_NO_FACTS
+    elif not intel.feeds(conn):
+        note = RISK_NO_FEEDS
+    else:
+        note = None
+    return {"risk_shown": shown, "risk_note": note}
 
 
 def scannable_contexts(request: Request) -> set[str]:
