@@ -103,3 +103,25 @@ def test_top_findings_are_ordered_and_bounded(seeded):
     assert set(top[0]) == {"vuln_id", "pkg_name", "severity", "fixed_version"}
     assert len(workloads.top_findings(conn, run_id, "img-a", limit=2)) == 2
     assert workloads.top_findings(conn, run_id, "img-c") == []
+
+
+def test_top_workload_facts_takes_the_riskiest_row(tmp_path):
+    conn = connect(tmp_path / "kubedelos.db")
+    repo = Repo(conn)
+    run_id = new_run(repo, "my-cluster")
+    quiet, web, api, bare = _wl("a-first", "quiet"), _wl("web", "site"), _wl("api", "gateway"), _wl("b", "bare")
+    # web and api tie on points (external, root and unknown root both +3); api wins on namespace. quiet scores lower.
+    facts = {
+        quiet: make_facts(root=False, level="none"),
+        web: make_facts(root=True, level="external"),
+        api: make_facts(root=None, level="external"),
+    }
+    add_workloads(repo, run_id, "img-a", [quiet, web, api, bare], [finding("CVE-1", "CRITICAL")], facts=facts)
+    add_workloads(repo, run_id, "img-b", [_wl("web", "plain")], [finding("CVE-1", "CRITICAL")])
+    add_workloads(repo, run_id, "img-c", [])
+    other = new_run(repo, "my-cluster")
+    add_workloads(repo, other, "img-c", [_wl("web", "elsewhere")], facts={_wl("web", "elsewhere"): make_facts()})
+    top = workloads.top_workload_facts(conn, run_id, ["img-a", "img-b", "img-c", "img-404"])
+    assert top == {"img-a": make_facts(root=None, level="external"), "img-b": None, "img-c": None, "img-404": None}
+    assert workloads.top_workload_facts(conn, run_id, []) == {}
+    conn.close()

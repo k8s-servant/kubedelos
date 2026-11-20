@@ -4,9 +4,22 @@ from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from kubedelos import risk
 from kubedelos.config import Settings
 from kubedelos.kube.inventory import InventoryWarning
-from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Severity, Workload
+from kubedelos.models import (
+    Exposure,
+    Finding,
+    ImageRef,
+    ImageResult,
+    InventoryItem,
+    Network,
+    PodSecurity,
+    Rights,
+    Severity,
+    Workload,
+    WorkloadFacts,
+)
 from kubedelos.store import accepted, queries
 from kubedelos.store.db import connect
 from kubedelos.store.queries import (
@@ -967,3 +980,132 @@ def test_set_fact_sources_is_read_back_on_the_run(db):
 def test_old_run_has_no_fact_sources(db):
     conn, repo = db
     assert get_run(conn, "ctx", _run(repo)).fact_sources is None
+
+
+def _facts(*, level="none", privileged=False, root=False, rights="ok", automount=False, ingress_isolated=False):
+    return WorkloadFacts(
+        pod=PodSecurity(
+            privileged=privileged, allow_privilege_escalation=False, runs_as_root=root, read_only_root_fs=True,
+            host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=automount,
+        ),
+        exposure=Exposure(level=level),
+        network=Network(ingress_isolated=ingress_isolated, egress_isolated=None),
+        rights=Rights(status=rights),
+    )  # fmt: skip
+
+
+BATCH = _facts()  # a batch job: no exposure, no host access, no token: 0 workload points
+EXPOSED = _facts(level="external", privileged=True, root=True, rights="off", automount=True)  # 15 + 10 + 5
+
+
+def _add_with_facts(repo, run_id, ref, findings, facts=None, namespace="ns", kind="Deployment"):
+    """One image run by one workload, with ``facts`` on it; ``facts=None`` and ``namespace=None`` adds no workload."""
+    image = ImageRef(ref=ref, repo="reg.example.com/app", tag="1", digest="sha256:" + "a" * 64)
+    workloads = [] if namespace is None else [Workload(namespace=namespace, kind=kind, name=ref, container="c")]
+    item = InventoryItem(
+        image=image, platform="linux/amd64", workloads=workloads, facts={workloads[0]: facts} if facts else {}
+    )
+    repo.add_result(run_id, item, ImageResult(image=image, platform="linux/amd64", status="ok", findings=findings))
+
+
+def _intel(conn, vuln_id, *, kev=False, kev_added=None, epss=None):
+    with conn:
+        conn.execute(
+            "INSERT INTO threat_intel (vuln_id, kev, kev_added, epss, epss_percentile) VALUES (?, ?, ?, ?, ?)",
+            (vuln_id, int(kev), kev_added, epss, None if epss is None else 0.5),
+        )
+
+
+def test_scored_fix_first_puts_the_exposed_critical_first(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for ref in ("a1", "a2"):
+        _add_with_facts(repo, run_id, ref, [_fx("CVE-A", "CRITICAL", pkg="a")], BATCH)
+    _add_with_facts(repo, run_id, "b1", [_fx("CVE-B", "CRITICAL", pkg="b")], EXPOSED)
+    assert [r.vuln_id for r in fix_by_fix(conn, run_id).rows] == ["CVE-A", "CVE-B"]
+    assert all(r.score is None and r.factors == () for r in fix_by_fix(conn, run_id).rows)
+    rows = fix_by_fix(conn, run_id, scored=True).rows
+    assert [r.vuln_id for r in rows] == ["CVE-B", "CVE-A"]
+    expected = risk.score("CRITICAL", risk.NO_INTEL, EXPOSED)
+    assert (rows[0].score, rows[0].factors) == (expected.points, expected.factors) and expected.points == 70
+    assert [f.name for f in rows[0].factors] == ["severity", "exploited", "exposure", "host", "rights"]
+    assert (rows[1].score, rows[1].factors) == (40, risk.score("CRITICAL", risk.NO_INTEL, BATCH).factors)
+
+
+def test_scored_samples_put_the_top_unit_first(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_with_facts(repo, run_id, "a-quiet", [_fx("CVE-1", "HIGH")], BATCH)
+    _add_with_facts(repo, run_id, "z-exposed", [_fx("CVE-1", "HIGH")], EXPOSED)
+    assert [ref for ref, _ in fix_by_fix(conn, run_id).rows[0].sample] == ["a-quiet", "z-exposed"]
+    row = fix_by_fix(conn, run_id, scored=True).rows[0]
+    assert [ref for ref, _ in row.sample] == ["z-exposed", "a-quiet"]
+    assert row.factors == risk.score("HIGH", risk.NO_INTEL, EXPOSED).factors and row.score == 60
+
+
+def test_kev_reranks_an_old_run(db):
+    conn, repo = db
+    run_id = _run(repo)
+    for ref in ("a1", "a2"):
+        _add_with_facts(repo, run_id, ref, [_fx("CVE-1", "HIGH", pkg="a")], BATCH)
+    _add_with_facts(repo, run_id, "b1", [_fx("CVE-2", "HIGH", pkg="b")], BATCH)
+    assert [r.vuln_id for r in fix_by_fix(conn, run_id, scored=True).rows] == ["CVE-1", "CVE-2"]
+    _intel(conn, "CVE-2", kev=True, kev_added="2026-01-05")
+    rows = fix_by_fix(conn, run_id, scored=True).rows
+    assert [r.vuln_id for r in rows] == ["CVE-2", "CVE-1"]
+    intel = risk.Intel(kev=True, kev_added=date(2026, 1, 5), epss=None, percentile=None)
+    assert (rows[0].score, rows[0].factors) == (55, risk.score("HIGH", intel, BATCH).factors)
+    assert rows[0].factors[1].detail == "in KEV since 2026-01-05"
+    assert [r.vuln_id for r in fix_by_fix(conn, run_id).rows] == ["CVE-1", "CVE-2"]  # unscored: as before
+
+
+def test_scoring_moves_no_count(db):
+    conn, repo = db
+    run_id = _seed_accepting(repo)
+    _accept(conn, "CVE-1", namespace="web")
+    before = (kpis(conn, run_id), queries.namespace_counts(conn, run_id))
+    for vuln_id in ("CVE-1", "CVE-2", "CVE-3"):
+        _intel(conn, vuln_id, kev=True, epss=0.9)
+    for listing in (fix_by_fix, fix_by_image):
+        plain = listing(conn, run_id, today=ACCEPT_TODAY)
+        scored = listing(conn, run_id, today=ACCEPT_TODAY, scored=True)
+        assert (plain.total, plain.no_fix, plain.no_fix_images, plain.accepted) == (
+            scored.total,
+            scored.no_fix,
+            scored.no_fix_images,
+            scored.accepted,
+        )
+        assert (plain.total, plain.accepted) == (1, 1)
+    assert (kpis(conn, run_id), queries.namespace_counts(conn, run_id)) == before
+
+
+def test_unit_without_workload_rows_scores_as_unknown(db):
+    conn, repo = db
+    run_id = _run(repo)
+    _add_with_facts(repo, run_id, "lonely", [_fx("CVE-1", "HIGH")], namespace=None)
+    _intel(conn, "CVE-1", epss=0.6)
+    row = fix_by_fix(conn, run_id, scored=True).rows[0]
+    intel = risk.Intel(kev=False, kev_added=None, epss=0.6, percentile=0.5)
+    assert row.score == 30 + 15 + risk.NO_FACTS_POINTS == risk.score("HIGH", intel, None).points
+    assert row.factors == risk.score("HIGH", intel, None).factors and row.sample == [("lonely", [])]
+    image = fix_by_image(conn, run_id, scored=True).rows[0]
+    assert (image.score, image.factors) == (row.score, row.factors)
+
+
+def test_fix_by_image_scored_uses_the_top_unit(db):
+    conn, repo = db
+    run_id = _run(repo)
+    # x: a Critical with EPSS 0.6 (40 + 15) ties a High in KEV (30 + 25); the Critical wins on severity.
+    x = [_fx("CVE-1", "CRITICAL"), _fx("CVE-2", "HIGH", pkg="b"), _fx("CVE-0", "HIGH", pkg="c")]
+    _add_with_facts(repo, run_id, "x", x, BATCH)
+    _add_with_facts(repo, run_id, "y", [_fx("CVE-5", "CRITICAL"), _fx("CVE-6", "CRITICAL", pkg="d")], BATCH)
+    _intel(conn, "CVE-1", epss=0.6)
+    _intel(conn, "CVE-2", kev=True)
+    assert [r.ref for r in fix_by_image(conn, run_id).rows] == ["y", "x"]
+    assert all(r.score is None and r.factors == () for r in fix_by_image(conn, run_id).rows)
+    rows = fix_by_image(conn, run_id, scored=True).rows
+    assert [(r.ref, r.score) for r in rows] == [("x", 55), ("y", 40)]
+    intel = risk.Intel(kev=False, kev_added=None, epss=0.6, percentile=0.5)
+    assert rows[0].factors == risk.score("CRITICAL", intel, BATCH).factors
+    assert rows[1].factors == risk.score("CRITICAL", risk.NO_INTEL, BATCH).factors
+    assert [(r.critical, r.high, r.fixable) for r in rows] == [(1, 2, 3), (2, 0, 2)]

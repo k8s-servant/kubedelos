@@ -13,7 +13,9 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Literal, get_args
 
+from kubedelos import risk
 from kubedelos.store.accepted import ACCEPTED_CTES
+from kubedelos.store.intel import intel_for
 from kubedelos.store.repo import RETRY_NOTE_PREFIX
 from kubedelos.trivy.runner import ErrorKind
 
@@ -299,6 +301,47 @@ _SAMPLE_UNITS_SQL = _FIX_UNITS_TEMPLATE.format(
 )
 
 
+# The risk score of the fix lists. ``wp`` holds the workload part of the score per image: the riskiest of its workload
+# rows (a row written before the score counts as unknown), reached through the run's image rows and
+# idx_workload_image_result. Use as ``wp AS MATERIALIZED (<this>)`` with ``:run``.
+_WORKLOAD_POINTS_SQL = f"""
+SELECT r.ref, MAX(COALESCE(w.risk_points, {risk.NO_FACTS_POINTS})) AS points
+FROM image_result r
+JOIN workload w ON w.image_result_id = r.id
+WHERE r.run_id = :run
+GROUP BY r.ref
+"""  # noqa: S608 - only module constants are interpolated
+
+# The joins ``_score_sql`` reads, for a unit row ``{u}``: the CVE's feed row by its primary key, and the image's
+# workload points. An image with no workload row has no ``wp`` row and scores as unknown.
+_SCORE_JOINS_SQL = "LEFT JOIN threat_intel ti ON ti.vuln_id = {u}.vuln_id LEFT JOIN wp ON wp.ref = {u}.ref"
+
+
+def _score_sql(u: str) -> str:
+    """The risk score of the unit row ``u`` (with ``sev_rank``), over ``_SCORE_JOINS_SQL``; ``risk.score`` in SQL."""
+    return (
+        f"MIN({risk.MAX_SCORE}, {risk.severity_points_sql(f'{u}.sev_rank')} + {risk.exploit_points_sql('ti')}"
+        f" + COALESCE(wp.points, {risk.NO_FACTS_POINTS}))"
+    )
+
+
+def _scored(units: str) -> str:
+    """``units`` (a SELECT of units) with each unit's ``score``; needs a ``wp`` CTE."""
+    return f"SELECT x.*, {_score_sql('x')} AS score FROM ({units}) x {_SCORE_JOINS_SQL.format(u='x')}"  # noqa: S608
+
+
+def _factors(conn: sqlite3.Connection, run_id: int, tops: list[tuple[str, str, int]]) -> list[tuple[risk.Factor, ...]]:
+    """The factors of each top unit (ref, vuln_id, sev_rank): one feed read and one workload read for the page."""
+    from kubedelos.store.workloads import top_workload_facts  # here: kubedelos.store.workloads imports this module
+
+    intel = intel_for(conn, {vuln_id for _, vuln_id, _ in tops})
+    facts = top_workload_facts(conn, run_id, sorted({ref for ref, _, _ in tops}))
+    return [
+        risk.score(_SEVERITIES[4 - rank], intel.get(vuln_id, risk.NO_INTEL), facts[ref]).factors
+        for ref, vuln_id, rank in tops
+    ]
+
+
 @dataclass(frozen=True)
 class FixRow:
     vuln_id: str
@@ -309,7 +352,9 @@ class FixRow:
     primary_url: str | None
     images: int
     namespaces: int
-    sample: list[tuple[str, list[str]]]
+    sample: list[tuple[str, list[str]]]  # by ref; when scored, by score (the top unit first)
+    score: int | None = None  # the highest score of the group's units, when scored
+    factors: tuple[risk.Factor, ...] = ()  # the factors of the group's top unit, when scored
 
 
 @dataclass(frozen=True)
@@ -319,6 +364,8 @@ class ImageFixRow:
     critical: int
     high: int
     fixable: int
+    score: int | None = None  # the highest score of the image's Critical/High units, when scored
+    factors: tuple[risk.Factor, ...] = ()  # the factors of that top unit, when scored
 
 
 @dataclass(frozen=True)
@@ -335,15 +382,25 @@ class FixList[T]:
 
 
 def _fix_list(
-    conn: sqlite3.Connection, run_id: int, listing: str, order: str, limit: int, today: date | None
+    conn: sqlite3.Connection,
+    run_id: int,
+    listing: str,
+    order: str,
+    limit: int,
+    today: date | None,
+    *,
+    scored: bool = False,
 ) -> list[sqlite3.Row]:
     """``listing`` (a SELECT over ``units`` and ``ns`` with a ``total`` column) in ``order``, capped at ``limit``, beside
     the no-fix numbers of the same units, so one pass over the run's Critical/High units serves the list and the no-fix
     line. ``units`` holds the units that are not accepted; ``accepted`` is how many were left out. There is always one
-    row: an empty list leaves the listing's columns NULL.
+    row: an empty list leaves the listing's columns NULL. ``scored`` gives each unit its ``score``; it moves no count.
     """
+    every = f"wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}), every AS MATERIALIZED ({_scored(_FIX_UNITS_SQL)})"
+    if not scored:
+        every = f"every AS MATERIALIZED ({_FIX_UNITS_SQL})"
     return conn.execute(
-        f"WITH every AS MATERIALIZED ({_FIX_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"  # noqa: S608
+        f"WITH {every}, ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"  # noqa: S608
         f" units AS MATERIALIZED (SELECT * FROM every x WHERE NOT {_IS_ACCEPTED_SQL.format(u='x')})"
         " SELECT s.no_fix, s.no_fix_images, s.accepted, l.* FROM"
         " (SELECT COUNT(*) AS no_fix, COUNT(DISTINCT ref) AS no_fix_images,"
@@ -354,22 +411,41 @@ def _fix_list(
     ).fetchall()
 
 
-def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None) -> FixList[FixRow]:
-    """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are."""
+# The fix-first groups and their order; ``{score}`` adds the group's score when scored, which then sorts first.
+_FIX_GROUPS_SQL = (
+    "SELECT u.vuln_id, u.pkg_name, u.fixed_version, MAX(u.sev_rank) AS sev_rank,"
+    " json_group_array(DISTINCT u.installed_version) AS installed,"
+    " COUNT(DISTINCT u.ref) AS images, COUNT(DISTINCT ns.namespace) AS namespaces, COUNT(*) OVER () AS total{score}"
+    " FROM units u JOIN ns ON ns.ref = u.ref WHERE u.fixed_version <> ''"
+    " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version"
+)
+_FIX_GROUPS_ORDER = "sev_rank DESC, images DESC, namespaces DESC, vuln_id, pkg_name, fixed_version"
+_FIX_IMAGES_SQL = (
+    "SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high, SUM(fixed_version <> '') AS fixable,"
+    " COUNT(*) OVER () AS total{score} FROM units GROUP BY ref HAVING fixable > 0"
+)
+
+
+def fix_by_fix(
+    conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None, scored: bool = False
+) -> FixList[FixRow]:
+    """The first ``limit`` fixes (CVE, package, fixed version) that clear Critical/High findings, and how many there are.
+
+    ``scored`` puts the riskiest fixes first: a group scores as its riskiest unit, and the existing order breaks ties.
+    """
     found = _fix_list(
         conn,
         run_id,
-        "SELECT u.vuln_id, u.pkg_name, u.fixed_version, MAX(u.sev_rank) AS sev_rank,"
-        " json_group_array(DISTINCT u.installed_version) AS installed,"
-        " COUNT(DISTINCT u.ref) AS images, COUNT(DISTINCT ns.namespace) AS namespaces, COUNT(*) OVER () AS total"
-        " FROM units u JOIN ns ON ns.ref = u.ref WHERE u.fixed_version <> ''"
-        " GROUP BY u.vuln_id, u.pkg_name, u.fixed_version",
-        "sev_rank DESC, images DESC, namespaces DESC, vuln_id, pkg_name, fixed_version",
+        _FIX_GROUPS_SQL.format(score=", MAX(u.score) AS score" if scored else ""),
+        ("score DESC, " if scored else "") + _FIX_GROUPS_ORDER,
         limit,
         today,
+        scored=scored,
     )
     groups = [g for g in found if g["vuln_id"] is not None]
-    samples = _samples(conn, run_id, groups, today) if groups else {}
+    samples = _samples(conn, run_id, groups, today, scored=scored) if groups else {}
+    keys = [(g["vuln_id"], g["pkg_name"], g["fixed_version"]) for g in groups]
+    factors = _factors(conn, run_id, [(samples[k][2][0], k[0], samples[k][2][1]) for k in keys]) if scored else []
     rows = [
         FixRow(
             vuln_id=g["vuln_id"],
@@ -377,12 +453,14 @@ def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today:
             fixed_version=g["fixed_version"],
             severity=_SEVERITIES[4 - g["sev_rank"]],
             installed=sorted(v for v in json.loads(g["installed"]) if v is not None),
-            primary_url=samples[(g["vuln_id"], g["pkg_name"], g["fixed_version"])][1],
+            primary_url=samples[key][1],
             images=g["images"],
             namespaces=g["namespaces"],
-            sample=samples[(g["vuln_id"], g["pkg_name"], g["fixed_version"])][0],
+            sample=samples[key][0],
+            score=g["score"] if scored else None,
+            factors=factors[i] if scored else (),
         )
-        for g in groups
+        for i, (g, key) in enumerate(zip(groups, keys, strict=True))
     ]
     return FixList(
         rows, groups[0]["total"] if groups else 0, found[0]["no_fix"], found[0]["no_fix_images"], found[0]["accepted"]
@@ -390,65 +468,118 @@ def fix_by_fix(conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today:
 
 
 def _samples(
-    conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row], today: date | None
-) -> dict[tuple, tuple[list, str | None]]:
+    conn: sqlite3.Connection, run_id: int, groups: list[sqlite3.Row], today: date | None, *, scored: bool = False
+) -> dict[tuple, tuple[list, str | None, tuple[str, int] | None]]:
     """For each of the page's groups, up to ``SAMPLE_CAP`` (ref, namespaces) pairs and the group's CVE link, in one
-    query. Accepted units are left out, as the groups left them out.
+    query. Accepted units are left out, as the groups left them out. The pairs are by ref; when ``scored``, by score,
+    then severity, then ref, and the third item is the top unit's (ref, sev_rank). Unscored it is None.
     """
     params: dict[str, object] = {"run": run_id, "cap": SAMPLE_CAP, "today": _today(today)}
     values = []
     for i, g in enumerate(groups):
         params.update({f"v{i}": g["vuln_id"], f"p{i}": g["pkg_name"], f"f{i}": g["fixed_version"]})
         values.append(f"(:v{i}, :p{i}, :f{i})")
+    every = f"every AS MATERIALIZED ({_SAMPLE_UNITS_SQL})"
+    columns, picked, order, rows_order = "", "", "g.ref", "k.ref"
+    if scored:
+        every = f"wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}), every AS MATERIALIZED ({_scored(_SAMPLE_UNITS_SQL)})"
+        columns, picked = ", MAX(u.score) AS score, MAX(u.sev_rank) AS sev_rank", ", {t}.score, {t}.sev_rank"
+        order, rows_order = _SAMPLE_ORDER_SQL, "k.rn"
     rows = conn.execute(
         f"WITH wanted(vuln_id, pkg_name, fixed_version) AS (VALUES {', '.join(values)}),"  # noqa: S608
-        f" every AS MATERIALIZED ({_SAMPLE_UNITS_SQL}), ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"
+        f" {every}, ns AS MATERIALIZED ({_NAMESPACES_SQL}), {ACCEPTED_CTES},"
         f" units AS MATERIALIZED (SELECT * FROM every x WHERE NOT {_IS_ACCEPTED_SQL.format(u='x')}),"
-        " ranked AS (SELECT g.vuln_id, g.pkg_name, g.fixed_version, g.ref,"
+        f" ranked AS (SELECT g.vuln_id, g.pkg_name, g.fixed_version, g.ref{picked.format(t='g')},"
         "   MAX(g.primary_url) OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version) AS group_url,"
-        "   ROW_NUMBER() OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version ORDER BY g.ref) AS rn"
-        "   FROM (SELECT u.vuln_id, u.pkg_name, u.fixed_version, u.ref, MAX(u.primary_url) AS primary_url FROM units u"
+        f"   ROW_NUMBER() OVER (PARTITION BY g.vuln_id, g.pkg_name, g.fixed_version ORDER BY {order}) AS rn"
+        "   FROM (SELECT u.vuln_id, u.pkg_name, u.fixed_version, u.ref, MAX(u.primary_url) AS primary_url"
+        f"{columns} FROM units u"
         "     JOIN wanted wa ON wa.vuln_id = u.vuln_id AND wa.pkg_name IS u.pkg_name"
         "     AND wa.fixed_version = u.fixed_version GROUP BY u.vuln_id, u.pkg_name, u.fixed_version, u.ref"
         "   ) g)"
-        " SELECT k.vuln_id, k.pkg_name, k.fixed_version, k.ref, k.group_url, ns.namespace"
-        " FROM ranked k JOIN ns ON ns.ref = k.ref WHERE k.rn <= :cap ORDER BY k.ref, ns.namespace",
+        f" SELECT k.vuln_id, k.pkg_name, k.fixed_version, k.ref, k.group_url{picked.format(t='k')}, ns.namespace"
+        f" FROM ranked k JOIN ns ON ns.ref = k.ref WHERE k.rn <= :cap ORDER BY {rows_order}, ns.namespace",
         params,
     )
     refs_of: dict[tuple, dict[str, list[str]]] = {}
     urls: dict[tuple, str | None] = {}
+    tops: dict[tuple, tuple[str, int] | None] = {}
     for row in rows:
         key = (row["vuln_id"], row["pkg_name"], row["fixed_version"])
         urls[key] = row["group_url"]
+        tops.setdefault(key, (row["ref"], row["sev_rank"]) if scored else None)
         namespaces = refs_of.setdefault(key, {}).setdefault(row["ref"], [])
         if row["namespace"] is not None:
             namespaces.append(row["namespace"])
-    return {key: (list(refs.items()), urls[key]) for key, refs in refs_of.items()}
+    return {key: (list(refs.items()), urls[key], tops[key]) for key, refs in refs_of.items()}
+
+
+# The order of a scored group's units, so its first sample is its top unit (the one its factors describe).
+_SAMPLE_ORDER_SQL = "g.score DESC, g.sev_rank DESC, g.ref"
+
+# The top unit of each of the page's images (``:refs``), for its factors: the highest score, then severity, then CVE.
+# The same units as the list, narrowed to those images through the run's image rows, and left out when accepted.
+_TOP_UNITS_SQL = f"""
+WITH wp AS MATERIALIZED ({_WORKLOAD_POINTS_SQL}),
+every AS MATERIALIZED ({
+    _scored(
+        _FIX_UNITS_TEMPLATE.format(
+            columns="",
+            source="image_result r CROSS JOIN finding f ON f.image_result_id = r.id"
+            " AND r.ref IN (SELECT value FROM json_each(:refs))",
+        )
+    )
+}), {ACCEPTED_CTES},
+units AS (SELECT * FROM every x WHERE NOT {_IS_ACCEPTED_SQL.format(u="x")}),
+ranked AS (SELECT ref, vuln_id, sev_rank, score,
+  ROW_NUMBER() OVER (PARTITION BY ref ORDER BY score DESC, sev_rank DESC, vuln_id) AS rn FROM units)
+SELECT ref, vuln_id, sev_rank, score FROM ranked WHERE rn = 1
+"""  # noqa: S608 - only module constants are interpolated
 
 
 def fix_by_image(
-    conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None
+    conn: sqlite3.Connection, run_id: int, limit: int = 25, *, today: date | None = None, scored: bool = False
 ) -> FixList[ImageFixRow]:
-    """The first ``limit`` images with a fixable Critical/High finding, worst first, and how many there are."""
+    """The first ``limit`` images with a fixable Critical/High finding, worst first, and how many there are.
+
+    ``scored`` puts the riskiest images first: an image scores as its riskiest Critical/High unit, fixable or not.
+    """
     found = _fix_list(
         conn,
         run_id,
-        "SELECT ref, SUM(sev_rank = 4) AS critical, SUM(sev_rank = 3) AS high, SUM(fixed_version <> '') AS fixable,"
-        " COUNT(*) OVER () AS total FROM units GROUP BY ref HAVING fixable > 0",
-        "critical DESC, high DESC, ref",
+        _FIX_IMAGES_SQL.format(score=", MAX(score) AS score" if scored else ""),
+        ("score DESC, " if scored else "") + "critical DESC, high DESC, ref",
         limit,
         today,
+        scored=scored,
     )
     rows = [r for r in found if r["ref"] is not None]
     namespaces: dict[str, list[str]] = {}
+    factors: dict[str, tuple[risk.Factor, ...]] = {}
     if rows:
+        refs = json.dumps([r["ref"] for r in rows])
         for row in conn.execute(
             f"WITH ns AS MATERIALIZED ({_NAMESPACES_SQL}) SELECT ref, namespace FROM ns"  # noqa: S608
             " WHERE namespace IS NOT NULL AND ref IN (SELECT value FROM json_each(:refs)) ORDER BY namespace",
-            {"run": run_id, "refs": json.dumps([r["ref"] for r in rows])},
+            {"run": run_id, "refs": refs},
         ):
             namespaces.setdefault(row["ref"], []).append(row["namespace"])
-    result = [ImageFixRow(r["ref"], namespaces.get(r["ref"], []), r["critical"], r["high"], r["fixable"]) for r in rows]
+        if scored:
+            tops = conn.execute(_TOP_UNITS_SQL, {"run": run_id, "refs": refs, "today": _today(today)}).fetchall()
+            found_factors = _factors(conn, run_id, [(t["ref"], t["vuln_id"], t["sev_rank"]) for t in tops])
+            factors = {t["ref"]: f for t, f in zip(tops, found_factors, strict=True)}
+    result = [
+        ImageFixRow(
+            r["ref"],
+            namespaces.get(r["ref"], []),
+            r["critical"],
+            r["high"],
+            r["fixable"],
+            score=r["score"] if scored else None,
+            factors=factors[r["ref"]] if scored else (),
+        )
+        for r in rows
+    ]
     return FixList(
         result, rows[0]["total"] if rows else 0, found[0]["no_fix"], found[0]["no_fix_images"], found[0]["accepted"]
     )

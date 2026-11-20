@@ -21,8 +21,8 @@ from tests.web.seed import CONTEXT, seed_acceptances, seed_large
 
 BUDGET = 0.3
 SORTS = ("severity", "cve", "package", "image", "namespace", "fixed")
-# A full pass over a big table, also through a covering index. The queries alias these tables as f, r and w.
-FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|f|r|w)\b")
+# A full pass over a big table, also through a covering index. The queries alias these tables as f, r, w and ti.
+FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|threat_intel|f|r|w|ti)\b")
 REACHED = re.compile(r"^SEARCH (finding|f) ")
 KEYED = re.compile(r"\(image_result_id=")
 PRIOR_RUNS = 4  # earlier runs that share the CVEs, so a lookup that reads every run's rows shows in the plan
@@ -51,6 +51,13 @@ def test_query_plans_use_indexes(tmp_path):
         seed_large(conn, images=40, findings=2000, namespaces=5)
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
     seed_acceptances(conn)
+    with conn:  # feed rows for some of the run's CVEs, so the scored lists join threat_intel for real
+        conn.execute(
+            "INSERT INTO threat_intel (vuln_id, kev, epss) SELECT f.vuln_id, MAX(f.id % 2), 0.6"
+            " FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ? AND f.id % 3 = 0"
+            " GROUP BY f.vuln_id",
+            (run_id,),
+        )
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
     ref, vuln_id = conn.execute(
         "SELECT r.ref, f.vuln_id FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ?",
@@ -62,6 +69,8 @@ def test_query_plans_use_indexes(tmp_path):
         "kpis": lambda: queries.kpis(conn, run_id),
         "fix_by_fix": lambda: queries.fix_by_fix(conn, run_id),
         "fix_by_image": lambda: queries.fix_by_image(conn, run_id),
+        "fix_by_fix scored": lambda: queries.fix_by_fix(conn, run_id, scored=True),
+        "fix_by_image scored": lambda: queries.fix_by_image(conn, run_id, scored=True),
         "worst_images": lambda: queries.worst_images(conn, run_id),
         "findings_page": lambda: queries.findings_page(conn, run_id, queries.FindingFilter(), 2, per_page=10),
         "findings_page accepted": lambda: queries.findings_page(
