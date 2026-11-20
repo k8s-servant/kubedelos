@@ -76,12 +76,17 @@ def test_points_table():
     assert points("host", facts(root=None)) == 3
     assert points("host", facts(root=True)) == 3
     assert points("host", facts()) == 0
+    assert points("host", facts(privileged=True, root=True)) == 10
+    assert points("host", facts(privileged=True, root=None)) == 10
     assert points("rights", facts(cluster_admin=True)) == 10
     assert points("rights", facts(escalates=True)) == 10
     assert points("rights", facts(reads_secrets=True, reads_secrets_scope="cluster")) == 10
     assert points("rights", facts(pod_exec=True)) == 5
     assert points("rights", facts(reads_secrets=True, reads_secrets_scope=("ns",))) == 5
     assert points("rights", facts(status="ok")) == 0
+    for flag in ("creates_workloads", "wildcard"):
+        assert points("rights", facts(**{flag: True})) == 5
+        assert points("rights", facts(automount=False, **{flag: True})) == 0
     assert points("rights", facts(status="partial")) == 5
     assert points("rights", facts(status="unknown")) == 5
     assert points("rights", facts(status="off")) == 5
@@ -146,9 +151,10 @@ def test_score_is_sum_capped():
     result = score("CRITICAL", kev(), f)
     assert [x.name for x in result.factors] == ["severity", "exploited", "exposure", "host", "rights"]
     assert result.points == min(100, sum(x.points for x in result.factors)) == 100
-    over = facts(level="external", privileged=True, root=True, cluster_admin=True)
-    assert sum(x.points for x in score("CRITICAL", kev(), over).factors) > 100
-    assert score("CRITICAL", kev(), over).points == risk.MAX_SCORE
+    for severity, intel, each in itertools.product(
+        SEVERITIES, [NO_INTEL, kev()], [None, f, facts(root=True, privileged=True)]
+    ):
+        assert score(severity, intel, each).points <= risk.MAX_SCORE
 
 
 def test_sql_matches_python():

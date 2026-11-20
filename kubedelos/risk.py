@@ -64,37 +64,30 @@ class Score:
     factors: tuple[Factor, ...]  # always severity, exploited, exposure, host, rights
 
 
-def host_access(facts: WorkloadFacts) -> bool:
-    """Whether the pod can reach the node: host namespaces, privilege, a writable hostPath or a powerful capability."""
-    pod = facts.pod
-    return (
-        pod.privileged
-        or pod.host_pid
-        or pod.host_network
-        or pod.host_ipc
-        or any(not volume.read_only for volume in pod.host_path_volumes)
-        or any(cap.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for cap in pod.added_capabilities)
-    )
+def _writable_host_path(facts: WorkloadFacts) -> bool:
+    return any(not volume.read_only for volume in facts.pod.host_path_volumes)
+
+
+def _host_capability(facts: WorkloadFacts) -> bool:
+    return any(cap.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for cap in facts.pod.added_capabilities)
 
 
 def _host_reasons(facts: WorkloadFacts) -> list[str]:
     pod = facts.pod
-    reasons = [
-        label
-        for label, on in (
-            ("privileged", pod.privileged),
-            ("host pid", pod.host_pid),
-            ("host network", pod.host_network),
-            ("host ipc", pod.host_ipc),
-            ("writable hostPath", any(not v.read_only for v in pod.host_path_volumes)),
-            (
-                "powerful capability",
-                any(c.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for c in pod.added_capabilities),
-            ),
-        )
-        if on
-    ]
-    return reasons
+    checks = (
+        ("privileged", pod.privileged),
+        ("host pid", pod.host_pid),
+        ("host network", pod.host_network),
+        ("host ipc", pod.host_ipc),
+        ("writable hostPath", _writable_host_path(facts)),
+        ("powerful capability", _host_capability(facts)),
+    )
+    return [label for label, on in checks if on]
+
+
+def host_access(facts: WorkloadFacts) -> bool:
+    """Whether the pod can reach the node: host namespaces, privilege, a writable hostPath or a powerful capability."""
+    return bool(_host_reasons(facts))
 
 
 def _exposure(facts: WorkloadFacts) -> Factor:
@@ -107,19 +100,16 @@ def _exposure(facts: WorkloadFacts) -> Factor:
 
 
 def _host(facts: WorkloadFacts) -> Factor:
-    points = 0
-    reasons = []
-    if host_access(facts):
-        points += HOST_ACCESS_POINTS
-        reasons += _host_reasons(facts)
+    """Host access is +10; root adds nothing on top of it, and counts +3 only on its own (True or unknown)."""
+    reasons = _host_reasons(facts)
+    if reasons:
+        return Factor("host", HOST_ACCESS_POINTS, ", ".join(reasons))
     root = facts.pod.runs_as_root
     if root is None:
-        points += ROOT_POINTS
-        reasons.append("root unknown")
-    elif root:
-        points += ROOT_POINTS
-        reasons.append("runs as root")
-    return Factor("host", points, ", ".join(reasons) or "no host access")
+        return Factor("host", ROOT_POINTS, "root unknown")
+    if root:
+        return Factor("host", ROOT_POINTS, "runs as root")
+    return Factor("host", 0, "no host access")
 
 
 def _rights(facts: WorkloadFacts) -> Factor:
@@ -135,7 +125,16 @@ def _rights(facts: WorkloadFacts) -> Factor:
         )
         if on
     ]
-    other = [label for label, on in (("pod_exec", rights.pod_exec), ("reads secrets", rights.reads_secrets)) if on]
+    other = [
+        label
+        for label, on in (
+            ("pod_exec", rights.pod_exec),
+            ("reads secrets", rights.reads_secrets),
+            ("creates workloads", rights.creates_workloads),
+            ("wildcard", rights.wildcard),
+        )
+        if on
+    ]
     if high:
         return Factor("rights", RIGHTS_HIGH_POINTS, ", ".join(high))
     if other:
