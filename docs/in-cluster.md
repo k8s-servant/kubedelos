@@ -123,13 +123,21 @@ from `epss.empiricalsecurity.com`. Each is a plain HTTPS `GET` of a fixed URL, a
 scan; it carries nothing about the cluster. The chart sets `KUBEDELOS_THREAT_FEEDS=false`, so without them the score
 counts known exploitation as nothing and the rest of it still works.
 
-Turn them on only when the pod can reach both hosts on port 443. If `networkPolicy.egress` restricts egress, allow
-them there too. The chart has no value for this switch yet; set the variable on the container, which takes precedence
-over the chart's ConfigMap:
+Turn them on only when the pod can reach both hosts on port 443. If `networkPolicy.egress` restricts egress, a plain
+NetworkPolicy cannot allow them by name: it matches IP blocks, not hostnames, and both hosts sit behind CDNs whose
+addresses change. Use an `ipBlock` rule for port 443 wide enough to cover them, or a CNI policy that matches FQDNs
+(such as Cilium's `toFQDNs`).
+
+The chart has no value for this switch yet (one is the planned follow-up); set the variable on the container, which
+takes precedence over the chart's ConfigMap. The Deployment is named after the release (see [Install](#install)), so
+select it by the release label:
 
 ```bash
-kubectl set env deployment/<release>-kubedelos KUBEDELOS_THREAT_FEEDS=true -n kubedelos
+kubectl set env deployment -l app.kubernetes.io/instance=<release> KUBEDELOS_THREAT_FEEDS=true -n kubedelos
 ```
+
+The edit survives `helm upgrade`, because the chart never sets an `env` entry on the container, but a GitOps
+controller (Argo CD, Flux) reverts it and a reinstall drops it.
 
 The feeds are fetched before the next scan. Without egress each try times out (10 s to connect), logs
 `threat feed <name> not updated: ...` and lets the scan go on. The Settings page shows when each feed was last fetched.
