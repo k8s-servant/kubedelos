@@ -306,7 +306,9 @@ def test_find_vulnerability_includes_facts_and_acceptance(world):
     assert result["workloads"][0]["facts"] is None
     assert result["workloads"][2]["facts"] == make_facts(root=True).model_dump(mode="json")
     assert (result["images_total"], result["packages_total"]) == (2, 1)
-    assert set(result["workloads"][0]) == {"namespace", "kind", "name", "container", "image", "facts"}
+    assert set(result["workloads"][0]) == {
+        "namespace", "kind", "name", "container", "image", "facts", "score", "factors"
+    }  # fmt: skip
     assert result["total"] == 3 and result["truncated"] is False
     assert result["acceptance"] == [
         {"id": live, "namespace": "web", "repo": None, "pkg_name": None, "reason": "risk", "owner": "me",
@@ -703,3 +705,89 @@ def test_accepted_risks_without_a_run(world):
     accepted.add(conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), context=None, now=NOW)
     result = tools.accepted_risks(conn, db, NOW)
     assert [e["covers"] for e in result["entries"]] == [None]
+
+
+def _store_intel(conn, *, kev=True):
+    with conn:
+        conn.execute("INSERT INTO threat_intel VALUES ('CVE-1', ?, '2025-03-04', 0.97, 0.99)", (int(kev),))
+        conn.execute(
+            "INSERT INTO threat_feed VALUES ('kev', '2026-01-31T08:00:00+00:00', 'v1', 1),"
+            " ('epss', '2026-01-31T09:00:00+00:00', 'v1', 1)"
+        )
+
+
+def test_fix_first_scores_and_orders_by_risk_when_shown(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    site = _wl("web", "site")
+    add_workloads(repo, run_id, "img-h", [site], [finding("CVE-H", "HIGH", pkg="a")],
+                  facts={site: make_facts(level="none")})  # fmt: skip
+    add_workloads(repo, run_id, "img-c", [_wl("web", "other")], [finding("CVE-C", "CRITICAL", pkg="b")])
+    _store_intel(conn, kev=True)
+    conn.execute("UPDATE threat_intel SET vuln_id = 'CVE-H'")
+    conn.commit()
+    result = tools.fix_first(conn, db, NOW)
+    assert result["risk"] == {
+        "shown": True,
+        "facts": True,
+        "feeds": {"kev": "2026-01-31T08:00:00+00:00", "epss": "2026-01-31T09:00:00+00:00"},
+    }
+    scores = [i["score"] for i in result["items"]]
+    assert scores == sorted(scores, reverse=True) and all(isinstance(s, int) for s in scores)
+    top = result["items"][0]
+    assert [f["factor"] for f in top["factors"]] == ["severity", "exploited", "exposure", "host", "rights"]
+    assert set(top["factors"][0]) == {"factor", "points", "detail"}
+    assert sum(f["points"] for f in top["factors"]) >= top["score"]
+    json.dumps(result)
+    by_image = tools.fix_first(conn, db, NOW, view="image")
+    assert by_image["risk"]["shown"] is True and by_image["items"][0]["score"] is not None
+    assert len(by_image["items"][0]["factors"]) == 5
+
+
+def test_fix_first_without_facts_or_feeds_hides_the_score(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    add_image(repo, run_id, "img", [finding("CVE-1", "HIGH")])
+    result = tools.fix_first(conn, db, NOW)
+    assert result["risk"] == {"shown": False, "facts": False, "feeds": {"kev": None, "epss": None}}
+    assert [(i["score"], i["factors"]) for i in result["items"]] == [(None, [])]
+
+
+def test_find_vulnerability_carries_intel_and_scores_the_workloads(world):
+    conn, repo, db = world
+    _cve_world(repo)
+    _store_intel(conn)
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
+    assert (result["kev"], result["kev_added"], result["epss"], result["epss_percentile"]) == (
+        True, "2025-03-04", 0.97, 0.99)  # fmt: skip
+    assert result["risk"]["shown"] is True and result["risk"]["facts"] is True
+    items = result["workloads"]
+    assert [i["score"] for i in items] == sorted((i["score"] for i in items), reverse=True)
+    assert items[-1]["name"] == "site"  # exposure none, so the lowest
+    assert [f["factor"] for f in items[0]["factors"]] == ["severity", "exploited", "exposure", "host", "rights"]
+    assert items[0]["factors"][1] == {"factor": "exploited", "points": 25, "detail": "in KEV since 2025-03-04"}
+    assert items[0]["factors"][0]["detail"] == "critical"
+
+
+def test_find_vulnerability_ranks_the_external_workload_of_a_kev_cve_first(world):
+    conn, repo, db = world
+    run_id = new_run(repo, "my-cluster")
+    quiet, loud = _wl("a", "quiet"), _wl("z", "loud")
+    add_workloads(repo, run_id, "img", [quiet, loud], [finding("CVE-1", "HIGH")],
+                  facts={quiet: make_facts(level="none"), loud: make_facts(level="external")})  # fmt: skip
+    _store_intel(conn)
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
+    assert [w["name"] for w in result["workloads"]] == ["loud", "quiet"]
+    assert result["workloads"][0]["score"] > result["workloads"][1]["score"]
+
+
+def test_find_vulnerability_without_intel_or_facts_keeps_exposure_order(world):
+    conn, repo, db = world
+    _cve_world(repo)
+    with conn:
+        conn.execute("UPDATE workload SET facts = NULL")
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
+    assert result["risk"]["shown"] is False
+    assert (result["kev"], result["kev_added"], result["epss"], result["epss_percentile"]) == (False, None, None, None)
+    assert [(w["score"], w["factors"]) for w in result["workloads"]] == [(None, [])] * 3
+    assert [w["name"] for w in result["workloads"]] == ["gateway", "site", "worker"]

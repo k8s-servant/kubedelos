@@ -94,10 +94,17 @@ async def test_tools_never_touch_the_cluster(db, monkeypatch):
         raise AssertionError("the MCP server must not load a kubeconfig")
 
     monkeypatch.setattr(kubedelos.kube.client, "load", boom)
+    conn = connect(db.path)
+    with conn:
+        conn.execute("INSERT INTO threat_intel VALUES ('CVE-1', 1, '2025-03-04', 0.9, 0.9)")
+        conn.execute("INSERT INTO threat_feed VALUES ('kev', '2026-01-31T08:00:00+00:00', 'v1', 1)")
+    conn.close()
+    before = db.path.read_bytes()
     async with Client(build_server(db)) as client:
         for tool in (await client.list_tools()).tools:
             result = await client.call_tool(tool.name, MINIMAL_ARGS.get(tool.name, {}))
             assert not result.is_error, tool.name
+            assert db.path.read_bytes() == before, tool.name
 
 
 async def test_run_summary_over_mcp(db, monkeypatch):

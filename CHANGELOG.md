@@ -6,7 +6,8 @@
 
 - Risk score: the dashboard's fix-first lists, the findings page (sort by `risk`), the print report and the CSV show a
   0-100 score per finding with the factors behind it. It is hidden for a run with no attack-surface facts while no
-  threat feed has been downloaded, and the page says what is missing.
+  threat feed has been downloaded, and the page says what is missing. The MCP tools `fix_first` and
+  `find_vulnerability` return the score and its factors too, plus a `risk` object and the CVE's KEV and EPSS data.
 - `kubedelos mcp`: a read-only MCP server over stdio, so your own agent can query the local scan database. It opens
   the database read-only, never reaches the cluster and calls no LLM. Tools so far: `list_clusters`, `run_summary`,
   `fix_first`, `find_vulnerability`, `workload`, `list_findings`, `attack_surface`, `compare_runs` and

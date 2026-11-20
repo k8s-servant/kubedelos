@@ -187,3 +187,9 @@ async def test_invalid_prompt_argument_is_an_error_over_mcp(db):
     async with Client(build_server(db)) as client:
         with pytest.raises(Exception, match=r"^invalid cluster$"):
             await client.get_prompt("fix_first_briefing", {"cluster": "bad name"})
+
+
+def test_fix_first_prompt_explains_the_score_from_its_factors():
+    text = prompts.fix_first_briefing()
+    assert "factors" in text and "risk.shown" in text
+    assert "not a CVE severity" in text

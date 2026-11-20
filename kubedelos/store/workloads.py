@@ -115,6 +115,25 @@ def cve_images(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> list[str]
     return [row["ref"] for row in rows]
 
 
+def cve_severity_by_ref(conn: sqlite3.Connection, run_id: int, vuln_id: str) -> dict[str, str]:
+    """The highest severity the run reports for ``vuln_id`` in each image that has it, by ref."""
+    rows = conn.execute(
+        "SELECT DISTINCT r.ref, f.severity FROM image_result r CROSS JOIN finding f ON f.image_result_id = r.id"
+        " WHERE r.run_id = ? AND f.vuln_id = ?",
+        (run_id, vuln_id),
+    )
+    worst: dict[str, str] = {}
+    for ref, severity in rows:
+        if ref not in worst or _severity_order(severity) < _severity_order(worst[ref]):
+            worst[ref] = severity
+    return worst
+
+
+def _severity_order(severity: str) -> int:
+    """0 for Critical down to the last place for Unknown (and anything Trivy might add)."""
+    return SEVERITIES.index(severity) if severity in SEVERITIES else len(SEVERITIES)
+
+
 def top_findings(conn: sqlite3.Connection, run_id: int, ref: str, limit: int = 10) -> list[dict]:
     """The image's worst finding units, in the findings page's severity order (severity, then CVE, then package)."""
     rows = conn.execute(

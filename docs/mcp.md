@@ -62,8 +62,8 @@ clamped, not refused. How each tool bounds its lists:
 | --- | --- | --- |
 | `list_clusters` | none | `clusters`, `default` |
 | `run_summary` | `cluster`, `run` | `kpis`, `coverage_gaps`, `failed`, `previous_run` |
-| `fix_first` | `cluster`, `run`, `view`, `limit` | `items`, `total`, `truncated`, `no_fix`, `accepted` |
-| `find_vulnerability` | `vuln_id`, `cluster`, `run`, `limit`, `offset` | `packages`, `images`, `workloads` |
+| `fix_first` | `cluster`, `run`, `view`, `limit` | `items`, `total`, `truncated`, `no_fix`, `accepted`, `risk` |
+| `find_vulnerability` | `vuln_id`, `cluster`, `run`, `limit`, `offset` | `risk`, `packages`, `images`, `workloads` |
 | `workload` | `namespace`, `name`, `kind`, `cluster`, `run` | `containers` with `counts`, `facts`, `top_findings` |
 | `list_findings` | `cluster`, `run`, the filters below, `page`, `per_page` | `items`, `total`, `truncated`, `page` |
 | `attack_surface` | `cluster`, `run`, the filters below, `limit`, `offset` | `facts_collected`, `items`, `total` |
@@ -82,14 +82,23 @@ Argument values and defaults:
 - `state` (`accepted_risks`): `active` (default) or `all`.
 - `list_clusters` returns, per cluster, `name`, `last_scan`, `status`, `stale` and `newest_run`.
 - `workload` and `find_vulnerability` items carry `facts`, which is `null` when none were collected.
+- The risk score (0-100, kubedelos's own ranking, not a CVE severity):
+  - Each `fix_first` item and each `find_vulnerability` workload carries `score` and `factors`: a list of
+    `{"factor", "points", "detail"}`, always the five `severity`, `exploited`, `exposure`, `host` and `rights`.
+  - Both tools also return `risk`: `{"shown", "facts", "feeds"}`. `shown` is false when the run has no workload facts
+    and no threat feed copy; then every `score` is `null`, every `factors` is `[]`, and the order is by severity and
+    exposure alone. `facts` says whether the run has workload facts at all. `feeds` gives when the `kev` and `epss`
+    feeds were last fetched (ISO 8601), or `null` for a feed with no copy. The MCP server never fetches them.
+  - `find_vulnerability` also returns `kev`, `kev_added`, `epss` and `epss_percentile` (`false` or `null` when the
+    feeds do not know the CVE). While `risk.shown` is true its `workloads` are ordered by `score`, then as before.
 
 Notes on the tools:
 
 - `workload` lists every kind that shares the name unless `kind` is given.
 - `find_vulnerability` matches `vuln_id` exactly and case-sensitively, as Trivy writes it. It strips spaces, and an id
   that starts with `CVE-` in any case is upper-cased (CVE ids are upper case); other ids, such as `GHSA-...`, are
-  used as given. An unknown id returns empty lists, not an error. Its `workloads` are ranked like `attack_surface`,
-  and `acceptance` lists the active risk acceptances for the id.
+  used as given. An unknown id returns empty lists, not an error. Its `workloads` are ranked like `attack_surface`
+  (by `score` first while `risk.shown` is true), and `acceptance` lists the active risk acceptances for the id.
 - `list_findings` is paged (`page` from 1; a page above 10^9 is clamped to it). Risk-accepted findings are hidden
   unless `accepted` is `all` or `only`.
 - `compare_runs` without `from_run` compares with the previous comparable run; without `to_run` it uses the newest.

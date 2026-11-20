@@ -125,3 +125,14 @@ def test_top_workload_facts_takes_the_riskiest_row(tmp_path):
     assert top == {"img-a": make_facts(root=None, level="external"), "img-b": None, "img-c": None, "img-404": None}
     assert workloads.top_workload_facts(conn, run_id, []) == {}
     conn.close()
+
+
+def test_cve_severity_by_ref_is_the_highest_severity_per_image(tmp_path):
+    conn = connect(tmp_path / "kubedelos.db")
+    repo = Repo(conn)
+    run_id = new_run(repo, "my-cluster")
+    add_workloads(repo, run_id, "img-a", [_wl("a", "x")], [finding("CVE-1", "LOW"), finding("CVE-1", "HIGH", pkg="z")])
+    add_workloads(repo, run_id, "img-b", [_wl("a", "y")], [finding("CVE-1", "MEDIUM"), finding("CVE-2", "CRITICAL")])
+    assert workloads.cve_severity_by_ref(conn, run_id, "CVE-1") == {"img-a": "HIGH", "img-b": "MEDIUM"}
+    assert workloads.cve_severity_by_ref(conn, run_id, "CVE-9") == {}
+    conn.close()
