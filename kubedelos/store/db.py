@@ -3,12 +3,66 @@
 import os
 import sqlite3
 import time
+from collections.abc import Callable
 from pathlib import Path
+
+from kubedelos.models import parse_facts
+from kubedelos.risk import workload_points
 
 _BUSY_TIMEOUT_MS = 5000
 
-# Each script moves the schema one version forward; PRAGMA user_version is the count applied.
-MIGRATIONS: list[str] = [
+_BACKFILL_BATCH = 1000
+
+
+def _backfill_risk_points(conn: sqlite3.Connection) -> None:
+    """Migration 13: compute risk_points for every existing workload row from its stored facts.
+
+    A callable, not SQL, because the points come from kubedelos.risk. It runs inside _migrate's open transaction, so it
+    must not use executescript(), which would commit it.
+    """
+    last_id = 0
+    while True:
+        rows = conn.execute(
+            "SELECT id, facts FROM workload WHERE id > ? ORDER BY id LIMIT ?", (last_id, _BACKFILL_BATCH)
+        )
+        batch = [(workload_points(parse_facts(row[1])), row[0]) for row in rows.fetchall()]
+        if not batch:
+            return
+        conn.executemany("UPDATE workload SET risk_points = ? WHERE id = ?", batch)
+        last_id = batch[-1][1]
+
+
+_MIGRATION_13_SQL = [
+    """
+    CREATE TABLE threat_intel (
+        vuln_id TEXT PRIMARY KEY,
+        kev INTEGER NOT NULL DEFAULT 0,
+        kev_added TEXT,
+        epss REAL,
+        epss_percentile REAL
+    ) WITHOUT ROWID
+    """,
+    """
+    CREATE TABLE threat_feed (
+        name TEXT PRIMARY KEY CHECK (name IN ('kev', 'epss')),
+        fetched_at TEXT NOT NULL,
+        version TEXT,
+        rows INTEGER NOT NULL
+    )
+    """,
+    "ALTER TABLE workload ADD COLUMN risk_points INTEGER",
+]
+
+
+def _migrate_13(conn: sqlite3.Connection) -> None:
+    for statement in _MIGRATION_13_SQL:
+        conn.execute(statement)
+    _backfill_risk_points(conn)
+
+
+# Each entry moves the schema one version forward; PRAGMA user_version is the count applied. An entry is a SQL script,
+# or a callable that gets the connection inside the migration's open transaction.
+MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """
     CREATE TABLE scan_run (
         id INTEGER PRIMARY KEY,
@@ -182,6 +236,9 @@ MIGRATIONS: list[str] = [
     ALTER TABLE workload ADD COLUMN facts TEXT;
     ALTER TABLE scan_run ADD COLUMN fact_sources TEXT;
     """,
+    # 13: the threat feeds (KEV and EPSS, one row per CVE, filled by the feed refresh) and what each feed last fetched,
+    # plus each workload row's stored risk points; see _migrate_13. Readers COALESCE to NO_FACTS_POINTS.
+    _migrate_13,
 ]
 
 
@@ -201,9 +258,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
             if conn.execute("PRAGMA user_version").fetchone()[0] > index:
                 conn.execute("COMMIT")
                 continue
-            conn.executescript(f"{MIGRATIONS[index]}\nPRAGMA user_version = {index + 1};")
+            step = MIGRATIONS[index]
+            if callable(step):
+                step(conn)
+                conn.execute(f"PRAGMA user_version = {index + 1}")
+            else:
+                conn.executescript(f"{step}\nPRAGMA user_version = {index + 1};")
             conn.execute("COMMIT")
-    except sqlite3.Error:
+    except Exception:
         if conn.in_transaction:
             conn.execute("ROLLBACK")  # rollback() does nothing while autocommit is True
         raise

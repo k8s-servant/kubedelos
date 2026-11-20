@@ -11,6 +11,7 @@ from pydantic import ValidationError
 
 from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import FactSources, ImageRef, ImageResult, InventoryItem, Workload
+from kubedelos.risk import workload_points
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import ErrorKind
 
@@ -99,8 +100,8 @@ class Repo:
             )  # fmt: skip
             result_id = cur.lastrowid
             self._conn.executemany(
-                "INSERT INTO workload (image_result_id, namespace, kind, name, container, owner, team, facts)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO workload (image_result_id, namespace, kind, name, container, owner, team, facts, risk_points)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 [
                     (
                         result_id,
@@ -111,6 +112,7 @@ class Repo:
                         w.owner,
                         w.team,
                         facts.model_dump_json() if (facts := item.facts.get(w)) else None,
+                        workload_points(facts),
                     )
                     for w in item.workloads
                 ],

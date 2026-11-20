@@ -20,6 +20,7 @@ from kubedelos.models import (
     Workload,
     WorkloadFacts,
 )
+from kubedelos.risk import workload_points
 from kubedelos.store.db import MIGRATIONS, connect, connect_readonly
 from kubedelos.store.repo import Repo
 
@@ -648,3 +649,23 @@ def test_add_result_stores_facts_per_workload(tmp_path):
     assert json.loads(rows[0]["facts"])["v"] == 1
     assert WorkloadFacts.model_validate_json(rows[0]["facts"]) == facts
     assert rows[1]["facts"] is None
+
+
+def test_add_result_stores_risk_points(tmp_path):
+    repo = _repo(tmp_path)
+    first = Workload(namespace="ns", kind="Deployment", name="a", container="c")
+    second = Workload(namespace="ns", kind="Deployment", name="b", container="c")
+    facts = WorkloadFacts(
+        pod=PodSecurity(
+            privileged=True, allow_privilege_escalation=True, runs_as_root=True, read_only_root_fs=False,
+            host_network=False, host_pid=False, host_ipc=False, service_account="default", automount_token=None,
+        ),
+        exposure=Exposure(level="external"),
+        network=Network(ingress_isolated=False, egress_isolated=None),
+        rights=Rights(status="off"),
+    )  # fmt: skip
+    item = _item(workloads=[first, second]).model_copy(update={"facts": {first: facts}})
+    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    repo.add_result(run, item, _result(item))
+    rows = repo._conn.execute("SELECT risk_points FROM workload ORDER BY id").fetchall()
+    assert [r["risk_points"] for r in rows] == [workload_points(facts), 18]
