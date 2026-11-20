@@ -6,8 +6,8 @@ Trivy's and the registries': a plain GET to each fixed URL, with no query string
 cluster. ``KUBEDELOS_THREAT_FEEDS=false`` turns them off.
 
 A feed never fails a scan or the UI start. A download that is too large, an HTTP error, or a body that is not the
-feed (no valid row, too many rows, a wrong header, broken JSON or gzip, or fewer than half the rows of the stored
-copy) is logged as one warning and the last stored copy is kept.
+feed (no valid row, too many rows, a wrong header, broken JSON or gzip, or fewer than half the rows of a stored
+copy younger than ``SHRINK_GRACE``) is logged as one warning and the last stored copy is kept.
 Storing is one ``BEGIN IMMEDIATE`` transaction that checks freshness again under the lock, so two processes that
 refresh at once store the feed once.
 """
@@ -35,6 +35,9 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 # EPSS moved from epss.cyentia.com in 2025 (the old host 301-redirects here); this URL 302s to the dated file.
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 MAX_AGE = timedelta(hours=24)
+# How long a sharply smaller copy is refused: after that the old copy is replaced anyway, so a feed that really did
+# lose half its rows heals itself instead of being refused for ever.
+SHRINK_GRACE = 7 * MAX_AGE
 MAX_DOWNLOAD = 32 * 2**20
 MAX_EPSS_CSV = 64 * 2**20  # decompressed; the real file is about 10 MB
 MAX_FEED_ROWS = 2_000_000  # per feed; EPSS has about 300,000 rows and KEV about 1,500
@@ -186,15 +189,19 @@ _FETCH = {"kev": (KEV_URL, parse_kev, _store_kev), "epss": (EPSS_URL, parse_epss
 def _store(conn: sqlite3.Connection, name: str, version: str | None, rows: dict, now: datetime) -> bool:
     """Replace the stored copy of feed ``name`` in one transaction; False if another refresh stored it meanwhile.
 
-    A copy with fewer than half the rows of the stored one is refused: a feed does not lose half its CVEs in a day,
-    so it is more likely broken or cut short, and storing it would drop real KEV and EPSS marks.
+    A copy with fewer than half the rows of the stored one is refused while the stored one is younger than
+    ``SHRINK_GRACE``: a feed does not lose half its CVEs in a day, so it is more likely broken or cut short, and storing
+    it would drop real KEV and EPSS marks. Past that, the smaller copy is taken as the feed's real new size.
     """
     with write_lock(conn):
         if _is_fresh(conn, name, now):
             return False
-        stored = conn.execute("SELECT rows FROM threat_feed WHERE name = ?", (name,)).fetchone()
-        if stored is not None and len(rows) * 2 < stored[0]:
-            raise FeedError(f"{len(rows)} rows, fewer than half of the stored {stored[0]}")
+        stored = conn.execute("SELECT rows, fetched_at FROM threat_feed WHERE name = ?", (name,)).fetchone()
+        if stored is not None and len(rows) * 2 < stored[0] and now - datetime.fromisoformat(stored[1]) < SHRINK_GRACE:
+            raise FeedError(
+                f"{len(rows)} rows, fewer than half of the stored {stored[0]}; the old copy is kept until it is older"
+                f" than {SHRINK_GRACE.days} days"
+            )
         _FETCH[name][2](conn, rows)
         conn.execute("DELETE FROM threat_intel WHERE kev = 0 AND epss IS NULL")
         conn.execute(

@@ -344,3 +344,21 @@ def test_feed_rows_are_bounded(monkeypatch):
     with pytest.raises(threatintel.FeedError, match="rows"):
         threatintel.parse_epss(epss_body([f"CVE-2024-{i:04d},0.5,0.5" for i in range(1, 4)]))
     assert len(threatintel.parse_kev(_kev(2))[1]) == 2
+
+
+def test_a_shrunk_feed_is_accepted_once_the_old_copy_is_a_week_old(conn):
+    threatintel.refresh(conn, Feeds(kev=_kev(4)).client(), NOW)
+    assert threatintel.SHRINK_GRACE == 7 * threatintel.MAX_AGE
+    within = NOW + timedelta(days=7) - timedelta(minutes=1)
+    assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), within)["kev"] == "failed"
+    assert _feeds(conn)["kev"] == (NOW.isoformat(), "2026.11.19", 4)
+    after = NOW + timedelta(days=7, minutes=1)
+    assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), after)["kev"] == "updated"
+    assert _feeds(conn)["kev"] == (after.isoformat(), "2026.11.19", 1)
+
+
+def test_the_refusal_says_the_old_copy_is_kept_for_a_week(conn, caplog):
+    threatintel.refresh(conn, Feeds(kev=_kev(4)).client(), NOW)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), NOW + timedelta(days=2))
+    assert "kept until it is older than 7 days" in caplog.records[-1].getMessage()
