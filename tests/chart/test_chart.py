@@ -730,3 +730,15 @@ def test_schema_accepts_dotted_secret_names(render):
 
 def test_configmap_names_the_secrets_dir_the_chart_mounts(render):
     assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_SECRETS_DIR"] == "/run/kubedelos"
+
+
+FEEDS_EGRESS = "networkPolicy.egress restricts egress"
+EGRESS = {"networkPolicy": {"egress": [{"to": [{"ipBlock": {"cidr": "10.0.0.0/8"}}]}]}}
+
+
+def test_notes_warn_when_feeds_meet_restricted_egress(notes):
+    text = notes({"threatFeeds": {"enabled": True}, **EGRESS})
+    assert FEEDS_EGRESS in text
+    assert "www.cisa.gov" in text and "epss.empiricalsecurity.com" in text
+    assert FEEDS_EGRESS not in notes({"threatFeeds": {"enabled": True}})
+    assert FEEDS_EGRESS not in notes(EGRESS)

@@ -133,8 +133,8 @@ These can make a workload read as less exposed than it is:
 `pod` facts are still recorded from the pod spec, `exposure` is `unknown`, `network` is `null`, `rights.status` is `off`,
 and every fact source other than `pod_security` is `off`.
 
-The Helm chart sets it to `"false"` for now: it grants no RBAC for these lists yet, which is a follow-up. To use the
-facts in a cluster before then, grant the list calls above to the kubedelos ServiceAccount and set the variable.
+In the Helm chart, `attackSurface.enabled` (on by default) sets the variable and grants the kubedelos ClusterRole the
+list calls above; `false` turns the facts off and drops those rules.
 
 ## The JSON (v1)
 

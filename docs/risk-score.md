@@ -160,8 +160,8 @@ therefore delay a cancel that arrives at that point by up to the timeouts above.
 `KUBEDELOS_THREAT_FEEDS=false` turns the downloads off. A copy already stored is still used as it is; with no copy,
 known exploitation adds nothing.
 
-The Helm chart sets `KUBEDELOS_THREAT_FEEDS=false`, because many clusters give pods no egress to `cisa.gov` and
-`empiricalsecurity.com`. See [Running kubedelos in a cluster](in-cluster.md#threat-feeds) to turn them on.
+The Helm chart leaves them off by default (`threatFeeds.enabled: false`), because many clusters give pods no egress to
+`www.cisa.gov` and `epss.empiricalsecurity.com`. See [Running kubedelos in a cluster](in-cluster.md#threat-feeds) to turn them on.
 
 ## Storage
 

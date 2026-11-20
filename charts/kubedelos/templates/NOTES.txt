@@ -36,3 +36,8 @@ enforces NetworkPolicy, and check the other policies in this namespace.
 Pod pull secrets are on: kubedelos can read (get) any Secret in {{ join ", " .Values.registries.podPullSecretNamespaces }}, not only image pull secrets, through a Role per namespace.
 Keep that list to namespaces whose Secrets you accept sharing with this deployment.
 {{- end }}
+{{- if and .Values.threatFeeds.enabled .Values.networkPolicy.enabled .Values.networkPolicy.egress }}
+
+Threat feeds are on and networkPolicy.egress restricts egress: allow HTTPS (443) to www.cisa.gov and
+epss.empiricalsecurity.com, or the downloads time out before each scan and the risk score counts no known exploitation.
+{{- end }}

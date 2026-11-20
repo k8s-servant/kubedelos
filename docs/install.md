@@ -70,7 +70,8 @@ Every call is read-only; kubedelos never changes the cluster and reads no Secret
 - for the [attack-surface facts](attack-surface.md#what-is-recorded): `serviceaccounts`, `services`, `ingresses`,
   `httproutes`, `networkpolicies`, `roles`, `rolebindings`, `clusterroles` and `clusterrolebindings`.
 
-What it may not list is skipped with a warning and the run is marked incomplete; it never reads as "no findings".
+What it may not list is skipped with a warning and the run is marked incomplete; it never reads as "no findings". The
+Helm chart's ClusterRole grants the same lists to `kubedelos serve`.
 
 ### Private registries
 
