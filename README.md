@@ -8,6 +8,11 @@ Scan the container images running in a Kubernetes cluster with Trivy.
 
 Status: pre-alpha. Interfaces and output may change.
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/dashboard-dark.png">
+  <img alt="The kubedelos dashboard: counts per severity, the worst images and the fix-first list ordered by risk score" src="docs/images/dashboard-light.png">
+</picture>
+
 ## Why kubedelos
 
 [Trivy](https://github.com/aquasecurity/trivy) does the scanning, and kubedelos doesn't replace it: `trivy image` and
@@ -43,6 +48,8 @@ kubedelos ui
 the workloads in the cluster, scans each unique image once with Trivy, and shows the results on the dashboard. Owners
 are read from the `kubedelos.io/owner-email` namespace annotation. [Install](docs/install.md) has the requirements, the
 cluster permissions, uv and the Helm chart.
+
+![A scan from the Scans page, then the dashboard with the top fix opened, then the findings sorted by risk](docs/images/scan.gif)
 
 ## Contents
 
@@ -130,6 +137,11 @@ The exposure, host access and rights come from the [attack-surface facts](docs/a
 workload container, from list calls only and without reading a Secret. The two threat feeds are downloaded at most once
 a day with plain GETs that send nothing about the cluster. `KUBEDELOS_ATTACK_SURFACE=false` and
 `KUBEDELOS_THREAT_FEEDS=false` turn them off.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/fix-first-dark.png">
+  <img alt="The fix-first list with its top fix opened: risk 73 from critical +40, EPSS 0.88 +15, external +15 and root unknown +3, and the images it affects" src="docs/images/fix-first-light.png">
+</picture>
 
 ## Ask your agent
 

@@ -51,6 +51,11 @@ follows the system light or dark theme.
 
 ## Pages
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="images/findings-risk-dark.png">
+  <img alt="The findings page sorted by risk, with the Risk column first and the filters above" src="images/findings-risk-light.png">
+</picture>
+
 - **Dashboard (`/`)**: the latest whole-cluster run, with an incomplete marker when some namespaces could not be listed.
   KPI tiles show the change against the previous comparable run; the all findings tile carries a severity bar and a
   legend whose entries link to the findings. A Worst images panel ranks images by Critical and High, and a fix-first list
