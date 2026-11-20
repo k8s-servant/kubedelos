@@ -93,11 +93,13 @@ def test_refresh_stores_both_feeds(conn):
 def test_a_new_copy_replaces_the_old_one(conn):
     threatintel.refresh(conn, Feeds().client(), NOW)
     newer = Feeds(
-        kev=kev_body([{"cveID": "CVE-2024-0002", "dateAdded": "2024-02-11"}]),
+        kev=kev_body(
+            [{"cveID": "CVE-2024-0002", "dateAdded": "2024-02-11"}, {"cveID": "CVE-2024-0004", "dateAdded": None}]
+        ),
         epss=epss_body(["CVE-2024-0002,0.20000,0.80000"]),
     )
     assert threatintel.refresh(conn, newer.client(), NOW + timedelta(hours=25)) == {"kev": "updated", "epss": "updated"}
-    assert _intel(conn) == {"CVE-2024-0002": (1, "2024-02-11", 0.2, 0.8)}
+    assert _intel(conn) == {"CVE-2024-0002": (1, "2024-02-11", 0.2, 0.8), "CVE-2024-0004": (1, None, None, None)}
 
 
 def test_parse_epss_without_the_model_line():
@@ -304,3 +306,41 @@ def test_refresh_in_background_runs_a_daemon_thread(tmp_path, monkeypatch):
     assert thread is not None and thread.daemon
     thread.join(5)
     assert calls == [settings]
+
+
+def _kev(n):
+    return kev_body([{"cveID": f"CVE-2024-{i:04d}", "dateAdded": "2024-01-01"} for i in range(1, n + 1)])
+
+
+def test_a_feed_that_shrank_sharply_is_refused(conn, caplog):
+    threatintel.refresh(conn, Feeds(kev=_kev(4)).client(), NOW)
+    before_intel, before_feeds = _intel(conn), _feeds(conn)
+    later = NOW + timedelta(days=2)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), later)["kev"] == "failed"
+    warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(warnings) == 1 and warnings[0].startswith("threat feed kev not updated: ")
+    assert _intel(conn) == before_intel and _feeds(conn)["kev"] == before_feeds["kev"]
+    assert threatintel.refresh(conn, Feeds(kev=_kev(3)).client(), later)["kev"] == "updated"  # at least half
+    assert _feeds(conn)["kev"] == (later.isoformat(), "2026.11.19", 3)
+
+
+def test_a_first_copy_has_no_floor(conn):
+    assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), NOW)["kev"] == "updated"
+
+
+def test_epss_decompressed_size_is_bounded(monkeypatch):
+    assert threatintel.MAX_EPSS_CSV == 64 * 2**20
+    monkeypatch.setattr(threatintel, "MAX_EPSS_CSV", 64)
+    with pytest.raises(threatintel.FeedError, match="decompressed"):
+        threatintel.parse_epss(epss_body(["CVE-2024-0001,0.5,0.5"] * 10))
+
+
+def test_feed_rows_are_bounded(monkeypatch):
+    assert threatintel.MAX_FEED_ROWS == 2_000_000
+    monkeypatch.setattr(threatintel, "MAX_FEED_ROWS", 2)
+    with pytest.raises(threatintel.FeedError, match="rows"):
+        threatintel.parse_kev(_kev(3))
+    with pytest.raises(threatintel.FeedError, match="rows"):
+        threatintel.parse_epss(epss_body([f"CVE-2024-{i:04d},0.5,0.5" for i in range(1, 4)]))
+    assert len(threatintel.parse_kev(_kev(2))[1]) == 2

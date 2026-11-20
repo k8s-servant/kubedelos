@@ -6,7 +6,8 @@ Trivy's and the registries': a plain GET to each fixed URL, with no query string
 cluster. ``KUBEDELOS_THREAT_FEEDS=false`` turns them off.
 
 A feed never fails a scan or the UI start. A download that is too large, an HTTP error, or a body that is not the
-feed (no valid row, a wrong header, broken JSON or gzip) is logged as one warning and the last stored copy is kept.
+feed (no valid row, too many rows, a wrong header, broken JSON or gzip, or fewer than half the rows of the stored
+copy) is logged as one warning and the last stored copy is kept.
 Storing is one ``BEGIN IMMEDIATE`` transaction that checks freshness again under the lock, so two processes that
 refresh at once store the feed once.
 """
@@ -35,7 +36,8 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 MAX_AGE = timedelta(hours=24)
 MAX_DOWNLOAD = 32 * 2**20
-MAX_EPSS_CSV = 256 * 2**20  # decompressed
+MAX_EPSS_CSV = 64 * 2**20  # decompressed; the real file is about 10 MB
+MAX_FEED_ROWS = 2_000_000  # per feed; EPSS has about 300,000 rows and KEV about 1,500
 FEEDS = ("kev", "epss")
 
 _CVE = re.compile(r"CVE-\d{4}-\d{4,}")
@@ -77,10 +79,16 @@ def parse_kev(body: bytes) -> tuple[str | None, dict[str, date | None]]:
     for entry in entries:
         if isinstance(entry, dict) and (cve := _cve(entry.get("cveID"))):
             rows[cve] = _date(entry.get("dateAdded"))
+            _check_rows(rows)
     if not rows:
         raise FeedError("no valid entry")
     version = catalog.get("catalogVersion")
     return (version if isinstance(version, str) else None), rows
+
+
+def _check_rows(rows: dict) -> None:
+    if len(rows) > MAX_FEED_ROWS:
+        raise FeedError(f"more than {MAX_FEED_ROWS} rows")
 
 
 def _probability(text: str) -> float | None:
@@ -125,6 +133,7 @@ def parse_epss(body: bytes) -> tuple[str | None, dict[str, tuple[float, float]]]
         epss, percentile = _probability(fields[1]), _probability(fields[2])
         if epss is not None and percentile is not None:
             rows[cve] = (epss, percentile)
+            _check_rows(rows)
     if not rows:
         raise FeedError("no valid row")
     return version, rows
@@ -175,10 +184,17 @@ _FETCH = {"kev": (KEV_URL, parse_kev, _store_kev), "epss": (EPSS_URL, parse_epss
 
 
 def _store(conn: sqlite3.Connection, name: str, version: str | None, rows: dict, now: datetime) -> bool:
-    """Replace the stored copy of feed ``name`` in one transaction; False if another refresh stored it meanwhile."""
+    """Replace the stored copy of feed ``name`` in one transaction; False if another refresh stored it meanwhile.
+
+    A copy with fewer than half the rows of the stored one is refused: a feed does not lose half its CVEs in a day,
+    so it is more likely broken or cut short, and storing it would drop real KEV and EPSS marks.
+    """
     with write_lock(conn):
         if _is_fresh(conn, name, now):
             return False
+        stored = conn.execute("SELECT rows FROM threat_feed WHERE name = ?", (name,)).fetchone()
+        if stored is not None and len(rows) * 2 < stored[0]:
+            raise FeedError(f"{len(rows)} rows, fewer than half of the stored {stored[0]}")
         _FETCH[name][2](conn, rows)
         conn.execute("DELETE FROM threat_intel WHERE kev = 0 AND epss IS NULL")
         conn.execute(

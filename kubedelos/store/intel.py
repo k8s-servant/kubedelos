@@ -2,7 +2,7 @@
 
 ``intel_for`` gives what CISA KEV and EPSS say about some CVEs, ``feeds`` when each feed was last fetched, and
 ``risk_shown`` whether a run has anything to score beyond severity: workload facts, or a copy of either feed. Without
-both, the risk score would only repeat the severity, so the UI leaves it out. All read-only: the feeds are written by
+either, the risk score would only repeat the severity, so the UI leaves it out. All read-only: the feeds are written by
 ``kubedelos.threatintel`` alone.
 """
 
