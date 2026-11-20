@@ -192,3 +192,10 @@ Your own agent can query these facts through the read-only MCP server; see [Ask 
 
 The [risk score](risk-score.md) turns these facts into points for exposure, host access and API rights, and counts
 missing facts as unknown, never as safe.
+
+## Related
+
+- [Risk score](risk-score.md): how these facts become points.
+- [Install](install.md#cluster-permissions): the list calls to grant.
+- [Ask your agent](mcp.md): the `attack_surface` and `workload` tools.
+- [All guides](README.md)

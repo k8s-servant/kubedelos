@@ -189,3 +189,10 @@ when the scan stores the row. The migration fills it for the rows already stored
 - **The findings page shows a Risk column while the score is shown**: a sort by a value the page does not show would
   confuse.
 - **`find_vulnerability` orders workloads by score while the score is shown**, then by exposure as before.
+
+## Related
+
+- [Attack-surface facts](attack-surface.md): where exposure, host access and rights come from.
+- [The local web UI](ui.md): the dashboard and findings pages that show the score.
+- [Running kubedelos in a cluster](in-cluster.md#threat-feeds): turning the feeds on in a cluster.
+- [All guides](README.md)

@@ -2,7 +2,7 @@
 
 This page explains what happens between pressing **Scan** and seeing findings: what kubedelos reads, what it
 downloads, what it keeps on disk and why, and which knobs change how long a scan takes. The settings named here are
-listed in the [README](../README.md#configuration) and, with their current values, on the UI's Settings page.
+listed in [Configuration](configuration.md) and, with their current values, on the UI's Settings page.
 
 ## In short
 
@@ -31,7 +31,29 @@ digest) and by platform: each image is scanned for the OS and architecture of th
 `linux/arm64` and so on).
 
 A namespace or resource your identity may not list is skipped with a warning, and the run is marked incomplete, so a
-gap never reads as "no findings". See [What gets scanned](../README.md#what-gets-scanned) for selectors and exclusions.
+gap never reads as "no findings". A forbidden node list only costs detail: the platform falls back to the most common
+one. [What a scan covers](#what-a-scan-covers) lists the selectors and exclusions.
+
+### What a scan covers
+
+Namespaces, namespace exclusions, a namespace label selector, a pod and workload label selector, and image exclusions
+narrow a scan. The defaults come from the [configuration](configuration.md); the Scans page can narrow them for one
+scan.
+
+Selectors use kubectl syntax (`team=payments,env!=dev`) and are applied by the API server. Deployments, StatefulSets and
+CronJobs that are scanned as templates match the label selector on their own labels, which can differ from their pod
+template labels. Image exclusions are globs matched against the normalised image name and the short Docker Hub forms,
+so `nginx:*` skips `nginx:1.19` and `docker.io/library/nginx:1.19` alike, and excluded images are never scanned. A
+pattern's registry host is matched case-insensitively, and `index.docker.io` counts as `docker.io`. Anchor
+patterns on the registry and repository (`registry.example/vendor/*`, not `*vendor*`), because `*` also matches across
+`/` and `:`, and a broad pattern could match an image someone named to fit it. Each run records its scope, so runs that
+covered different things are never compared as if they were the same.
+
+### Package types
+
+By default both OS packages and application libraries are scanned. OS packages only skips the 1.5 GB Trivy Java DB;
+libraries only scans application dependencies. Each finding records its class (`os` or `library`), and cached results
+are kept per level, so a narrower scan never answers for a wider one.
 
 ## 2. The result cache: skip what was just scanned
 
@@ -87,7 +109,7 @@ out.
 Each image is scanned by its own `trivy image` process, with the vulnerability scanner only. Trivy fetches the image
 **from the registry**, over the network, to the machine running kubedelos; it does not read the image from the
 cluster's nodes. It uses your Docker login for private registries (see
-[Private registries](../README.md#private-registries)).
+[Private registries](install.md#private-registries)).
 
 ### Parallelism
 
@@ -188,3 +210,10 @@ says how much of the time the 10 slowest took.
 The data directory is `~/Library/Application Support/kubedelos` on macOS and `~/.local/share/kubedelos` on Linux
 (`KUBEDELOS_DATA_DIR`); the cache directory is `~/Library/Caches/kubedelos` on macOS and `~/.cache/kubedelos` on Linux
 (`KUBEDELOS_CACHE_DIR`). The Settings page shows the ones in use. Delete cache files only while no scan runs.
+
+## Related
+
+- [Configuration](configuration.md): the settings named on this page.
+- [The local web UI](ui.md): the Scans, failed images and scan times pages.
+- [Install](install.md): Trivy, disk space and the cluster permissions a scan needs.
+- [All guides](README.md)
