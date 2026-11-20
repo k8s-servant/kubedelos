@@ -289,6 +289,10 @@ def test_sort_by_risk_orders_by_score_and_shows_the_column(client, risk_run, add
     html = client.get("/findings", params={"run_id": run_id, "sort": "risk"}).text
     assert 'aria-sort="descending"' in html and "Risk</a></th>" in html
     assert html.index("CVE-HOT") < html.index("CVE-COLD")
+    head = html[html.index("<thead>") : html.index("</thead>")]
+    assert head.index("Risk</a>") < head.index("Severity</a>")  # first, as on the dashboard, so it stays in view
+    row = html[html.index("<tbody>") :]
+    assert row.index('<td class="risk-cell">') < row.index('<span class="sev ')
     assert '<td class="risk-cell">53</td>' in html and '<td class="risk-cell">45</td>' in html
     assert "sort=risk" in client.get("/findings", params={"run_id": run_id, "sort": "risk", "dir": "asc"}).text
     asc = client.get("/findings", params={"run_id": run_id, "sort": "risk", "dir": "asc"}).text
