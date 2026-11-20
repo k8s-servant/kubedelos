@@ -289,7 +289,7 @@ def find_vulnerability(
         "cluster": name,
         "run": run_payload(selected, now),
         "vuln_id": vuln_id,
-        "kev": found.kev,
+        "kev": found.kev if "kev" in intel.feeds(conn) else None,  # no KEV copy: unknown, never "not listed"
         "kev_added": found.kev_added.isoformat() if found.kev_added else None,
         "epss": found.epss,
         "epss_percentile": found.percentile,

@@ -89,8 +89,9 @@ Argument values and defaults:
     and no threat feed copy; then every `score` is `null`, every `factors` is `[]`, and the order is by severity and
     exposure alone. `facts` says whether the run has workload facts at all. `feeds` gives when the `kev` and `epss`
     feeds were last fetched (ISO 8601), or `null` for a feed with no copy. The MCP server never fetches them.
-  - `find_vulnerability` also returns `kev`, `kev_added`, `epss` and `epss_percentile` (`false` or `null` when the
-    feeds do not know the CVE). While `risk.shown` is true its `workloads` are ordered by `score`, then as before.
+  - `find_vulnerability` also returns `kev`, `kev_added`, `epss` and `epss_percentile`, each `null` when unknown.
+    `kev` is `null` until a KEV feed copy exists, and `false` once it has one that does not list the CVE. While
+    `risk.shown` is true its `workloads` are ordered by `score`, then as before.
 
 Notes on the tools:
 

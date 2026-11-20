@@ -788,6 +788,18 @@ def test_find_vulnerability_without_intel_or_facts_keeps_exposure_order(world):
         conn.execute("UPDATE workload SET facts = NULL")
     result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
     assert result["risk"]["shown"] is False
-    assert (result["kev"], result["kev_added"], result["epss"], result["epss_percentile"]) == (False, None, None, None)
+    assert (result["kev"], result["kev_added"], result["epss"], result["epss_percentile"]) == (None, None, None, None)
     assert [(w["score"], w["factors"]) for w in result["workloads"]] == [(None, [])] * 3
     assert [w["name"] for w in result["workloads"]] == ["gateway", "site", "worker"]
+
+
+def test_find_vulnerability_kev_is_false_only_when_the_kev_feed_has_a_copy(world):
+    conn, repo, db = world
+    _cve_world(repo)
+    with conn:
+        conn.execute("INSERT INTO threat_feed VALUES ('epss', '2026-01-31T09:00:00+00:00', 'v1', 1)")
+    assert tools.find_vulnerability(conn, db, NOW, "CVE-1")["kev"] is None  # only EPSS: KEV unknown
+    with conn:
+        conn.execute("INSERT INTO threat_feed VALUES ('kev', '2026-01-31T08:00:00+00:00', 'v1', 1)")
+    result = tools.find_vulnerability(conn, db, NOW, "CVE-1")
+    assert (result["kev"], result["kev_added"], result["epss"]) == (False, None, None)  # known not listed

@@ -28,7 +28,7 @@ collected, so treat them as possibly exposed).
 Each item has a risk score and its factors (severity, exploited, exposure, host, rights, with points and a reason).
 Explain each fix's place in the order from its factors, such as a known-exploited CVE or an external workload. The
 score is kubedelos's own 0-100 ranking, not a CVE severity: never present it as one. If risk.shown is false, the items
-have no score and are ordered by severity alone; say so plainly. If risk.facts is false, no workload facts were
+have no score and are ordered by their Critical and High findings alone; say so plainly. If risk.facts is false, no workload facts were
 collected, so the exposure, host and rights points are assumptions; say that too.
 
 Finish with a short ordered list of what to do and why.
