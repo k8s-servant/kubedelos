@@ -39,6 +39,7 @@ MAX_AGE = timedelta(hours=24)
 # lose half its rows heals itself instead of being refused for ever.
 SHRINK_GRACE = 7 * MAX_AGE
 MAX_DOWNLOAD = 32 * 2**20
+MAX_REDIRECTS = 5
 MAX_EPSS_CSV = 64 * 2**20  # decompressed; the real file is about 10 MB
 MAX_FEED_ROWS = 2_000_000  # per feed; EPSS had about 409,000 rows and KEV about 1,800 in November 2026
 FEEDS = ("kev", "epss")
@@ -143,17 +144,31 @@ def parse_epss(body: bytes) -> tuple[str | None, dict[str, tuple[float, float]]]
 
 
 def _download(client: httpx.Client, url: str) -> bytes:
-    """The body at ``url``, streamed and cut off past ``MAX_DOWNLOAD`` bytes."""
-    with client.stream("GET", url) as response:
-        if response.status_code >= 400:
-            raise FeedError(f"HTTP {response.status_code}")
-        chunks, size = [], 0
-        for chunk in response.iter_bytes():
-            size += len(chunk)
-            if size > MAX_DOWNLOAD:
-                raise FeedError(f"more than {MAX_DOWNLOAD} bytes")
-            chunks.append(chunk)
-    return b"".join(chunks)
+    """The body at ``url``, streamed and cut off past ``MAX_DOWNLOAD`` bytes.
+
+    Redirects are followed here, not by the client, so that every hop is checked before it is requested: a feed is
+    fetched over HTTPS only, whatever client a caller passes.
+    """
+    for _ in range(MAX_REDIRECTS + 1):
+        if httpx.URL(url).scheme != "https":
+            raise FeedError("refusing a request that is not https")
+        with client.stream("GET", url, follow_redirects=False) as response:
+            if response.is_redirect:
+                location = response.headers.get("location")
+                if not location:
+                    raise FeedError("redirect without a location")
+                url = str(response.url.join(location))
+                continue
+            if response.status_code >= 400:
+                raise FeedError(f"HTTP {response.status_code}")
+            chunks, size = [], 0
+            for chunk in response.iter_bytes():
+                size += len(chunk)
+                if size > MAX_DOWNLOAD:
+                    raise FeedError(f"more than {MAX_DOWNLOAD} bytes")
+                chunks.append(chunk)
+            return b"".join(chunks)
+    raise FeedError("too many redirects")
 
 
 def _is_fresh(conn: sqlite3.Connection, name: str, now: datetime) -> bool:

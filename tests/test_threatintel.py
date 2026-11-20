@@ -371,3 +371,25 @@ def test_the_refusal_says_the_old_copy_is_kept_for_a_week(conn, caplog):
     with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
         threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), NOW + timedelta(days=2))
     assert "kept until it is older than 7 days" in caplog.records[-1].getMessage()
+
+
+def test_a_redirect_that_leaves_https_is_refused(conn, caplog):
+    threatintel.refresh(conn, Feeds().client(), NOW)
+    before_intel, before_feeds = _intel(conn), _feeds(conn)
+    plain = "http://example.com/kev.json"
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if str(request.url) == threatintel.KEV_URL:
+            return httpx.Response(302, headers={"Location": plain})
+        return httpx.Response(200, content=kev_body())
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), follow_redirects=True)
+    later = NOW + timedelta(days=2)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, client, later)["kev"] == "failed"
+    assert plain not in seen
+    kev_warnings = [r.getMessage() for r in caplog.records if r.getMessage().startswith("threat feed kev ")]
+    assert len(kev_warnings) == 1 and "https" in kev_warnings[0]
+    assert _intel(conn) == before_intel and _feeds(conn)["kev"] == before_feeds["kev"]

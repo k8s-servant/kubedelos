@@ -11,7 +11,7 @@
   The findings table's accepted column is now called Status. See [Risk score](docs/risk-score.md).
 - Threat feeds: CISA KEV (`https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json`) and
   EPSS (`https://epss.empiricalsecurity.com/epss_scores-current.csv.gz`) are downloaded at most once a day, before a
-  scan and when `kubedelos ui` starts (in the background), with plain GETs that send nothing about the cluster. A
+  scan and when `kubedelos ui` starts (in the background), with plain HTTPS GETs (a redirect that leaves HTTPS is refused) that send nothing about the cluster. A
   broken, oversized or sharply smaller copy is refused and the stored one kept; a feed never fails a scan or the UI.
   `KUBEDELOS_THREAT_FEEDS=false` turns them off, and the chart sets it to `false` because many clusters give pods no
   egress. The Settings page shows when each feed was last fetched. Schema migration 13 adds the `threat_intel` and
