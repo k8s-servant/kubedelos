@@ -261,6 +261,12 @@ Gateway API routes), whether NetworkPolicies isolate it, and what its ServiceAcc
 objects and reads no Secret; `KUBEDELOS_ATTACK_SURFACE=false` turns it off. See [Attack-surface
 facts](docs/attack-surface.md).
 
+## Ask your agent
+
+`kubedelos mcp` is a read-only MCP server over stdio, so the agent you already use (Claude Code, VS Code Copilot) can
+answer "what should I fix first in my-cluster?" from your local scan results. It never reaches the cluster, calls no
+LLM and needs no API key: `claude mcp add kubedelos -- kubedelos mcp`. See [Ask your agent](docs/mcp.md).
+
 ## Configuration
 
 Settings come from environment variables. `kubedelos ui --context` and `--kubeconfig` win over theirs, and the Scans

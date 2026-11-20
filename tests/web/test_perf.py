@@ -11,9 +11,11 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
-from kubedelos.store import diff, queries
+from kubedelos.mcp_server import tools
+from kubedelos.store import diff, queries, workloads
 from kubedelos.store.db import connect
 from kubedelos.web.app import create_app
+from tests.mcp_server.conftest import make_facts
 from tests.web.conftest import BASE_URL, PORT, TOKEN
 from tests.web.seed import CONTEXT, seed_acceptances, seed_large
 
@@ -24,6 +26,12 @@ FULL_SCAN = re.compile(r"^SCAN (finding|image_result|workload|scan_run|f|r|w)\b"
 REACHED = re.compile(r"^SEARCH (finding|f) ")
 KEYED = re.compile(r"\(image_result_id=")
 PRIOR_RUNS = 4  # earlier runs that share the CVEs, so a lookup that reads every run's rows shows in the plan
+
+
+def _seed_facts(conn) -> None:
+    """v1 facts on every workload row, so the MCP timings include parsing them."""
+    with conn:
+        conn.execute("UPDATE workload SET facts = ?", (make_facts(level="external").model_dump_json(),))
 
 
 def _plans(conn, call) -> list[str]:
@@ -44,6 +52,10 @@ def test_query_plans_use_indexes(tmp_path):
     run_id = seed_large(conn, images=40, findings=2000, namespaces=5)
     seed_acceptances(conn)
     run = queries.newest_run(conn, CONTEXT, cluster_scope=True)
+    ref, vuln_id = conn.execute(
+        "SELECT r.ref, f.vuln_id FROM image_result r JOIN finding f ON f.image_result_id = r.id WHERE r.run_id = ?",
+        (run_id,),
+    ).fetchone()
     calls = {
         "newest_run": lambda: queries.newest_run(conn, CONTEXT, cluster_scope=True),
         "previous_comparable": lambda: queries.previous_comparable(conn, run),
@@ -64,6 +76,11 @@ def test_query_plans_use_indexes(tmp_path):
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),
         "result_runs": lambda: queries.result_runs(conn, CONTEXT),
+        "workloads": lambda: workloads.workloads(conn, run_id, namespace="ns-01", name="app1"),
+        "workloads cve": lambda: workloads.workloads(conn, run_id, vuln_id=vuln_id),
+        "cve_packages": lambda: workloads.cve_packages(conn, run_id, vuln_id),
+        "cve_images": lambda: workloads.cve_images(conn, run_id, vuln_id),
+        "top_findings": lambda: workloads.top_findings(conn, run_id, ref),
         "findings_export": lambda: queries.findings_export(conn, run_id, queries.FindingFilter()).fetchmany(10),
     }
     offenders = {}
@@ -117,3 +134,50 @@ def test_pages_under_300ms(settings):
         timings = {path: _median(client, path) for path in pages}
     report = ", ".join(f"{path} {seconds * 1000:.0f} ms" for path, seconds in timings.items())
     assert all(seconds < BUDGET for seconds in timings.values()), report
+
+
+@pytest.mark.perf
+def test_mcp_cve_lookup_under_300ms(tmp_path):
+    """``find_vulnerability`` for a CVE that every scanned image has."""
+    conn = connect(tmp_path / "large.db")
+    for _ in range(PRIOR_RUNS):
+        seed_large(conn)
+    run_id = seed_large(conn)
+    vuln_id = "CVE-2099-0001"
+    with conn:  # a base-image CVE: every image that was scanned has it
+        conn.execute(
+            "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, fixed_version, severity)"
+            " SELECT id, ?, 'libc', '1.0', '1.1', 'HIGH' FROM image_result WHERE run_id = ? AND status = 'ok'",
+            (vuln_id, run_id),
+        )
+    _seed_facts(conn)
+    db = tools.Db(tmp_path / "large.db", CONTEXT)
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        result = tools.find_vulnerability(conn, db, tools._now(), vuln_id, limit=100)
+        timings.append(time.perf_counter() - start)
+    conn.close()
+    assert result["total"] > 100, result["total"]
+    assert result["workloads"][0]["facts"] is not None
+    assert statistics.median(timings) < BUDGET, timings
+
+
+@pytest.mark.perf
+def test_mcp_attack_surface_under_300ms(tmp_path):
+    """``attack_surface`` with no filters loads every workload row of the run with its counts."""
+    conn = connect(tmp_path / "large.db")
+    for _ in range(PRIOR_RUNS):
+        seed_large(conn)
+    seed_large(conn)
+    _seed_facts(conn)
+    db = tools.Db(tmp_path / "large.db", CONTEXT)
+    timings = []
+    for _ in range(3):
+        start = time.perf_counter()
+        result = tools.attack_surface(conn, db, tools._now(), limit=100)
+        timings.append(time.perf_counter() - start)
+    conn.close()
+    assert result["total"] > 0, result["total"]
+    assert result["items"][0]["facts"] is not None
+    assert statistics.median(timings) < BUDGET, timings

@@ -208,6 +208,22 @@ def _log_access() -> None:
 
 
 @app.command()
+def mcp(
+    context: Annotated[str | None, typer.Option(help="Cluster the tools use when called without one.")] = None,
+    data_dir: Annotated[Path | None, typer.Option(help="Directory holding the kubedelos database.")] = None,
+) -> None:
+    """Serve a read-only MCP server over stdio, for your agent to query the local scan database.
+
+    Stdout is the protocol channel, so this prints nothing there; errors go to stderr. It never reaches the cluster.
+    """
+    from kubedelos.mcp_server.server import run_stdio  # here, so other commands do not load the MCP SDK
+    from kubedelos.mcp_server.tools import Db
+
+    settings = _load_settings(data_dir=data_dir)
+    run_stdio(Db(settings.db_path, context))
+
+
+@app.command()
 def ui(
     port: Annotated[int, typer.Option(min=1, max=65535, help="Port to listen on.")] = 9370,
     host: Annotated[

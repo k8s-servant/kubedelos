@@ -84,6 +84,14 @@ def newest_run(conn: sqlite3.Connection, context: str, *, cluster_scope: bool) -
     return _build(conn, row) if row else None
 
 
+def run_by_number(conn: sqlite3.Connection, context: str, number: int) -> Run | None:
+    """The result run with this number in the context, whatever its scope; None when there is none."""
+    row = conn.execute(
+        f"{_RUN_SQL} WHERE context = ? AND number = ? AND status IN {_STATUS_SQL}", (context, number)
+    ).fetchone()
+    return _build(conn, row) if row else None
+
+
 def get_run(conn: sqlite3.Connection, context: str, run_id: int) -> Run:
     row = conn.execute(f"{_RUN_SQL} WHERE id = ?", (run_id,)).fetchone()
     if row is None:
@@ -186,6 +194,30 @@ JOIN finding f ON f.image_result_id = r.id
 WHERE r.run_id = :run
 GROUP BY {_UNIT_KEY_SQL}
 """  # noqa: S608 - only module constants are interpolated
+
+
+# The units of the given images only (``:refs`` is a JSON array), for the per-workload reads: the full form to list an
+# image's worst findings and the lean counting form to count them by severity. Same grouping as the forms above.
+REF_UNITS_SQL = f"""
+SELECT r.ref, f.vuln_id, f.pkg_name, f.installed_version,
+       MAX(f.fixed_version) AS fixed_version,
+       MAX({_RANK_SQL}) AS sev_rank,
+       {_SEVERITY_OF_RANK_SQL.format(rank=f"MAX({_RANK_SQL})")} AS severity
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+WHERE r.run_id = :run AND r.ref IN (SELECT value FROM json_each(:refs))
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
+
+REF_UNIT_COUNTS_SQL = f"""
+SELECT r.ref, MAX({_RANK_SQL}) AS sev_rank
+FROM image_result r
+JOIN finding f ON f.image_result_id = r.id
+WHERE r.run_id = :run AND r.ref IN (SELECT value FROM json_each(:refs))
+GROUP BY {_UNIT_KEY_SQL}
+"""  # noqa: S608 - only module constants are interpolated
+
+SEVERITIES = _SEVERITIES
 
 
 @dataclass(frozen=True)

@@ -187,3 +187,5 @@ facts in a cluster before then, grant the list calls above to the kubedelos Serv
 `runs_as_root`, `automount_token`, `ingress_isolated` and `egress_isolated` are true, false or `null` (unknown).
 `reads_secrets_scope` is `"cluster"`, a list of namespaces, or `null`. `host_ports` holds the container's `hostPort`
 values, sorted and unique.
+
+Your own agent can query these facts through the read-only MCP server; see [Ask your agent](mcp.md).
