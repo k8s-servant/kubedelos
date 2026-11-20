@@ -3,7 +3,8 @@
 Each ``Settings`` field is listed with its value and its source (``config.setting_sources``): a flag given to
 ``kubedelos ui``, its ``KUBEDELOS_*`` variable, or the default. The page answers "why did the scan do that?"; the Scans
 form can still change the scope, parallel images and package types for one scan. Below the table: the database file,
-the data and cache directories, the Trivy in use and the log level.
+the data and cache directories, the Trivy in use, the log level and when each threat feed (CISA KEV, EPSS) was last
+fetched.
 
 The Registries card says which cloud identity and which mounted Docker config Secrets (by name) the scans use, and
 which namespaces' pull secrets are read. In ``kubedelos serve`` it has a form, ``POST /settings/registry-test``, that
@@ -17,6 +18,7 @@ import logging
 import os
 import re
 import threading
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import parse_qs
 
@@ -30,6 +32,7 @@ from kubedelos.kube.inventory import DEFAULT_PLATFORM, parse_user_ref
 from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
+from kubedelos.store import intel
 from kubedelos.store.queries import newest_run, run_registry_hosts
 from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
@@ -139,6 +142,11 @@ def shown_value(field: str, value: object) -> str:
     return str(value)
 
 
+def fetched_text(fetched: datetime | None) -> str:
+    """When a threat feed was last fetched, in UTC, or that it never was."""
+    return fetched.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC") if fetched is not None else "never fetched"
+
+
 def log_level(raw: str | None) -> str:
     """``KUBEDELOS_LOG_LEVEL`` as ``kubedelos ui`` reads it: only ``info`` turns the access log on."""
     if not raw:
@@ -169,6 +177,7 @@ def settings(request: Request) -> HTMLResponse:
     with open_db(request) as conn:
         context = shown_context(request, conn)
         newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        fetched = intel.feeds(conn)
     trivy = f"custom: {Path(current.trivy_path)}" if current.trivy_path else f"v{TRIVY_VERSION} (pinned)"
     ctx = {
         "now": request.app.state.clock(),
@@ -181,6 +190,8 @@ def settings(request: Request) -> HTMLResponse:
             ("Cache directory", str(current.cache_dir)),
             ("Trivy", trivy),
             ("Log level", log_level(os.environ.get("KUBEDELOS_LOG_LEVEL"))),
+            ("CISA KEV last fetched", fetched_text(fetched.get("kev"))),
+            ("EPSS last fetched", fetched_text(fetched.get("epss"))),
         ],
     }
     return render(request, "settings.html", ctx)

@@ -636,3 +636,31 @@ def test_cache_hit_still_stores_facts(env, monkeypatch):
         repo._conn.execute("SELECT fact_sources FROM scan_run WHERE id = ?", (out.run_id,)).fetchone()[0]
     )
     assert sources["pod_security"] == "ok" and sources["services"] == "ok"
+
+
+def test_run_scan_refreshes_feeds_first_and_survives_failure(env, monkeypatch):
+    settings, repo, calls = env
+    settings = settings.model_copy(update={"threat_feeds": True})
+    progress: list = []
+    refreshed: list[list[str]] = []
+
+    def refresh_feeds(given):
+        refreshed.append(_phases(progress))
+        assert given is settings
+        raise RuntimeError("the feed server is down")
+
+    monkeypatch.setattr(service.threatintel, "refresh_feeds", refresh_feeds)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert out.status == "ok" and _status(repo, out.run_id) == "ok"
+    assert refreshed == [["threat-feeds"]]
+    assert _phases(progress)[:2] == ["threat-feeds", "inventory"]
+
+
+def test_run_scan_skips_the_feeds_when_they_are_off(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service.threatintel, "refresh_feeds", lambda s: pytest.fail("the feeds are off"))
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    progress: list = []
+    service.run_scan(settings, api=_api(), repo=repo, on_progress=progress.append)
+    assert "threat-feeds" not in _phases(progress)

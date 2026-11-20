@@ -419,3 +419,20 @@ def test_registry_test_host_check_ignores_case_and_a_trailing_dot(strict_hosts, 
     _seed_cluster_host(seed)
     client = make_serve_client()
     assert "is readable" in signed_post(client, "/settings/registry-test", {"image": "Cluster.Example.com/y:2"}).text
+
+
+def test_shows_the_threat_feeds_switch_and_each_feeds_last_fetch(client, seed):
+    def feed_row(html, label):
+        return html.split(label, 1)[1].split("</tr>", 1)[0]
+
+    html = unescape(client.get("/settings").text)
+    assert _rows(html)["threat_feeds"] == ("false", "environment")  # tests/conftest.py turns the feeds off
+    assert "never fetched" in feed_row(html, "CISA KEV last fetched")
+    assert "never fetched" in feed_row(html, "EPSS last fetched")
+    seed.repo._conn.execute(
+        "INSERT INTO threat_feed (name, fetched_at, version, rows) VALUES ('kev', '2026-11-20T08:00:00+00:00', 'v', 3)"
+    )
+    seed.repo._conn.commit()
+    html = unescape(client.get("/settings").text)
+    assert "2026-11-20 08:00 UTC" in feed_row(html, "CISA KEV last fetched")
+    assert "never fetched" in feed_row(html, "EPSS last fetched")
