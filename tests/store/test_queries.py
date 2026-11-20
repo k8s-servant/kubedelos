@@ -1142,6 +1142,26 @@ def test_findings_risk_sort(db):
         assert len(set(paged)) == 240
 
 
+def test_findings_other_sorts_score_the_same_as_the_risk_sort(db):
+    """Another sort scores only the page's rows; each row gets the score the risk sort and the export give it."""
+    conn, repo = db
+    run_id = _run(repo)
+    _risk_dataset(conn, repo, run_id)
+    by_key = {
+        k: r["score"]
+        for r in findings_page(conn, run_id, FindingFilter(sort="risk", scored=True), 1, per_page=1000)[0]
+        for k in _keys([r])
+    }
+    for sort in ("severity", "cve", "package", "image", "namespace", "fixed"):
+        f = FindingFilter(sort=sort, scored=True)
+        for page in (1, 4):  # page 4 of 4 is read from the far end
+            rows, total, _ = findings_page(conn, run_id, f, page, per_page=60)
+            assert total == 240 and len(rows) == 60
+            assert [r["score"] for r in rows] == [by_key[k] for k in _keys(rows)], (sort, page)
+        exported = findings_export(conn, run_id, f).fetchall()
+        assert [r["score"] for r in exported] == [by_key[k] for k in _keys(exported)], sort
+
+
 def test_findings_risk_without_score_is_severity_order(db):
     conn, repo = db
     run_id = _run(repo)
