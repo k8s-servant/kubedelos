@@ -14,8 +14,10 @@ updates:
         update-types: ["minor", "patch"]
     labels: ["dependencies", "area/python"]
 
-  # The container image's hashed locks (scripts/lock-image.sh). A bump in pyproject.toml that the lock no longer
-  # satisfies fails tests/test_packaging.py until the lock is regenerated.
+  # The container image's hashed locks (scripts/lock-image.sh). Dependabot bumps the pins it finds in place and does not
+  # re-resolve; a bump with wrong hashes fails the PR's image build, and one that breaks the dependency tree fails its
+  # pip check. Regenerating with scripts/lock-image.sh is the fix in both cases. A pyproject.toml bump the lock no longer
+  # satisfies fails tests/test_packaging.py.
   - package-ecosystem: pip
     directory: /requirements
     schedule:

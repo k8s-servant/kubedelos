@@ -42,7 +42,7 @@ def _locked(path: Path) -> dict[str, tuple[str, int]]:
         if pin := re.match(r"^([A-Za-z0-9_.-]+)==(\S+)", line):
             name = canonicalize_name(pin[1])
             pins[name] = (pin[2], 0)
-        elif name and line.strip().startswith("--hash=sha256:"):
+        elif name and re.fullmatch(r"--hash=sha256:[0-9a-f]{64}( \\)?", line.strip()):
             version, hashes = pins[name]
             pins[name] = (version, hashes + 1)
     return pins
