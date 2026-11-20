@@ -159,11 +159,15 @@ runs. When the scan ends, the run gets one of these statuses:
 | `ok` | every image was scanned or taken from the cache |
 | `partial` | some images failed; their findings are missing, everything else is complete |
 | `cancelled` | you stopped the scan; images already done are kept, none was started after the cancel |
-| `failed` | the scan stopped part-way, for example because Trivy or its DB could not be downloaded |
+| `failed` | the scan stopped part-way, for example because Trivy or its DB could not be downloaded, the cluster could not be listed, or the scope held nothing to scan |
 
-A cluster that can't be reached stops the scan before a run is recorded; the Scans page shows the error. A scan killed
+A run is recorded before the cluster is listed, so a cluster that can't be reached, or a selector the API server
+rejects, leaves a `failed` run, and the Scans history shows the reason under its status. A scope that selects no
+namespace, or where every namespace refuses the pod list, fails the run too ("no namespace matched the scope; nothing
+was scanned"), because an empty run would read as "no findings". A namespace that is listed and runs no pods gives an
+`ok` run with no images. A kubeconfig or context that can't be loaded stops the scan before any run is recorded. A scan killed
 outright (a closed laptop, a crash) leaves its run marked running; when the UI starts, and before each new scan, it
-closes every run no live process owns, with a note saying so.
+closes every run no live process owns as `failed`, with a note saying so in the history.
 
 The sidebar marks a cluster's newest scan as stale once it is more than 24 hours old.
 

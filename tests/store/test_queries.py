@@ -48,7 +48,7 @@ from kubedelos.store.queries import (
     scan_times,
     worst_images,
 )
-from kubedelos.store.repo import Repo
+from kubedelos.store.repo import NOTHING_SCANNED, STALE_NOTE, Repo
 
 _OPEN: list[sqlite3.Connection] = []
 CLUSTER = Settings().scope
@@ -825,6 +825,28 @@ def test_run_history_carries_the_trigger_and_requester(db):
     repo.start_run("ctx", "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
     rows, _ = run_history(conn, "ctx", 1)
     assert [(r.trigger, r.requested_by) for r in rows] == [("schedule", None), ("ui", "a@example.com")]
+
+
+def test_run_history_gives_a_failed_runs_reason(db):
+    conn, repo = db
+    empty = _run(repo, "failed")
+    repo.add_warnings(empty, [InventoryWarning("namespace web not found", coverage=True)])
+    repo.add_warnings(empty, [InventoryWarning(f"no namespace matched the scope{NOTHING_SCANNED}", coverage=False)])
+    stale = _run(repo, "running")
+    repo.close_stale(stale, STALE_NOTE)
+    trivy = _run(repo, "failed")  # failed later on, after inventory warnings that are not its reason
+    repo.add_warnings(
+        trivy, [InventoryWarning("cannot list nodes: HTTP 403; assuming a default platform", coverage=False)]
+    )
+    ok = _run(repo, "ok")
+    repo.add_warnings(ok, [InventoryWarning(f"odd{NOTHING_SCANNED}", coverage=False)])
+    reasons = {r.id: r.reason for r in run_history(conn, "ctx", 1)[0]}
+    assert reasons == {
+        empty: "no namespace matched the scope; nothing was scanned",
+        stale: STALE_NOTE,
+        trivy: None,
+        ok: None,
+    }
 
 
 def test_context_scans_gives_each_context_its_newest_result(db):

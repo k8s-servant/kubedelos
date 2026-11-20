@@ -16,7 +16,7 @@ from typing import Literal, get_args
 from kubedelos import risk
 from kubedelos.store.accepted import ACCEPTED_CTES
 from kubedelos.store.intel import intel_for, top_workload_facts
-from kubedelos.store.repo import RETRY_NOTE_PREFIX
+from kubedelos.store.repo import NOTHING_SCANNED, RETRY_NOTE_PREFIX, STALE_NOTE
 from kubedelos.trivy.runner import ErrorKind
 
 RESULT_STATUSES = ("ok", "partial")
@@ -1006,6 +1006,7 @@ class HistoryRow:
     owner: str | None
     trigger: str | None  # "ui", "schedule" or "cli"; None on runs from before triggers were recorded
     requested_by: str | None  # who asked for the run in ``serve``; None for a sweep and for laptop runs
+    reason: str | None = None  # why a failed run holds nothing, when its note says so
 
 
 def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
@@ -1014,9 +1015,17 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
     rows = conn.execute(
         "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner, trigger, requested_by,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
-        " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed"
-        " FROM scan_run WHERE context = ? ORDER BY id DESC LIMIT ? OFFSET ?",
-        (context, per_page, (page - 1) * per_page),
+        " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed,"
+        " (SELECT text FROM run_warning WHERE run_id = scan_run.id AND scan_run.status = 'failed' AND coverage = 0"
+        "  AND (text LIKE '%' || :nothing OR text = :stale) ORDER BY id DESC LIMIT 1) AS reason"
+        " FROM scan_run WHERE context = :context ORDER BY id DESC LIMIT :limit OFFSET :offset",
+        {
+            "context": context,
+            "limit": per_page,
+            "offset": (page - 1) * per_page,
+            "nothing": NOTHING_SCANNED,
+            "stale": STALE_NOTE,
+        },
     ).fetchall()
     history = [
         HistoryRow(
@@ -1032,6 +1041,7 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
             owner=r["owner"],
             trigger=r["trigger"],
             requested_by=r["requested_by"],
+            reason=r["reason"],
         )
         for r in rows
     ]

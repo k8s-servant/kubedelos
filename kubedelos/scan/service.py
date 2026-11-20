@@ -4,6 +4,10 @@ parallel scans and persistence.
 ``rescan=True`` scans every image again instead of taking the ones scanned in the last 24 hours from the result
 cache, and stores the fresh results there for the scans after it.
 
+A run is recorded before the cluster is listed, so a listing that fails leaves a ``failed`` run with the reason. A scope
+that selects no namespace, or whose every namespace refuses the pod list, fails the run too (``EmptyScope``): an empty
+run would read as "no findings". A namespace that is listed and runs no pods is an ``ok`` run with no images.
+
 ``retry_failed`` scans a finished run's failed images again through the same steps, minus the inventory: it puts each
 new result in place of its failure and recounts the run.
 """
@@ -15,15 +19,17 @@ from collections.abc import Callable, Collection
 from dataclasses import dataclass
 from datetime import timedelta
 
+from kubernetes.client.exceptions import ApiException
+
 from kubedelos import threatintel
 from kubedelos.config import Settings
 from kubedelos.kube import client as kube_client
 from kubedelos.kube.client import KubeApi
-from kubedelos.kube.inventory import InventoryWarning, collect_inventory
+from kubedelos.kube.inventory import Inventory, InventoryWarning, collect_inventory
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_valid_ref
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.store import db, runlock
-from kubedelos.store.repo import Repo
+from kubedelos.store.repo import NOTHING_SCANNED, Repo
 from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
@@ -44,6 +50,31 @@ class Progress:
     phase: str = "scanning"  # one of PHASES; scanning repeats around trivy-db
     cached: int = 0  # cache hits among ``done``; the freshly scanned count is done - cached - errors
     run_id: int | None = None  # set once the run row exists, so a reader can list the run's failures while it runs
+
+
+class EmptyScope(RuntimeError):
+    """The scope selected nothing that could be listed, so the run would hold no images while the cluster may have
+    some."""
+
+
+def _empty_scope(inventory: Inventory) -> str | None:
+    """Why ``inventory`` must fail the run, or None."""
+    if not inventory.namespaces_selected:
+        return "no namespace matched the scope"
+    if not inventory.namespaces_listed:
+        return f"every namespace in scope was forbidden ({inventory.namespaces_selected})"
+    return None
+
+
+def _nothing_scanned(why: str) -> InventoryWarning:
+    return InventoryWarning(f"{why}{NOTHING_SCANNED}", coverage=False)
+
+
+def _listing_failure(exc: Exception) -> str:
+    """The reason a listing failed, as stored on the run."""
+    if isinstance(exc, ApiException):  # its str() dumps the response headers and body: keep neither
+        return f"HTTP {exc.status} {exc.reason}"
+    return str(exc) or type(exc).__name__
 
 
 @dataclass
@@ -76,9 +107,6 @@ def run_scan(
             threatintel.refresh_feeds(settings)  # at most once a day; logs and keeps the old copy on failure
         except Exception as exc:  # a feed never fails a scan
             logger.warning("threat feeds not updated: %s", exc)
-    on_progress(Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
-    inventory = collect_inventory(api, settings)
-    items = inventory.items
     # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
     with runlock.hold(settings.data_dir) as owner:
         # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
@@ -92,8 +120,18 @@ def run_scan(
             requested_by=requested_by,
         )
         try:
+            on_progress(Progress(total=0, done=0, errors=0, current=None, phase="inventory"))
+            try:
+                inventory = collect_inventory(api, settings)
+            except Exception as exc:
+                repo.add_warnings(run_id, [_nothing_scanned(f"listing the cluster failed: {_listing_failure(exc)}")])
+                raise
             repo.add_warnings(run_id, inventory.warnings)
             repo.set_fact_sources(run_id, inventory.fact_sources)
+            if why := _empty_scope(inventory):
+                repo.add_warnings(run_id, [_nothing_scanned(why)])
+                raise EmptyScope(why)
+            items = inventory.items
             save = functools.partial(repo.add_result, run_id)
             access = RegistryAccess(settings, api)  # per run, so the Secret contents it read go with the run
             errors = _scan(

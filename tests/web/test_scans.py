@@ -14,6 +14,7 @@ import pytest
 
 import kubedelos.store.db
 from kubedelos.config import Settings
+from kubedelos.kube.inventory import InventoryWarning
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, Workload
 from kubedelos.scan.service import Progress, ScanOutcome
 from kubedelos.store import queue, runlock
@@ -985,3 +986,15 @@ def test_serve_cancel_with_a_busy_database_is_503(serve_client, monkeypatch):
     monkeypatch.setattr(queue, "cancel", locked)
     response = signed_post(serve_client, "/scans/queue/1/cancel", {})
     assert response.status_code == 503 and "the database is busy" in response.text
+
+
+def test_history_says_why_a_run_failed(client, seed):
+    empty = _run(seed, "failed")
+    seed.repo.add_warnings(
+        empty, [InventoryWarning("no namespace matched the scope; nothing was scanned", coverage=False)]
+    )
+    plain = _run(seed, "failed")
+    rows = _rows(client.get("/scans").text)
+    row = next(r for r in rows if f"Run {empty}<" in r)
+    assert '<div class="hint">no namespace matched the scope; nothing was scanned</div>' in row
+    assert 'class="hint"' not in next(r for r in rows if f"Run {plain}<" in r)
