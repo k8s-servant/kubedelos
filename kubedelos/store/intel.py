@@ -1,6 +1,7 @@
 """Reads of the threat feeds and of what a run knows, for the risk score.
 
-``intel_for`` gives what CISA KEV and EPSS say about some CVEs, ``feeds`` when each feed was last fetched, and
+``intel_for`` gives what CISA KEV and EPSS say about some CVEs, ``feeds`` when each feed was last fetched,
+``top_workload_facts`` the facts of each image's riskiest workload, which the fix lists' scores counted, and
 ``risk_shown`` whether a run has anything to score beyond severity: workload facts, or a copy of either feed. Without
 either, the risk score would only repeat the severity, so the UI leaves it out. All read-only: the feeds are written by
 ``kubedelos.threatintel`` alone.
@@ -11,7 +12,8 @@ import sqlite3
 from collections.abc import Iterable
 from datetime import date, datetime
 
-from kubedelos.risk import Intel
+from kubedelos.models import WorkloadFacts, parse_facts
+from kubedelos.risk import NO_FACTS_POINTS, Intel
 
 # Through the run's image rows (idx_image_result_run), then their workloads (idx_workload_image_result): never a scan.
 RUN_HAS_FACTS_SQL = (
@@ -53,3 +55,23 @@ def run_has_facts(conn: sqlite3.Connection, run_id: int) -> bool:
 def risk_shown(conn: sqlite3.Connection, run_id: int) -> bool:
     """Whether the run's risk score says more than its severity: it has facts, or a feed has a copy."""
     return run_has_facts(conn, run_id) or bool(feeds(conn))
+
+
+def top_workload_facts(conn: sqlite3.Connection, run_id: int, refs: list[str]) -> dict[str, WorkloadFacts | None]:
+    """The facts of each of ``refs``' riskiest workload row in the run (the most ``risk_points``, then by namespace,
+    kind, name and container), which the fix lists' scores counted. A ref with no workload row, or whose riskiest row
+    has no facts, maps to None.
+    """
+    top = dict.fromkeys(refs)
+    if not refs:
+        return top
+    rows = conn.execute(
+        "SELECT ref, facts FROM (SELECT r.ref, w.facts, ROW_NUMBER() OVER (PARTITION BY r.ref"  # noqa: S608
+        f" ORDER BY COALESCE(w.risk_points, {NO_FACTS_POINTS}) DESC, w.namespace, w.kind, w.name, w.container) AS rn"
+        " FROM image_result r JOIN workload w ON w.image_result_id = r.id"
+        " WHERE r.run_id = :run AND r.ref IN (SELECT value FROM json_each(:refs))) WHERE rn = 1",
+        {"run": run_id, "refs": json.dumps(refs)},
+    )
+    for row in rows:
+        top[row["ref"]] = parse_facts(row["facts"])
+    return top

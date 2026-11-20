@@ -15,7 +15,7 @@ from typing import Literal, get_args
 
 from kubedelos import risk
 from kubedelos.store.accepted import ACCEPTED_CTES
-from kubedelos.store.intel import intel_for
+from kubedelos.store.intel import intel_for, top_workload_facts
 from kubedelos.store.repo import RETRY_NOTE_PREFIX
 from kubedelos.trivy.runner import ErrorKind
 
@@ -335,8 +335,6 @@ def _scored(units: str) -> str:
 
 def _factors(conn: sqlite3.Connection, run_id: int, tops: list[tuple[str, str, int]]) -> list[tuple[risk.Factor, ...]]:
     """The factors of each top unit (ref, vuln_id, sev_rank): one feed read and one workload read for the page."""
-    from kubedelos.store.workloads import top_workload_facts  # here: kubedelos.store.workloads imports this module
-
     intel = intel_for(conn, {vuln_id for _, vuln_id, _ in tops})
     facts = top_workload_facts(conn, run_id, sorted({ref for ref, _, _ in tops}))
     return [

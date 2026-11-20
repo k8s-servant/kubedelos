@@ -7,9 +7,13 @@ from kubedelos.risk import Intel
 from kubedelos.store import intel
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
-from tests.mcp_server.conftest import add_workloads, make_facts, new_run
+from tests.mcp_server.conftest import add_workloads, finding, make_facts, new_run
 
 FETCHED = datetime(2026, 11, 20, 8, 0, tzinfo=UTC)
+
+
+def _wl(ns, name):
+    return Workload(namespace=ns, kind="Deployment", name=name, container="c")
 
 
 @pytest.fixture
@@ -87,3 +91,25 @@ def test_run_has_facts_uses_the_indexes(conn):
     plan = " ".join(row[3] for row in conn.execute(f"EXPLAIN QUERY PLAN {intel.RUN_HAS_FACTS_SQL}", {"run": 1}))
     assert "idx_image_result_run" in plan and "idx_workload_image_result" in plan
     assert "SCAN" not in plan.replace("SCAN CONSTANT ROW", "")
+
+
+def test_top_workload_facts_takes_the_riskiest_row(tmp_path):
+    conn = connect(tmp_path / "kubedelos.db")
+    repo = Repo(conn)
+    run_id = new_run(repo, "my-cluster")
+    quiet, web, api, bare = _wl("a-first", "quiet"), _wl("web", "site"), _wl("api", "gateway"), _wl("b", "bare")
+    # web and api tie on points (external, root and unknown root both +3); api wins on namespace. quiet scores lower.
+    facts = {
+        quiet: make_facts(root=False, level="none"),
+        web: make_facts(root=True, level="external"),
+        api: make_facts(root=None, level="external"),
+    }
+    add_workloads(repo, run_id, "img-a", [quiet, web, api, bare], [finding("CVE-1", "CRITICAL")], facts=facts)
+    add_workloads(repo, run_id, "img-b", [_wl("web", "plain")], [finding("CVE-1", "CRITICAL")])
+    add_workloads(repo, run_id, "img-c", [])
+    other = new_run(repo, "my-cluster")
+    add_workloads(repo, other, "img-c", [_wl("web", "elsewhere")], facts={_wl("web", "elsewhere"): make_facts()})
+    top = intel.top_workload_facts(conn, run_id, ["img-a", "img-b", "img-c", "img-404"])
+    assert top == {"img-a": make_facts(root=None, level="external"), "img-b": None, "img-c": None, "img-404": None}
+    assert intel.top_workload_facts(conn, run_id, []) == {}
+    conn.close()
