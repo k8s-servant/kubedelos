@@ -2,13 +2,13 @@
 
 The Helm chart installs `kubedelos serve`: one pod that serves the UI of one cluster, sweeps it on a cron schedule and
 keeps the results in SQLite on a volume. It reads the cluster through a read-only ClusterRole (`get` and `list` on
-namespaces, pods and nodes, `list` on deployments, statefulsets and cronjobs) and nothing else. It reads no Secrets,
-unless you turn on pod pull secrets, which adds a `get`-only Role in each namespace you list (see
+namespaces, pods and nodes, `list` on deployments, statefulsets and cronjobs) and, while the
+[attack-surface facts](attack-surface.md) are on (`attackSurface.enabled`, the default), `list` on services,
+serviceaccounts, ingresses, networkpolicies, httproutes, roles, rolebindings, clusterroles and clusterrolebindings. It
+reads no Secrets, unless you turn on pod pull secrets, which adds a `get`-only Role in each namespace you list (see
 [private registries](#private-registries)).
-The chart turns the [attack-surface facts](attack-surface.md) off (`KUBEDELOS_ATTACK_SURFACE=false`) because it grants
-no RBAC for their lists yet; that is a follow-up.
-It also turns the [threat feeds](risk-score.md#the-threat-feeds) off (`KUBEDELOS_THREAT_FEEDS=false`), because many
-clusters give pods no egress to the internet; see [Threat feeds](#threat-feeds) to turn them on.
+The [threat feeds](risk-score.md#the-threat-feeds) are off by default (`threatFeeds.enabled`), because many clusters
+give pods no egress to the internet; see [Threat feeds](#threat-feeds) to turn them on.
 The image bundles the pinned Trivy, so the pod downloads no scanner, only the vulnerability DBs.
 
 Without any registry setting a scan reads public images, and whatever the node's own identity lets Trivy reach. For
@@ -80,6 +80,8 @@ The chart rejects keys it does not know (`values.schema.json`).
 | `retentionDays` | `180` | Runs older than this are deleted; `0` keeps every run. |
 | `scan.parallelism` | `4` | Images scanned at once. |
 | `scan.timeoutSeconds` | `600` | Time limit for one image. |
+| `attackSurface.enabled` | `true` | Record the [attack-surface facts](attack-surface.md) with each scan, for the risk score. Also grants the ClusterRole the `list` calls they need (no Secrets). `false` drops those rules. |
+| `threatFeeds.enabled` | `false` | Download CISA KEV and EPSS at most once a day for the [risk score](risk-score.md). Needs egress on 443; see [Threat feeds](#threat-feeds). |
 | `readOnly` | `false` | `true` makes the UI view-only: every write gets a 403 and the pages hide their forms. Sweeps still run. |
 | `auth.trustProxyHeaders` | `false` | Read the user's name from `auth.identityHeader`. Only behind a sign-in proxy; see [the security model](#security-model). |
 | `auth.identityHeader` | `X-Auth-Request-Email` | The header that carries the name. |
@@ -139,24 +141,22 @@ you list; read the [security note](registries/pull-secrets.md#security-note) fir
 
 The [risk score](risk-score.md) uses two public feeds for known exploitation: CISA KEV from `www.cisa.gov` and EPSS
 from `epss.empiricalsecurity.com`. Each is a plain HTTPS `GET` of a fixed URL, at most once a day per feed, before a
-scan; it carries nothing about the cluster. The chart sets `KUBEDELOS_THREAT_FEEDS=false`, so without them the score
-counts known exploitation as nothing and the rest of it still works.
+scan; it carries nothing about the cluster. They are off by default (`threatFeeds.enabled: false`); without them the
+score counts known exploitation as nothing and the rest of it still works.
 
 Turn them on only when the pod can reach both hosts on port 443. If `networkPolicy.egress` restricts egress, a plain
 NetworkPolicy cannot allow them by name: it matches IP blocks, not hostnames, and both hosts sit behind CDNs whose
 addresses change. Use an `ipBlock` rule for port 443 wide enough to cover them, or a CNI policy that matches FQDNs
 (such as Cilium's `toFQDNs`).
 
-The chart has no value for this switch yet (one is the planned follow-up); set the variable on the container, which
-takes precedence over the chart's ConfigMap. The Deployment is named after the release (see [Install](#install)), so
-select it by the release label:
+To turn them on:
 
 ```bash
-kubectl set env deployment -l app.kubernetes.io/instance=<release> KUBEDELOS_THREAT_FEEDS=true -n kubedelos
+helm upgrade kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos -n kubedelos --reuse-values \
+  --set threatFeeds.enabled=true
 ```
 
-The edit survives `helm upgrade`, because the chart never sets an `env` entry on the container, but a GitOps
-controller (Argo CD, Flux) reverts it and a reinstall drops it.
+or set `threatFeeds.enabled: true` in your values file.
 
 The feeds are fetched before the next scan. Without egress each try times out (10 s to connect), logs
 `threat feed <name> not updated: ...` and lets the scan go on. The Settings page shows when each feed was last fetched.

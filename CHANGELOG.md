@@ -13,8 +13,8 @@
   EPSS (`https://epss.empiricalsecurity.com/epss_scores-current.csv.gz`) are downloaded at most once a day, before a
   scan and when `kubedelos ui` starts (in the background), with plain HTTPS GETs (a redirect that leaves HTTPS is refused) that send nothing about the cluster. A
   broken, oversized or sharply smaller copy is refused and the stored one kept; a feed never fails a scan or the UI.
-  `KUBEDELOS_THREAT_FEEDS=false` turns them off, and the chart sets it to `false` because many clusters give pods no
-  egress. The Settings page shows when each feed was last fetched. Schema migration 13 adds the `threat_intel` and
+  `KUBEDELOS_THREAT_FEEDS=false` turns them off; the chart's `threatFeeds.enabled` is `false` by default because many
+  clusters give pods no egress. The Settings page shows when each feed was last fetched. Schema migration 13 adds the `threat_intel` and
   `threat_feed` tables and `workload.risk_points` (each workload's exposure, host and rights points), filled in for the
   rows already stored.
 - `kubedelos mcp`: a read-only MCP server over stdio, so your own agent can query the local scan database. It opens
@@ -26,8 +26,9 @@
 - Attack-surface facts: each scan records, per workload container, its pod security settings, exposure (hostPorts,
   Services, Ingresses, Gateway API HTTPRoutes), NetworkPolicy isolation and ServiceAccount RBAC rights as versioned
   JSON on the workload, plus the status of each source per run. Anything it could not list is reported as unknown or
-  partial, never as safe, and no Secret is read. `KUBEDELOS_ATTACK_SURFACE=false` turns it off; the chart sets it to
-  `false` until it grants the RBAC. See [Attack-surface facts](docs/attack-surface.md).
+  partial, never as safe, and no Secret is read. `KUBEDELOS_ATTACK_SURFACE=false` turns it off. The chart's
+  `attackSurface.enabled` (on by default) sets it and grants the ClusterRole the `list` calls the facts need (services,
+  serviceaccounts, ingresses, networkpolicies, httproutes, roles, rolebindings, clusterroles and clusterrolebindings). See [Attack-surface facts](docs/attack-surface.md).
 - Settings page: a Registries card (cloud identity and the hosts it covers, mounted Docker config Secret names,
   pull-secret namespaces) and, in `kubedelos serve`, a "Test an image" form that scans one image with the cloud identity
   and the mounted Docker configs (not pod pull secrets: there is no pod; an auth error on a host known only from the

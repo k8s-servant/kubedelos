@@ -25,6 +25,16 @@ scan:
   parallelism: 4
   timeoutSeconds: 600
 
+# Facts about each workload's exposure, host access and RBAC rights, recorded with every scan for the risk score. On,
+# the ClusterRole also lists services, serviceaccounts, ingresses, networkpolicies, httproutes and RBAC objects (list
+# only, no Secrets).
+attackSurface:
+  enabled: true
+# Download CISA KEV and EPSS at most once a day for the risk score. Off by default, because many clusters give pods no
+# egress to www.cisa.gov and epss.empiricalsecurity.com (HTTPS).
+threatFeeds:
+  enabled: false
+
 readOnly: false # true makes the UI view-only
 auth:
   trustProxyHeaders: false # read the user's name from identityHeader; only behind a sign-in proxy
