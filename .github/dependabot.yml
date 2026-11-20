@@ -14,6 +14,21 @@ updates:
         update-types: ["minor", "patch"]
     labels: ["dependencies", "area/python"]
 
+  # The container image's hashed locks (scripts/lock-image.sh). A bump in pyproject.toml that the lock no longer
+  # satisfies fails tests/test_packaging.py until the lock is regenerated.
+  - package-ecosystem: pip
+    directory: /requirements
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: "build(deps)"
+    groups:
+      image:
+        patterns: ["*"]
+    labels: ["dependencies", "area/container"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:

@@ -1,0 +1,3 @@
+# What the image's builder stage needs to build the kubedelos wheel: the build backend named in pyproject.toml's
+# [build-system]. Locked with hashes in build.txt by scripts/lock-image.sh.
+setuptools>=77

@@ -5,12 +5,19 @@ FROM python:3.13-alpine@sha256:9ef1a599f863231c3d91e941389bfdc4a2d6070557243d54d
 
 FROM base AS builder
 WORKDIR /build
+# Every Python package comes from the hashed locks in requirements/ (scripts/lock-image.sh writes them), so two builds
+# of one commit install the same files and a changed hash fails the build. pip is the base image's, pinned by its digest.
+COPY requirements ./requirements
+RUN pip install --no-cache-dir --require-hashes --no-deps -r requirements/build.txt \
+    && python -m venv /opt/kubedelos \
+    && /opt/kubedelos/bin/pip install --no-cache-dir --require-hashes --no-deps -r requirements/image.txt
 COPY pyproject.toml LICENSE NOTICE README.pypi.md ./
 COPY kubedelos ./kubedelos
-RUN pip install --no-cache-dir build \
-    && python -m build --wheel --outdir dist \
-    && python -m venv /opt/kubedelos \
-    && /opt/kubedelos/bin/pip install --no-cache-dir dist/*.whl
+# The wheel is built with the locked setuptools (no isolated build env that would fetch its own) and installed without
+# its dependencies, which the lock already put in place; pip check fails the build if the lock misses one.
+RUN pip wheel --no-cache-dir --no-deps --no-build-isolation --wheel-dir dist . \
+    && /opt/kubedelos/bin/pip install --no-cache-dir --no-deps dist/*.whl \
+    && /opt/kubedelos/bin/pip check
 # `trivy install` downloads the pinned release and verifies its SHA-256 for this platform.
 RUN KUBEDELOS_CACHE_DIR=/build/cache /opt/kubedelos/bin/kubedelos trivy install \
     && version="$(/opt/kubedelos/bin/python -c 'from kubedelos.trivy.pins import TRIVY_VERSION; print(TRIVY_VERSION)')" \
