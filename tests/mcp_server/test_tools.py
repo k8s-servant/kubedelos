@@ -440,6 +440,9 @@ def test_list_findings_filters_and_paging(world):
     assert tools.list_findings(conn, db, NOW, per_page=2)["truncated"] is True
     assert tools.list_findings(conn, db, NOW, per_page=5000)["per_page"] == 100
     assert tools.list_findings(conn, db, NOW, page=9)["items"] == []
+    # A page too large for SQLite's offset is clamped like the UI's, not an internal error.
+    huge = tools.list_findings(conn, db, NOW, page=10**30)
+    assert huge["items"] == [] and huge["page"] == tools.MAX_PAGE == 10**9 and huge["total"] == 3
     json.dumps(everything)
 
 

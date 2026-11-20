@@ -90,7 +90,8 @@ Notes on the tools:
   that starts with `CVE-` in any case is upper-cased (CVE ids are upper case); other ids, such as `GHSA-...`, are
   used as given. An unknown id returns empty lists, not an error. Its `workloads` are ranked like `attack_surface`,
   and `acceptance` lists the active risk acceptances for the id.
-- `list_findings` is paged (`page` from 1). Risk-accepted findings are hidden unless `accepted` is `all` or `only`.
+- `list_findings` is paged (`page` from 1; a page above 10^9 is clamped to it). Risk-accepted findings are hidden
+  unless `accepted` is `all` or `only`.
 - `compare_runs` without `from_run` compares with the previous comparable run; without `to_run` it uses the newest.
 - `attack_surface` ranks workload containers by exposure (external; then unknown and no facts together, since not
   collected is never safer than unknown; then cluster; then none), then by Critical and High counts. The filters

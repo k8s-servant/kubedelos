@@ -21,6 +21,7 @@ from kubedelos.store.db import MIGRATIONS, connect_readonly
 
 DEFAULT_LIMIT = 25
 MAX_LIMIT = 100
+MAX_PAGE = 10**9  # as the UI's findings page: keeps the SQL offset within SQLite's 64-bit integer
 
 
 def _now() -> datetime:
@@ -343,7 +344,7 @@ def list_findings(
         has_fix=fixable,
         accepted=accepted,
     )
-    page, per_page = max(page, 1), clamp(per_page)
+    page, per_page = min(max(page, 1), MAX_PAGE), clamp(per_page)
     rows, total, left_out = queries.findings_page(conn, selected.id, f, page, per_page, today=now.date())
     return {
         "cluster": name,
