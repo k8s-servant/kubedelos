@@ -16,6 +16,7 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from kubedelos import analytics
 from kubedelos.models import WorkloadFacts
+from kubedelos.risk import host_access
 from kubedelos.store import accepted, diff, queries, workloads
 from kubedelos.store.db import MIGRATIONS, connect_readonly
 
@@ -365,25 +366,6 @@ def _finding_item(row: sqlite3.Row) -> dict:
     item["targets"] = row["targets"].split(",") if row["targets"] else []
     item["accepted"] = bool(row["accepted"])
     return item
-
-
-# Capabilities that allow escaping the container or controlling the node.
-_HOST_CAPABILITIES = frozenset(
-    {"SYS_ADMIN", "NET_ADMIN", "SYS_PTRACE", "SYS_MODULE", "SYS_RAWIO", "DAC_READ_SEARCH", "BPF", "ALL"}
-)
-
-
-def host_access(facts: WorkloadFacts) -> bool:
-    """Whether the pod can reach the node: host namespaces, privilege, a writable hostPath or a powerful capability."""
-    pod = facts.pod
-    return (
-        pod.privileged
-        or pod.host_pid
-        or pod.host_network
-        or pod.host_ipc
-        or any(not volume.read_only for volume in pod.host_path_volumes)
-        or any(cap.upper().removeprefix("CAP_") in _HOST_CAPABILITIES for cap in pod.added_capabilities)
-    )
 
 
 def _matches_facts(

@@ -4,7 +4,7 @@ import re
 from enum import StrEnum
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 _DIGEST_RE = re.compile(r"sha256:[0-9a-f]{64}")
 _MAX_REF_LEN = 512
@@ -172,6 +172,17 @@ class WorkloadFacts(BaseModel):
     exposure: Exposure
     network: Network
     rights: Rights
+
+
+def parse_facts(text: str | None) -> WorkloadFacts | None:
+    """The facts stored on a workload row, or None for NULL, invalid JSON, a validation error or another version."""
+    if not text:
+        return None
+    try:
+        facts = WorkloadFacts.model_validate_json(text)
+    except ValidationError:
+        return None
+    return facts if facts.v == 1 else None
 
 
 FactSources = dict[str, str]  # fact source name -> status, per run

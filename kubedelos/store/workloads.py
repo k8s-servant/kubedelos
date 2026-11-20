@@ -10,9 +10,7 @@ import json
 import sqlite3
 from dataclasses import dataclass
 
-from pydantic import ValidationError
-
-from kubedelos.models import Severity, WorkloadFacts
+from kubedelos.models import Severity, WorkloadFacts, parse_facts
 from kubedelos.store import queries
 from kubedelos.store.queries import REF_UNIT_COUNTS_SQL, REF_UNITS_SQL
 
@@ -32,17 +30,6 @@ class WorkloadRow:
     status: str  # the image result's status; "error" if any platform of the image failed
     facts: WorkloadFacts | None
     counts: dict[str, int]  # finding units by severity, every severity present
-
-
-def parse_facts(text: str | None) -> WorkloadFacts | None:
-    """The facts stored on a workload row, or None for NULL, invalid JSON, a validation error or another version."""
-    if not text:
-        return None
-    try:
-        facts = WorkloadFacts.model_validate_json(text)
-    except ValidationError:
-        return None
-    return facts if facts.v == 1 else None
 
 
 def workloads(
