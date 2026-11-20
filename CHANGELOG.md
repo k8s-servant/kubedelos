@@ -111,6 +111,12 @@
 
 ### Documentation
 
+- The docs have an index ([docs/README.md](docs/README.md)) and an [install guide](docs/install.md): requirements,
+  installing from GitHub until the first release, cluster permissions, registry logins, the chart from a clone, where
+  files are kept, upgrading and uninstalling. The README has a table of contents and stays an overview; the page-by-page
+  UI description moved to [docs/ui.md](docs/ui.md), every setting to [docs/configuration.md](docs/configuration.md), and
+  the scan scope details to [How a scan works](docs/how-scans-work.md#what-a-scan-covers). Each guide ends with related
+  guides.
 - Guides for private registries in the in-cluster mode: [ACR from AKS](docs/registries/acr.md), [ECR from
   EKS](docs/registries/ecr.md), [Artifact Registry from GKE](docs/registries/gar.md) and [pull secrets and Docker
   configs](docs/registries/pull-secrets.md). They say which hosts Trivy v0.76.1 uses the cloud identity for and that the

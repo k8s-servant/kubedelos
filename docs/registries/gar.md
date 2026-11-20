@@ -122,3 +122,9 @@ same ServiceAccount.
 - One identity per install. Registries the service account cannot read need a pull secret or a second install.
 - The GCP path is not run in this project's CI (no GCP project). The Trivy behaviour above comes from reading its
   v0.76.1 source.
+
+## Related
+
+- [Pull secrets and Docker configs](pull-secrets.md): for registries the service account cannot read.
+- [Running kubedelos in a cluster](../in-cluster.md#private-registries).
+- [All guides](../README.md)

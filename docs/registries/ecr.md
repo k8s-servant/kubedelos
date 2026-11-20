@@ -154,3 +154,9 @@ same ServiceAccount.
 - One identity per install. Registries the role cannot read need a pull secret or a second install.
 - The AWS path is not run in this project's CI (no AWS account). The Trivy behaviour above comes from reading its
   v0.76.1 source.
+
+## Related
+
+- [Pull secrets and Docker configs](pull-secrets.md): for registries the role cannot read.
+- [Running kubedelos in a cluster](../in-cluster.md#private-registries).
+- [All guides](../README.md)

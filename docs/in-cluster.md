@@ -14,6 +14,25 @@ The image bundles the pinned Trivy, so the pod downloads no scanner, only the vu
 Without any registry setting a scan reads public images, and whatever the node's own identity lets Trivy reach. For
 private images see [Private registries](#private-registries).
 
+## What `serve` does
+
+`kubedelos serve` is one process that serves the UI of one cluster, sweeps it on a cron schedule and keeps the
+results. Sweeps and UI scans go through a SQLite scan queue and run one at a time; UI scans can only narrow the
+configured scope, so a blank Namespaces field means the configured namespaces. Runs older than the retention period are
+deleted. Only one `serve` can use a data directory; a second one exits 2.
+
+Scheduled sweeps rescan every image: they skip the 24-hour result cache, so findings match the current Trivy DB, while
+the on-disk layer cache keeps them fast.
+
+The chart sets every setting from its values; [Configuration](configuration.md#kubedelos-serve) lists the variables
+behind them. `--host` (default `0.0.0.0`), `--port` (default `8080`) and `--kubeconfig` are the flags. To try it on a
+laptop:
+
+```bash
+KUBEDELOS_CLUSTER_NAME=my-cluster KUBEDELOS_CONTEXT=my-context KUBEDELOS_SWEEP_SCHEDULE='*/5 * * * *' \
+  kubedelos serve --host 127.0.0.1 --port 9371
+```
+
 ## Install
 
 ```bash
@@ -268,3 +287,10 @@ cosign verify ghcr.io/k8s-servant/charts/kubedelos:<release> \
 
 The image also carries an SBOM and provenance attestations from the build. The workflows install their tools with the
 SHA-256 digests pinned in the workflow files.
+
+## Related
+
+- [Install](install.md#in-a-cluster): installing the chart, also before the first release.
+- [Configuration](configuration.md): the variables behind the values.
+- Registries: [ACR](registries/acr.md), [ECR](registries/ecr.md), [GAR](registries/gar.md), [pull secrets](registries/pull-secrets.md).
+- [All guides](README.md)

@@ -172,3 +172,8 @@ hostname to the allowed hosts itself and `extraAllowedHosts` is not needed.
    kubectl run probe --rm -it --restart=Never --image=busybox -- \
      wget -T 5 -qO- --header 'X-Auth-Request-Email: someone-else@example.com' http://<release>-kubedelos.kubedelos/
    ```
+
+## Related
+
+- [Running kubedelos in a cluster](in-cluster.md#security-model): the security model this example follows.
+- [All guides](README.md)

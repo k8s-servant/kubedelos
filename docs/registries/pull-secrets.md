@@ -144,3 +144,9 @@ Read this before you turn pod pull secrets on.
 | `unauthorized` for an image in another namespace | That namespace is not in `registries.podPullSecretNamespaces`. |
 | `pull secret team-a/my-pull skipped: HTTP 403` in the debug log | The Role is missing, usually because the namespace was added after install and the chart was not upgraded. |
 | Docker Hub rate limit (`toomanyrequests`) | Anonymous pulls are limited. Add a Docker Hub account as a mounted Docker config. |
+
+## Related
+
+- Cloud identities: [ACR](acr.md), [ECR](ecr.md), [GAR](gar.md).
+- [Running kubedelos in a cluster](../in-cluster.md#private-registries).
+- [All guides](../README.md)

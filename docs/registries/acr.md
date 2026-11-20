@@ -142,3 +142,9 @@ shows. To see the cause, run `trivy image` by hand in a pod with the same Servic
   client id) and the host matching on the Settings page. The Azure login itself is Trivy's, and it was not run end to
   end
   for this project. What this page says about it comes from reading Trivy's v0.76.1 source.
+
+## Related
+
+- [Pull secrets and Docker configs](pull-secrets.md): for registries the identity cannot read.
+- [Running kubedelos in a cluster](../in-cluster.md#private-registries).
+- [All guides](../README.md)

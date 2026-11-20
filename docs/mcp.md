@@ -156,3 +156,10 @@ Prompts are fixed instructions that tell the agent which tools to call and how t
   opening it in the UI does; they hold no data from the server.
 - It runs with your file permissions and reads the same database `kubedelos ui` writes. Anyone who can start the
   command can read your scan results; the server adds no authentication of its own.
+
+## Related
+
+- [Install](install.md): getting `kubedelos` on your PATH.
+- [Risk score](risk-score.md): the `score` and `factors` fields.
+- [Attack-surface facts](attack-surface.md): the `facts` fields.
+- [All guides](README.md)
