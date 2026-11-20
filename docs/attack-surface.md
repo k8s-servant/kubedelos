@@ -189,3 +189,6 @@ facts in a cluster before then, grant the list calls above to the kubedelos Serv
 values, sorted and unique.
 
 Your own agent can query these facts through the read-only MCP server; see [Ask your agent](mcp.md).
+
+The [risk score](risk-score.md) turns these facts into points for exposure, host access and API rights, and counts
+missing facts as unknown, never as safe.

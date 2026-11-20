@@ -40,6 +40,8 @@ scripts/e2e-chart.sh                                            # chart on a thr
 - **Credentials never touch disk or logs.** Registry tokens are not written to SQLite
   or logged, not even in error messages. The one exception is a per-scan Docker config on the
   memory-backed secrets volume (`KUBEDELOS_SECRETS_DIR`), deleted when that scan ends.
+- **Threat feeds.** The only outbound calls besides Trivy and registries are the CISA KEV and EPSS downloads in
+  `kubedelos/threatintel.py`: plain GETs that carry nothing about the cluster.
 - **Data paths** come from `platformdirs`, overridable with `KUBEDELOS_CACHE_DIR` and
   `KUBEDELOS_DATA_DIR`.
 - **TDD:** write a failing test first; one test file per module.

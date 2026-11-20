@@ -40,7 +40,7 @@ MAX_AGE = timedelta(hours=24)
 SHRINK_GRACE = 7 * MAX_AGE
 MAX_DOWNLOAD = 32 * 2**20
 MAX_EPSS_CSV = 64 * 2**20  # decompressed; the real file is about 10 MB
-MAX_FEED_ROWS = 2_000_000  # per feed; EPSS has about 300,000 rows and KEV about 1,500
+MAX_FEED_ROWS = 2_000_000  # per feed; EPSS had about 409,000 rows and KEV about 1,800 in November 2026
 FEEDS = ("kev", "epss")
 
 _CVE = re.compile(r"CVE-\d{4}-\d{4,}")
