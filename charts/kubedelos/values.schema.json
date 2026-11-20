@@ -106,6 +106,24 @@
         }
       }
     },
+    "attackSurface": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
+    "threatFeeds": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        }
+      }
+    },
     "readOnly": {
       "type": "boolean"
     },

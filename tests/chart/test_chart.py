@@ -126,15 +126,30 @@ def test_pvc_defaults_and_existing_claim(render):
     assert volumes["data"]["persistentVolumeClaim"]["claimName"] == "mine"
 
 
-def test_clusterrole_is_read_only_and_exact(render):
-    rules = kind(render(), "ClusterRole")["rules"]
+SCAN_RULES = {
+    (("",), ("namespaces", "pods", "nodes")): {"get", "list"},
+    (("apps",), ("deployments", "statefulsets")): {"list"},
+    (("batch",), ("cronjobs",)): {"list"},
+}
+# The lists kubedelos.kube.facts makes for the attack-surface facts: list only, and still no Secrets.
+FACT_RULES = {
+    (("",), ("services", "serviceaccounts")): {"list"},
+    (("networking.k8s.io",), ("ingresses", "networkpolicies")): {"list"},
+    (("gateway.networking.k8s.io",), ("httproutes",)): {"list"},
+    (("rbac.authorization.k8s.io",), ("roles", "rolebindings", "clusterroles", "clusterrolebindings")): {"list"},
+}
+
+
+def _rules(docs: list[dict]) -> dict:
+    rules = kind(docs, "ClusterRole")["rules"]
     actual = {(tuple(r["apiGroups"]), tuple(r["resources"])): set(r["verbs"]) for r in rules}
     assert len(actual) == len(rules)
-    assert actual == {
-        (("",), ("namespaces", "pods", "nodes")): {"get", "list"},
-        (("apps",), ("deployments", "statefulsets")): {"list"},
-        (("batch",), ("cronjobs",)): {"list"},
-    }
+    return actual
+
+
+def test_clusterrole_is_read_only_and_exact(render):
+    assert _rules(render()) == SCAN_RULES | FACT_RULES
+    assert _rules(render({"attackSurface": {"enabled": False}})) == SCAN_RULES
     binding = kind(render(), "ClusterRoleBinding")
     assert binding["subjects"][0]["kind"] == "ServiceAccount"
     assert binding["subjects"][0]["namespace"] == "kd"
@@ -184,16 +199,33 @@ def test_configmap_env(render):
     assert scoped["KUBEDELOS_SELECTOR"] == "app=b"
 
 
-def test_attack_surface_is_off_in_the_chart(render):
-    assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_ATTACK_SURFACE"] == "false"
+def test_attack_surface_is_a_value_on_by_default(render):
+    assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_ATTACK_SURFACE"] == "true"
+    off = kind(render({"attackSurface": {"enabled": False}}), "ConfigMap")["data"]
+    assert off["KUBEDELOS_ATTACK_SURFACE"] == "false"
 
 
-def test_threat_feeds_are_off_in_the_chart(render):
+def test_threat_feeds_are_a_value_off_by_default(render):
     assert kind(render(), "ConfigMap")["data"]["KUBEDELOS_THREAT_FEEDS"] == "false"
+    on = kind(render({"threatFeeds": {"enabled": True}}), "ConfigMap")["data"]
+    assert on["KUBEDELOS_THREAT_FEEDS"] == "true"
+
+
+@pytest.mark.parametrize("values", [{"attackSurface": {"enabled": "yes"}}, {"threatFeeds": {"enabled": 1}}])
+def test_schema_requires_boolean_switches(render_error, values):
+    assert "enabled" in render_error(values)
 
 
 def test_configmap_values_load_as_settings(render, monkeypatch):
-    docs = render({"scope": {"namespaces": ["web", "jobs"]}, "sweep": {"enabled": False}, "readOnly": True})
+    docs = render(
+        {
+            "scope": {"namespaces": ["web", "jobs"]},
+            "sweep": {"enabled": False},
+            "readOnly": True,
+            "attackSurface": {"enabled": False},
+            "threatFeeds": {"enabled": True},
+        }
+    )
     for key, value in kind(docs, "ConfigMap")["data"].items():
         monkeypatch.setenv(key, value)
     settings = Settings()
@@ -202,7 +234,7 @@ def test_configmap_values_load_as_settings(render, monkeypatch):
     assert settings.sweep_enabled is False
     assert settings.read_only is True
     assert settings.attack_surface is False
-    assert settings.threat_feeds is False
+    assert settings.threat_feeds is True
     assert settings.secure_cookies is True
     assert "t-kubedelos.kd.svc.cluster.local" in settings.allowed_hosts
 

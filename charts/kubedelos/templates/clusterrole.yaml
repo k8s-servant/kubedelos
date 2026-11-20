@@ -1,4 +1,5 @@
-# Read-only: the calls kubedelos/kube makes, and nothing else (no Secrets, no writes, no watch).
+# Read-only: the calls kubedelos/kube makes, and nothing else (no Secrets, no writes, no watch). The second block is the
+# lists behind the attack-surface facts (kubedelos/kube/facts.py), granted only while they are on.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -15,3 +16,17 @@ rules:
   - apiGroups: ["batch"]
     resources: ["cronjobs"]
     verbs: ["list"]
+  {{- if .Values.attackSurface.enabled }}
+  - apiGroups: [""]
+    resources: ["services", "serviceaccounts"]
+    verbs: ["list"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses", "networkpolicies"]
+    verbs: ["list"]
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["list"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings", "clusterroles", "clusterrolebindings"]
+    verbs: ["list"]
+  {{- end }}

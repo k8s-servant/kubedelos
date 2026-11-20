@@ -178,6 +178,16 @@ expect_registry() { # namespace outcome ("scanned" or "error auth"), then the ru
   fi
 }
 
+# The attack-surface fact sources of a run that failed to list, as "name=status" words: none when the chart's ClusterRole
+# grants every list the facts need. "absent" (kind has no Gateway API CRDs) counts as listed.
+FACTS_QUERY='
+import json, sys, sqlite3
+db = sqlite3.connect("file:/data/kubedelos.db?mode=ro", uri=True)
+raw = db.execute("SELECT fact_sources FROM scan_run WHERE id = ?", (int(sys.argv[1]),)).fetchone()[0]
+sources = json.loads(raw or "{}")
+print("missing" if not sources else " ".join(f"{k}={v}" for k, v in sorted(sources.items()) if v not in ("ok", "absent")))
+'
+
 # The per-scan docker configs live in /run/kubedelos only while a scan runs, and a new sweep may start at any minute, so
 # the directory is only judged while no scan_run is running (checked right before and right after listing it). Prints
 # the entry count seen in such a quiet moment; a directory that never reads empty within the window (a temp dir left
@@ -223,6 +233,17 @@ while [ "$SECONDS" -lt "$deadline" ]; do
         # shellcheck disable=SC2086 # the fields are words on purpose
         if expect_registry e2e-mounted scanned $registry && expect_registry e2e-pull scanned $registry &&
           expect_registry e2e-unlisted "error auth" $registry && expect_registry e2e-opaque "error auth" $registry; then
+          unlisted="$(kc -n kubedelos exec deploy/kd-kubedelos -- python -c "$FACTS_QUERY" "$id")" || {
+            echo "fact sources check failed" >&2
+            dump_state
+            exit 1
+          }
+          if [ -n "$unlisted" ]; then
+            echo "attack-surface facts not listed: $unlisted"
+            dump_state
+            exit 1
+          fi
+          echo "attack-surface facts listed"
           left="$(kc -n kubedelos exec deploy/kd-kubedelos -- python -c "$SECRETS_QUERY")" || {
             echo "secrets dir check failed" >&2
             dump_state
