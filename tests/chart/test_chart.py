@@ -739,6 +739,7 @@ EGRESS = {"networkPolicy": {"egress": [{"to": [{"ipBlock": {"cidr": "10.0.0.0/8"
 def test_notes_warn_when_feeds_meet_restricted_egress(notes):
     text = notes({"threatFeeds": {"enabled": True}, **EGRESS})
     assert FEEDS_EGRESS in text
-    assert "www.cisa.gov" in text and "epss.empiricalsecurity.com" in text
+    hosts = {word.strip(",.") for word in text.split()}  # whole words: the notes name both hosts
+    assert {"www.cisa.gov", "epss.empiricalsecurity.com"} <= hosts
     assert FEEDS_EGRESS not in notes({"threatFeeds": {"enabled": True}})
     assert FEEDS_EGRESS not in notes(EGRESS)
