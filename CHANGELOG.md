@@ -135,6 +135,8 @@
 
 ### Bug Fixes
 
+- The findings page shows the Risk column first, as the dashboard does; it was second to last and scrolled out of view
+  at 1280 px. A long installed version in the dashboard's fix list wraps instead of running into the Fixed in column.
 - A scan whose scope selects no namespace, or where every namespace refuses the pod list, now ends `failed` with a note
   instead of an `ok` run with no images that read as "no findings". The run is recorded before the cluster is listed,
   so a selector the API server rejects or an unreachable cluster also leaves a `failed` run with its reason (an API

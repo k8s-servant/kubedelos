@@ -520,6 +520,13 @@ main {
   white-space: nowrap;
 }
 
+/* In the fix list's fixed grid tracks an installed version wraps instead of running into the next column. */
+.fix-summary .version.installed {
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
 .cve {
   font-family: var(--mono);
   white-space: nowrap;

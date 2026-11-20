@@ -101,6 +101,7 @@
         <tbody>
           {%- for row in rows %}
           <tr>
+            {%- if risk_shown %}<td class="risk-cell">{{ row.score }}</td>{% endif %}
             <td><span class="sev sev-{{ row.severity | lower }}">{{ row.severity | title }}</span></td>
             <td class="cve">
               {%- set url = row.primary_url | safe_url -%}
@@ -112,7 +113,6 @@
             <td>{{ row.pkg_class or "unknown" }}</td>
             <td><span class="ref" title="{{ row.ref }}">{{ row.image }}</span></td>
             <td>{{ row.namespaces | join(", ") }}{% if row.more_namespaces %} +{{ row.more_namespaces }}{% endif %}</td>
-            {%- if risk_shown %}<td class="risk-cell">{{ row.score }}</td>{% endif %}
             <td class="risk">
               {%- if row.accepted %}<a class="chip chip-accepted" href="{{ row.accepted_href }}">accepted</a>
               {%- else %}<a class="accept" href="{{ row.accept_href }}">Accept…</a>{% endif -%}

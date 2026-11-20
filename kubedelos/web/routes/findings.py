@@ -40,7 +40,7 @@ COLUMNS = (
     ("namespace", "Namespaces"),
     (None, "Status"),
 )
-RISK_COLUMN = ("risk", "Risk")  # inserted before Status when the run's score says more than its severity
+RISK_COLUMN = ("risk", "Risk")  # the first column, as on the dashboard, when the run's score says more than its severity
 
 
 def _row(request: Request, r, namespace: str | None) -> dict:
@@ -169,7 +169,7 @@ def findings(
             else None,
             "aria_sort": ("descending" if desc else "ascending") if key == sort_key else None,
         }
-        for key, label in ((*COLUMNS[:-1], RISK_COLUMN, *COLUMNS[-1:]) if risk["risk_shown"] else COLUMNS)
+        for key, label in ((RISK_COLUMN, *COLUMNS) if risk["risk_shown"] else COLUMNS)
     ]
     ctx.update(
         risk,
