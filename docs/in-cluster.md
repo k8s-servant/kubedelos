@@ -290,7 +290,7 @@ SHA-256 digests pinned in the workflow files.
 
 ## Related
 
-- [Install](install.md#in-a-cluster): installing the chart, also before the first release.
+- [Install](install.md#in-a-cluster): installing the chart, also from a clone.
 - [Configuration](configuration.md): the variables behind the values.
 - Registries: [ACR](registries/acr.md), [ECR](registries/ecr.md), [GAR](registries/gar.md), [pull secrets](registries/pull-secrets.md).
 - [All guides](README.md)
