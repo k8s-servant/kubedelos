@@ -58,5 +58,5 @@ scripts/e2e-chart.sh                                            # chart on a thr
   docs and examples.
 - **Git:** Conventional Commits with lowercase subjects, no co-author or attribution
   lines. Work on a branch and open a PR; never push to `main`.
-- **Changelog:** after the first release, release-please writes `CHANGELOG.md`; until
-  then it holds a hand-written `## Unreleased` section. Do not bump versions by hand.
+- **Changelog:** release-please writes `CHANGELOG.md` from the Conventional Commit subjects, so
+  don't edit it by hand; write a subject that reads well as a changelog line. Do not bump versions by hand.

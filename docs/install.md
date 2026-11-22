@@ -7,9 +7,6 @@ kubedelos runs in two ways:
 - **In the cluster:** the Helm chart runs `kubedelos serve`, which sweeps one cluster on a schedule and serves the same
   UI to your team. See [In a cluster](#in-a-cluster).
 
-kubedelos has not had its first release yet. Until then, install it from GitHub as shown below; once 0.1.0 is out,
-`pipx install kubedelos` and the published Helm chart work as well.
-
 ## What you need
 
 | | |
@@ -25,15 +22,11 @@ kubedelos has not had its first release yet. Until then, install it from GitHub 
 With [pipx](https://pipx.pypa.io) or [uv](https://docs.astral.sh/uv/):
 
 ```bash
-pipx install git+https://github.com/k8s-servant/kubedelos      # or: uv tool install git+https://github.com/k8s-servant/kubedelos
+pipx install kubedelos        # or: uv tool install kubedelos
 kubedelos version
 ```
 
-After the first release:
-
-```bash
-pipx install kubedelos        # or: uv tool install kubedelos
-```
+To run the latest `main` instead of a release: `pipx install git+https://github.com/k8s-servant/kubedelos`.
 
 To upgrade, run `pipx upgrade kubedelos` (or `uv tool upgrade kubedelos`). The database schema is migrated on the next
 start and is not migrated back, so keep a copy of `kubedelos.db` if you may want to downgrade.
@@ -108,15 +101,13 @@ claude mcp add kubedelos -- kubedelos mcp
 The chart installs `kubedelos serve` with a read-only ClusterRole, a NetworkPolicy and a volume for the data. The image
 bundles the pinned Trivy.
 
-After the first release:
-
 ```bash
 helm install kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos \
   --version <release> --namespace kubedelos --create-namespace \
   --set clusterName=my-cluster
 ```
 
-Until then, build the image and install the chart from a clone. On a kind cluster:
+To run an unreleased `main`, build the image and install the chart from a clone. On a kind cluster:
 
 ```bash
 git clone https://github.com/k8s-servant/kubedelos && cd kubedelos

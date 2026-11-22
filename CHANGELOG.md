@@ -62,11 +62,11 @@
 
 * install the image's python packages from hashed lock files ([#80](https://github.com/k8s-servant/kubedelos/issues/80)) ([98b8e7a](https://github.com/k8s-servant/kubedelos/commit/98b8e7ae469420b2cf146046178c64091a70efa8))
 
-## Changelog
+### In detail
 
-## Unreleased
+The notes kept by hand before the first release, with more detail than the list above.
 
-### Features
+#### Features
 
 - Risk score: the dashboard's fix-first lists, the findings page (sort by `risk`), the print report and the CSV show a
   0-100 score per finding with the factors behind it. It is hidden for a run with no attack-surface facts while no
@@ -174,7 +174,7 @@
 - Each scan run stores the namespaces and resources the inventory could not list, so the UI marks such runs incomplete.
 - Each scan run holds an owner lock file while it runs. `kubedelos ui` closes runs left `running` with no live owner as `failed` at startup (printing, for example, `note: closed 2 interrupted runs`) and before each UI scan; a scan running in another process is never closed.
 
-### Documentation
+#### Documentation
 
 - The README opens with a dashboard screenshot (light and dark), shows a scan as a short GIF and the fix-first list with
   the factors behind a score; the UI guide shows the findings page sorted by risk. All come from a real scan of a
@@ -193,7 +193,7 @@
 - The README leads with the web UI, explains why kubedelos exists next to plain Trivy, has a compatibility table (Python, operating systems, Trivy, Kubernetes, image platforms, registries) and credits Trivy.
 - The README names the oldest Trivy a custom `KUBEDELOS_TRIVY_PATH` can be: v0.54.0, the first with `--pkg-types`.
 
-### Build
+#### Build
 
 - The release workflow pushes the image and the chart to the GHCR namespace of the repository that runs it, so a
   release dry run on a fork works without editing the workflow.
@@ -202,7 +202,7 @@
   install the same files, a changed hash fails the build, and `pip check` fails it if the lock misses a dependency.
   Dependabot updates the locks, and a test fails when they no longer satisfy `pyproject.toml`.
 
-### Bug Fixes
+#### Bug Fixes
 
 - The findings page shows the Risk column first, as the dashboard does; it was second to last and scrolled out of view
   at 1280 px. A long installed version in the dashboard's fix list wraps instead of running into the Fixed in column.

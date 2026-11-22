@@ -40,7 +40,7 @@ are next on the roadmap.
 ## Quickstart
 
 ```bash
-pipx install git+https://github.com/k8s-servant/kubedelos   # after the first release: pipx install kubedelos
+pipx install kubedelos        # or: uv tool install kubedelos
 kubedelos ui
 ```
 
@@ -106,8 +106,7 @@ helm install kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos --set clusterN
 ```
 
 The chart runs one hardened replica with a volume for the data, a read-only ClusterRole and a NetworkPolicy, and the
-image bundles the pinned Trivy. Until the first release, [Install](docs/install.md#in-a-cluster) shows how to install it
-from a clone.
+image bundles the pinned Trivy. [Install](docs/install.md#in-a-cluster) also shows how to install it from a clone.
 
 **Anyone who can reach `serve` can read the whole vulnerability inventory, and by default can also write**: start
 scans within the configured scope, retry or cancel them, and accept or revoke risks. Set `readOnly: true`, put it
