@@ -48,6 +48,11 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    # The image's Python minor version moves only in a deliberate PR, together with the CI matrix and
+    # scripts/lock-image.sh (tests/test_packaging.py checks they agree); Dependabot keeps the patch and digest fresh.
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     cooldown:
       default-days: 7
     commit-message:
