@@ -10,7 +10,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 # The image's Python (the Dockerfile's base) and platform.
-TARGET=(--python-version 3.13 --python-platform x86_64-unknown-linux-musl)
+TARGET=(--python-version 3.14 --python-platform x86_64-unknown-linux-musl)
 
 lock() { # output, inputs...
   local out="$1"
