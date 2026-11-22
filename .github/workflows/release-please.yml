@@ -12,6 +12,8 @@ name: Release
 # RELEASE_APP_CLIENT_ID and its private key the secret RELEASE_APP_PRIVATE_KEY, both
 # held in the `release` environment. The
 # publish jobs keep GITHUB_TOKEN, and the signing identity stays this workflow file.
+# The GHCR paths take the owner from the repository that runs the workflow, so a fork's dry run
+# pushes to its own namespace; GHCR wants lowercase names, which both owners are.
 on:
   push:
     branches: [main]
@@ -63,7 +65,7 @@ jobs:
       contents: read
       packages: write # push to ghcr.io
     env:
-      IMAGE: ghcr.io/k8s-servant/kubedelos
+      IMAGE: ghcr.io/${{ github.repository_owner }}/kubedelos
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
@@ -106,7 +108,7 @@ jobs:
       packages: write # push the signature next to the image
       id-token: write # keyless cosign signing
     env:
-      IMAGE: ghcr.io/k8s-servant/kubedelos
+      IMAGE: ghcr.io/${{ github.repository_owner }}/kubedelos
     steps:
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
@@ -131,7 +133,7 @@ jobs:
       contents: read
       packages: write # push to ghcr.io
     env:
-      CHART_REPO: ghcr.io/k8s-servant/charts
+      CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
       HELM_VERSION: 4.3.2 # keep in step with ci.yml
       HELM_SHA256: d1c0278d46beab79582d7e50f5b3dc206944ba8e577cde618513fd07daa53983 # linux-amd64 tarball; bump with the version
     outputs:
@@ -176,7 +178,7 @@ jobs:
       packages: write # push the signature next to the chart
       id-token: write # keyless cosign signing
     env:
-      CHART_REPO: ghcr.io/k8s-servant/charts
+      CHART_REPO: ghcr.io/${{ github.repository_owner }}/charts
     steps:
       - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
         with:
