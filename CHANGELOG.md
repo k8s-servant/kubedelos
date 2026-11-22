@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.1.0 (2026-11-22)
+
+
+### Features
+
+* accept findings as risk and take them off the ui work lists ([#38](https://github.com/k8s-servant/kubedelos/issues/38)) ([c9661cb](https://github.com/k8s-servant/kubedelos/commit/c9661cb5d616d1e6d9900063793dafe52e26cab1))
+* add --pkg-types to choose os packages, libraries or both ([#25](https://github.com/k8s-servant/kubedelos/issues/25)) ([18573d4](https://github.com/k8s-servant/kubedelos/commit/18573d4b06af17964077a136761c44a657e90d00))
+* add a namespaces page to the ui ([#37](https://github.com/k8s-servant/kubedelos/issues/37)) ([fbbf4a6](https://github.com/k8s-servant/kubedelos/commit/fbbf4a6374e131cb291d160b2497501df9689497))
+* add a read-only settings page that says where each value came from ([#47](https://github.com/k8s-servant/kubedelos/issues/47)) ([9adadab](https://github.com/k8s-servant/kubedelos/commit/9adadab332743fec972b263ca56bbe04f54caa98))
+* add a reports page that picks a run for the print report or the findings csv ([#46](https://github.com/k8s-servant/kubedelos/issues/46)) ([c334d4f](https://github.com/k8s-servant/kubedelos/commit/c334d4f8e803a3d9c58d9c594140b04bad4d571f))
+* add an about page that says how fresh the trivy dbs and the newest scan are ([#51](https://github.com/k8s-servant/kubedelos/issues/51)) ([d552c82](https://github.com/k8s-servant/kubedelos/commit/d552c821ab075cc7aee88c88dbd6230b7e0f4f6a))
+* add kubedelos mcp, a read-only mcp server over the local database ([#63](https://github.com/k8s-servant/kubedelos/issues/63)) ([#69](https://github.com/k8s-servant/kubedelos/issues/69)) ([773929e](https://github.com/k8s-servant/kubedelos/commit/773929ecf57ba9652004b8e9bc94248e17fe36c4))
+* add kubedelos registry test and registry login hints ([#6](https://github.com/k8s-servant/kubedelos/issues/6)) ([818f93e](https://github.com/k8s-servant/kubedelos/commit/818f93edb65f1e89f63ef1a38b8a20f3477a88aa))
+* add kubedelos serve with scheduled sweeps, a scan queue and retention ([#61](https://github.com/k8s-servant/kubedelos/issues/61)) ([e42b83a](https://github.com/k8s-servant/kubedelos/commit/e42b83a27f2bb24e937a9cf54d6faabcca80cd45))
+* add kubedelos ui with the dashboard and findings pages ([#29](https://github.com/k8s-servant/kubedelos/issues/29)) ([a84eb88](https://github.com/k8s-servant/kubedelos/commit/a84eb88f984bec6c2f8ab496bf564a08be161224))
+* add label selectors and image exclusion to scan ([#26](https://github.com/k8s-servant/kubedelos/issues/26)) ([f3e92aa](https://github.com/k8s-servant/kubedelos/commit/f3e92aa6184253d531d9ca823914aa0e54b51a05))
+* add the container image and helm chart for kubedelos serve ([#64](https://github.com/k8s-servant/kubedelos/issues/64)) ([1bb46b9](https://github.com/k8s-servant/kubedelos/commit/1bb46b91ec52c53bcc74021fa04904b0556dd30e))
+* bootstrap repo and add kubedelos scan ([#1](https://github.com/k8s-servant/kubedelos/issues/1)) ([c5bc930](https://github.com/k8s-servant/kubedelos/commit/c5bc93096dfbb1e458f9735dba7acd35454bcf89))
+* chart values for the attack-surface facts and the threat feeds ([#78](https://github.com/k8s-servant/kubedelos/issues/78)) ([ef6b192](https://github.com/k8s-servant/kubedelos/commit/ef6b19231a720da57beacc970375d40609169093))
+* compare two runs of a cluster in the ui ([#42](https://github.com/k8s-servant/kubedelos/issues/42)) ([715eefd](https://github.com/k8s-servant/kubedelos/commit/715eefd938a62c5e578a0c850048268812707656))
+* count failed images by kind on the dashboard and shorten the failures page ([#45](https://github.com/k8s-servant/kubedelos/issues/45)) ([adf16cc](https://github.com/k8s-servant/kubedelos/commit/adf16cc411eeb512c58495e57355f04b99ca5385))
+* download the findings view as csv and print a run report ([#43](https://github.com/k8s-servant/kubedelos/issues/43)) ([973eb62](https://github.com/k8s-servant/kubedelos/commit/973eb62afa7e1849ddec04594ba8af98269a6249))
+* keep each parallel scan's trivy layer cache on disk between runs ([#49](https://github.com/k8s-servant/kubedelos/issues/49)) ([8ac8a0b](https://github.com/k8s-servant/kubedelos/commit/8ac8a0b3fd42cc3c17bd397b8020769ca7de0c5b))
+* let one scan skip the result cache and rescan every image ([#54](https://github.com/k8s-servant/kubedelos/issues/54)) ([01d7342](https://github.com/k8s-servant/kubedelos/commit/01d7342f38236d365fde0d7d96d7de0882b2d4a9))
+* number runs per cluster in the ui ([#39](https://github.com/k8s-servant/kubedelos/issues/39)) ([0f8246b](https://github.com/k8s-servant/kubedelos/commit/0f8246baa04d2657af5c636b48eff08653a9dfe2))
+* open writes in kubedelos serve with an optional read-only mode ([#62](https://github.com/k8s-servant/kubedelos/issues/62)) ([b4ade8c](https://github.com/k8s-servant/kubedelos/commit/b4ade8c1f5981eddf11947f6d2d70fe08293d8c0))
+* rank fix-first by a risk score from threat feeds and exposure ([#63](https://github.com/k8s-servant/kubedelos/issues/63)) ([#72](https://github.com/k8s-servant/kubedelos/issues/72)) ([83141d6](https://github.com/k8s-servant/kubedelos/commit/83141d608ba6e191f9195d404101eae1e399d472))
+* record attack-surface facts for every workload (pr 1 of [#63](https://github.com/k8s-servant/kubedelos/issues/63)) ([#68](https://github.com/k8s-servant/kubedelos/issues/68)) ([509da80](https://github.com/k8s-servant/kubedelos/commit/509da807f302f202131cad4cd3a6ba3b5d36a881))
+* registry login for kubedelos serve (cloud identity, docker configs, pod pull secrets) ([#67](https://github.com/k8s-servant/kubedelos/issues/67)) ([5a6024e](https://github.com/k8s-servant/kubedelos/commit/5a6024eda7338f1568d30b4026f6c128c769f432))
+* restyle kubedelos ui with a sidebar, radar logo and worst images panel ([#30](https://github.com/k8s-servant/kubedelos/issues/30)) ([38935df](https://github.com/k8s-servant/kubedelos/commit/38935df1c57ef04234db7d907160a4958427d49a))
+* retry a run's failed images in place with a longer time limit ([#44](https://github.com/k8s-servant/kubedelos/issues/44)) ([fbca8f5](https://github.com/k8s-servant/kubedelos/commit/fbca8f59537064b071619bfa4541d180efc6cfd7))
+* retry failed images by kind and line up the retry form ([#50](https://github.com/k8s-servant/kubedelos/issues/50)) ([6df3de9](https://github.com/k8s-servant/kubedelos/commit/6df3de98e209a37a86b3909a7f6a97157ff1202a))
+* show every failed image of a run, live and on its own page, and retry passing errors once ([#40](https://github.com/k8s-servant/kubedelos/issues/40)) ([52187fe](https://github.com/k8s-servant/kubedelos/commit/52187fefcca2a7fd91e96aed19bfa1b2a301b07f))
+* start, follow and cancel scans from the ui ([#32](https://github.com/k8s-servant/kubedelos/issues/32)) ([e9bb7c7](https://github.com/k8s-servant/kubedelos/commit/e9bb7c7121941981844463cdf5d1201b4de4c7b8))
+* switch between kube-contexts and scan any of them from the ui ([#36](https://github.com/k8s-servant/kubedelos/issues/36)) ([a2e564f](https://github.com/k8s-servant/kubedelos/commit/a2e564f68e59dcc06eb14291f7a514752e1fa67a))
+* time each image's scan and show where a run's time went ([#48](https://github.com/k8s-servant/kubedelos/issues/48)) ([f320489](https://github.com/k8s-servant/kubedelos/commit/f32048942cb967d45b1d94c7f2e12eacdd179de5))
+
+
+### Bug fixes
+
+* accept the namespaces form's any-severity value and keep the context on 400 pages ([#41](https://github.com/k8s-servant/kubedelos/issues/41)) ([94fe85b](https://github.com/k8s-servant/kubedelos/commit/94fe85b3bb0858bfacb6b03adbc4f611faa7ba14))
+* cache images without a registry digest by their local image id ([#33](https://github.com/k8s-servant/kubedelos/issues/33)) ([099e805](https://github.com/k8s-servant/kubedelos/commit/099e8050d64a636ea88350a43d80e4433c725e2a))
+* fail a scan whose scope selects nothing or is forbidden everywhere ([#79](https://github.com/k8s-servant/kubedelos/issues/79)) ([34a1f33](https://github.com/k8s-servant/kubedelos/commit/34a1f33112c006a1bcf59fc2470799aeeb75d4e9))
+* line up the scans start form and style its number input ([#59](https://github.com/k8s-servant/kubedelos/issues/59)) ([20db244](https://github.com/k8s-servant/kubedelos/commit/20db24410dcf8d1fd929ce31d227946fb1ffeee5))
+* line up the values of the about and settings cards ([#52](https://github.com/k8s-servant/kubedelos/issues/52)) ([b56c855](https://github.com/k8s-servant/kubedelos/commit/b56c85596805f6ea520249b255808af826f2b2f4))
+* show the cause of trivy errors instead of their first 200 characters ([#27](https://github.com/k8s-servant/kubedelos/issues/27)) ([cf176f6](https://github.com/k8s-servant/kubedelos/commit/cf176f6632cef353acf3def2d55f4ba14ffdc645))
+* show the findings risk column first and wrap long installed versions ([#81](https://github.com/k8s-servant/kubedelos/issues/81)) ([ed277a1](https://github.com/k8s-servant/kubedelos/commit/ed277a141bc313f740fabd3bb4f8c7646583e985))
+
+
+### Documentation
+
+* add an install guide and a docs index, and slim the readme to an overview ([#77](https://github.com/k8s-servant/kubedelos/issues/77)) ([248c95e](https://github.com/k8s-servant/kubedelos/commit/248c95e65087590cb638d2bb57fbd1e51d8a9e58))
+* design the in-cluster mode (serve, schedule, chart, registry login) ([#60](https://github.com/k8s-servant/kubedelos/issues/60)) ([1b932b5](https://github.com/k8s-servant/kubedelos/commit/1b932b5a663cdfdff31966ba313a4dd46f552c88))
+* explain how a scan works, with every cache, db and limit ([#53](https://github.com/k8s-servant/kubedelos/issues/53)) ([d10a1a5](https://github.com/k8s-servant/kubedelos/commit/d10a1a57da47fefe4ef2ac9d6538da439efd1c31))
+* explain why kubedelos exists, add a compatibility table and credit trivy ([#34](https://github.com/k8s-servant/kubedelos/issues/34)) ([82480fa](https://github.com/k8s-servant/kubedelos/commit/82480fad7798651851b9b7717f93715e71d8bbe7))
+* show the dashboard, a scan and the fix-first list in the readme ([#82](https://github.com/k8s-servant/kubedelos/issues/82)) ([4a6b653](https://github.com/k8s-servant/kubedelos/commit/4a6b653182e0e97cabe77681c414d45ac932b5a0))
+
+
+### Build
+
+* install the image's python packages from hashed lock files ([#80](https://github.com/k8s-servant/kubedelos/issues/80)) ([98b8e7a](https://github.com/k8s-servant/kubedelos/commit/98b8e7ae469420b2cf146046178c64091a70efa8))
+
+## Changelog
+
 ## Unreleased
 
 ### Features

@@ -1,12 +1,14 @@
 apiVersion: v2
 name: kubedelos
-description: Kubernetes image vulnerability scanner with a web UI and scheduled sweeps (kubedelos serve)
+description: >-
+  Kubernetes image vulnerability scanner with a web UI and scheduled sweeps
+  (kubedelos serve)
 type: application
-version: 0.0.0
-appVersion: "0.0.0"
-kubeVersion: ">=1.29.0-0"
+version: 0.1.0
+appVersion: 0.1.0
+kubeVersion: '>=1.29.0-0'
 home: https://github.com/k8s-servant/kubedelos
 sources:
   - https://github.com/k8s-servant/kubedelos
 annotations:
-  artifacthub.io/license: Apache-2.0 # Chart.yaml has no license field
+  artifacthub.io/license: Apache-2.0
