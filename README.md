@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/k8s-servant/kubedelos/actions/workflows/ci.yml/badge.svg)](https://github.com/k8s-servant/kubedelos/actions/workflows/ci.yml)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/k8s-servant/kubedelos/badge)](https://scorecard.dev/viewer/?uri=github.com/k8s-servant/kubedelos)
+[![PyPI](https://img.shields.io/pypi/v/kubedelos)](https://pypi.org/project/kubedelos/)
+[![Python](https://img.shields.io/pypi/pyversions/kubedelos)](https://pypi.org/project/kubedelos/)
+[![Release](https://img.shields.io/github/v/release/k8s-servant/kubedelos)](https://github.com/k8s-servant/kubedelos/releases)
 [![License](https://img.shields.io/github/license/k8s-servant/kubedelos)](LICENSE)
 
 Scan the container images running in a Kubernetes cluster with Trivy.

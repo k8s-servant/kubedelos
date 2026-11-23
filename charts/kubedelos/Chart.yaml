@@ -8,7 +8,35 @@ version: 0.1.1
 appVersion: 0.1.1
 kubeVersion: '>=1.29.0-0'
 home: https://github.com/k8s-servant/kubedelos
+icon: https://raw.githubusercontent.com/k8s-servant/kubedelos/main/kubedelos/web/static/logo.svg
 sources:
   - https://github.com/k8s-servant/kubedelos
+keywords:
+  - kubernetes
+  - security
+  - vulnerability
+  - vulnerability-scanner
+  - trivy
+  - cve
+  - container-security
+  - mcp
+maintainers:
+  - name: k8s-servant
+    url: https://github.com/k8s-servant
 annotations:
   artifacthub.io/license: Apache-2.0
+  artifacthub.io/category: security
+  artifacthub.io/links: |
+    - name: Documentation
+      url: https://github.com/k8s-servant/kubedelos/blob/main/docs/in-cluster.md
+    - name: Verifying a release
+      url: https://github.com/k8s-servant/kubedelos/blob/main/docs/in-cluster.md#verifying-a-release
+    - name: support
+      url: https://github.com/k8s-servant/kubedelos/issues
+  artifacthub.io/screenshots: |
+    - title: Dashboard with the fix-first list ordered by risk score
+      url: https://raw.githubusercontent.com/k8s-servant/kubedelos/main/docs/images/dashboard-light.png
+    - title: A fix opened, with the factors behind its risk score
+      url: https://raw.githubusercontent.com/k8s-servant/kubedelos/main/docs/images/fix-first-light.png
+    - title: Findings sorted by risk
+      url: https://raw.githubusercontent.com/k8s-servant/kubedelos/main/docs/images/findings-risk-light.png
