@@ -57,8 +57,9 @@ reaches a model holding a write token.
 
 ## Releases
 
-Maintainers merge the release PR that release-please keeps open. That tags the release
-and publishes the package.
+Maintainers merge the release PR that release-please keeps open. That tags the release, and the release workflow
+publishes the package to PyPI, builds the image on a native runner per platform (amd64 and arm64), pushes and signs the
+image and the chart on GHCR, and lists the new version in the MCP Registry.
 
 The chart is listed on [Artifact Hub](https://artifacthub.io/packages/helm/kubedelos/kubedelos), which reads each new chart version from GHCR, along with
 the `artifacthub.io/*` annotations in `charts/kubedelos/Chart.yaml` and the chart's `README.md`. After the repository is
@@ -67,6 +68,7 @@ it as a verified publisher.
 
 `kubedelos mcp` is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
 `io.github.k8s-servant/kubedelos`. The registry reads `server.json` and checks the `mcp-name` comment in
-`README.pypi.md`; release-please bumps the versions in `server.json`. After a release is on PyPI, an owner of the
-k8s-servant org publishes it with `mcp-publisher login github --token <token with read:org>` and `mcp-publisher publish`
-(`mcp-publisher login github` alone cannot publish to an org namespace yet).
+`README.pypi.md`; release-please bumps the versions in `server.json`. The release workflow's `mcp-registry` job
+publishes it after PyPI, logging in with the workflow's OIDC token (`mcp-publisher login github-oidc`), so no token is
+stored. By hand, an owner of the k8s-servant org can run `mcp-publisher login github --token <token with read:org>` and
+`mcp-publisher publish` from the release tag.
