@@ -68,16 +68,17 @@ def namespaces(
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "pinned": run_id is not None}
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         if run_id is not None:
             try:
-                run = get_run(conn, context, run_id)
+                run = get_run(conn, cluster, run_id)
             except RunNotShown as exc:
                 return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         else:
-            run = newest_run(conn, context, cluster_scope=True)
+            run = newest_run(conn, cluster, cluster_scope=True)
         if run is None:
-            newest_any = newest_run(conn, context, cluster_scope=False)
+            newest_any = newest_run(conn, cluster, cluster_scope=False)
             ctx["narrower_href"] = link(request, "/findings", run_id=newest_any.id) if newest_any else None
             return render(request, "namespaces.html", ctx)
         all_rows = namespace_counts(conn, run.id)

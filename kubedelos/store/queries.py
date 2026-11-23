@@ -1109,6 +1109,15 @@ def cluster_scans(conn: sqlite3.Connection) -> list[ClusterScan]:
     return sorted(scans, key=lambda s: (s.name, s.cluster))
 
 
+def context_cluster(conn: sqlite3.Connection, context: str) -> str | None:
+    """The cluster of the newest run made through ``context``, or None when no run went through it. The UI uses it
+    for a context the kubeconfig no longer has."""
+    row = conn.execute(
+        "SELECT cluster FROM scan_run WHERE context = ? AND cluster IS NOT NULL ORDER BY id DESC LIMIT 1", (context,)
+    ).fetchone()
+    return row["cluster"] if row else None
+
+
 @dataclass(frozen=True)
 class NamespaceRow:
     """One namespace of a run: its finding units by severity, and its images (distinct refs, failed ones included)."""

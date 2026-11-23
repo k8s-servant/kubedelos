@@ -1,15 +1,16 @@
 """Accepted risk in the UI: the register (``GET /accepted``), the Accept… form, create and revoke.
 
-The register lists the shown context's entries and the all-cluster ones, with each entry's state, days left and how
-many findings it covers in the dashboard's run (the newest whole-cluster run). The form is prefilled from the findings
-row that links to it; the owner defaults to the signed-in name in serve (an empty posted owner becomes it) and to the
-OS user otherwise, and the expiry to 90 days ahead, at most 365. An entry belongs to the posted context, or to all
-clusters. In read-only serve the form and the revoke buttons are not offered.
+The register lists the entries of the shown context's cluster (whichever of its contexts made them) and the all-cluster
+ones, with each entry's state, days left and how many findings it covers in the dashboard's run (the newest
+whole-cluster run). The form is prefilled from the findings row that links to it; the owner defaults to the signed-in
+name in serve (an empty posted owner becomes it) and to the OS user otherwise, and the expiry to 90 days ahead, at most
+365. An entry belongs to the posted context's cluster, or to all clusters. In read-only serve the form and the revoke
+buttons are not offered.
 
 ``POST /accepted`` and ``POST /accepted/{id}/revoke`` read the urlencoded body themselves, as ``POST /scans`` does (the
 CSRF guard has checked it), and write through ``open_db_rw``. A context in a form must be one the UI knows; revoke only
-touches an entry that applies to the posted context. Matching happens on read (``kubedelos.store.accepted``), so both
-take effect on the next page.
+touches an entry that applies to the posted context's cluster. Matching happens on read (``kubedelos.store.accepted``),
+so both take effect on the next page.
 """
 
 import getpass
@@ -61,9 +62,10 @@ def register(request: Request, cve: str | None = None) -> HTMLResponse:
     now = request.app.state.clock()
     today = now.date()
     with open_db(request) as conn:
-        context = shown_context(request, conn)
-        run = newest_run(conn, context, cluster_scope=True)
-        entries = accepted.register(conn, context, run.id if run else None, today, vuln_id=(cve or "").strip() or None)
+        shown_context(request, conn)
+        cluster = request.state.cluster
+        run = newest_run(conn, cluster, cluster_scope=True)
+        entries = accepted.register(conn, cluster, run.id if run else None, today, vuln_id=(cve or "").strip() or None)
     rows = [{"entry": e, "days": days_text(e.days_left)} for e in entries]
     return render(request, "accepted.html", {"now": now, "run": run, "rows": rows, "cve": cve or ""})
 
@@ -165,8 +167,8 @@ def _create(request: Request, body: bytes) -> Response:
                 reason=values["reason"],
                 owner=values["owner"],
                 expires=expires,
-                cluster=context if values["scope"] == "context" else None,  # until contexts resolve to cluster keys
-                context=context if values["scope"] == "context" else None,
+                cluster=request.state.cluster if values["scope"] == "context" else None,
+                context=context if values["scope"] == "context" else None,  # the context it was made through
                 namespace=values["namespace"],
                 repo=values["image"],
                 pkg_name=values["package"],
@@ -191,7 +193,7 @@ def _revoke(request: Request, entry_id: int, body: bytes) -> Response:
         context = _target(request, conn, fields)
     with open_db_rw(request) as conn:
         entry = accepted.get(conn, entry_id)
-        applies = entry is not None and entry["cluster"] in (None, context)
+        applies = entry is not None and entry["cluster"] in (None, request.state.cluster)
         if not applies or not accepted.revoke(conn, entry_id, request.app.state.clock()):
             message = "There is no such acceptance for this cluster, or it was revoked already."
             return render(request, "error.html", {"title": "Not found", "message": message}, 404)

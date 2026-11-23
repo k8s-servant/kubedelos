@@ -143,3 +143,22 @@ def test_awkward_context_names_are_escaped_and_encoded(client, kube_contexts):
 )
 def test_seconds_text(seconds, text):
     assert seconds_text(seconds) == text
+
+
+def test_a_history_only_cluster_opens_by_its_newest_context(client, seed, kube_contexts):
+    server = "https://gone.example.com"
+    for context in ("gone", "gone-admin"):  # both contexts have left the kubeconfig since
+        run_id = seed.repo.start_run(server, context, "ui", "0.76.1", scan_level="library,os", scope=None)
+        seed.repo.finish_run(run_id, "ok")
+    _ok_run(seed, seed.context)
+    kube_contexts.append("other")  # a second entry, so the switcher shows
+    html = client.get("/").text
+    switcher = html[html.index('<details class="context context-switch"') :]
+    switcher = switcher[: switcher.index("</details>")]
+    assert 'href="/?context=gone-admin">gone-admin</a>' in switcher  # one entry, named by its newest run's context
+    assert ">gone</a>" not in switcher
+    response = client.get("/scans", params={"context": "gone-admin"})
+    assert response.status_code == 200
+    rows = response.text[response.text.index("<tbody>") :]
+    assert rows.count("<tr>") == 2  # the cluster's whole history
+    assert "via gone</div>" in rows

@@ -119,6 +119,7 @@ def _row(request: Request, run: HistoryRow, retryable_id: int | None = None) -> 
         "times_href": link(request, f"/scans/{run.id}/times") if run.status != "running" else None,
         "by": requester(run.requested_by, run.trigger) or NO_REQUESTER,
         "reason": run.reason,
+        "via": run.context if run.context and run.context != request.state.context else None,
     }
 
 
@@ -254,8 +255,8 @@ def _page(
     serve = request.app.state.serve
     with open_db(request) as conn:
         context = shown_context(request, conn, context)
-        history, total = run_history(conn, context, page, PER_PAGE)
-        run = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        history, total = run_history(conn, request.state.cluster, page, PER_PAGE)
+        run = newest_run(conn, request.state.cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
         job = _job(request, conn)
         waiting = _queue(conn, now) if serve else []
     retryable_id = run.id if run is not None and run.status == "partial" else None

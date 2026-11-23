@@ -83,7 +83,14 @@ def kube_contexts():
 
 
 @pytest.fixture
-def app(seed, kube_contexts):
+def kube_servers():
+    """The cluster key (API server) of each test kubeconfig context that has one; a context left out is keyed by its
+    own name, as ``cluster_keys`` does for a context without a server. Read on each page, like ``kube_contexts``."""
+    return {}
+
+
+@pytest.fixture
+def app(seed, kube_contexts, kube_servers):
     connect(seed.settings.db_path).close()  # create and migrate first, as `kubedelos ui` does at startup
     return create_app(
         seed.settings,
@@ -92,6 +99,7 @@ def app(seed, kube_contexts):
         port=PORT,
         clock=seed.clock,
         list_contexts=lambda: list(kube_contexts),
+        cluster_keys=lambda: {name: kube_servers.get(name, name) for name in kube_contexts},
     )
 
 

@@ -814,3 +814,47 @@ def test_fix_first_with_feeds_but_no_facts_says_the_facts_are_missing(client, se
         "Attack-surface facts were not collected for this run, so exposure, host access and API rights count as" in html
     )
     assert "Risk scores are hidden" not in html and "No threat feed has been downloaded" not in html
+
+
+SERVER = "https://prod.example.com:6443"
+
+
+def _cluster_run(seed, context, cluster=SERVER):
+    """An ok whole-cluster run of ``cluster`` that went through ``context``."""
+    run_id = seed.repo.start_run(cluster, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    seed.repo.finish_run(run_id, "ok")
+    return run_id
+
+
+def test_two_contexts_of_one_cluster_show_the_same_newest_run(client, seed, kube_contexts, kube_servers):
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": SERVER, "prod-admin": SERVER})
+    _cluster_run(seed, "prod")
+    newest = _cluster_run(seed, "prod-admin")
+    _add(seed, newest, "reg.example.com/app:newest", ["HIGH"])
+    for context in ("prod", "prod-admin"):
+        html = client.get("/", params={"context": context}).text
+        assert '<li class="chip">Run 2</li>' in html, context
+        assert f"run_id={newest}" in html and "app:newest" in html
+    assert "No scans of" in client.get("/").text  # my-cluster is another cluster
+
+
+def test_the_run_line_says_via_the_other_context(client, seed, kube_contexts, kube_servers):
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": SERVER, "prod-admin": SERVER})
+    _cluster_run(seed, "prod-admin")
+    assert '<li class="chip">via prod-admin</li>' in _chips(client.get("/", params={"context": "prod"}).text)
+    assert "via " not in _chips(client.get("/", params={"context": "prod-admin"}).text)
+    assert '<li class="chip">via prod-admin</li>' in client.get("/findings", params={"context": "prod"}).text
+
+
+def test_the_switcher_shows_each_context_with_its_clusters_last_scan(client, seed, kube_contexts, kube_servers):
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": SERVER, "prod-admin": SERVER})
+    _cluster_run(seed, "prod-admin")
+    switcher = _between(_sidebar(client.get("/").text), '<details class="context context-switch"', "</details>")
+    entries = re.findall(r"(<li[^>]*>.*?</li>)", switcher, re.S)
+    assert [re.search(r">([^<]+)</a>", e).group(1) for e in entries] == ["my-cluster", "prod", "prod-admin"]
+    assert "never scanned" in entries[0]
+    assert "ago" in entries[1] and "ago" in entries[2]  # prod shares prod-admin's run
+    assert "view only" not in switcher

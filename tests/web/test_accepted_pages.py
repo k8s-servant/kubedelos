@@ -349,3 +349,15 @@ def test_empty_owner_without_identity_is_refused(serve_client, seed):
 
 def test_empty_owner_on_the_laptop_is_refused(client, seed):
     assert _post(client, "/accepted", **{**FORM, "owner": ""}).status_code == 400
+
+
+def test_an_acceptance_made_through_one_context_covers_its_cluster(client, seed, kube_contexts, kube_servers):
+    server = "https://prod.example.com:6443"
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": server, "prod-admin": server})
+    response = _post(client, "/accepted", **FORM, context="prod-admin")
+    assert response.headers["location"] == "/accepted?context=prod-admin"
+    entry = accepted.register(seed.repo._conn, server, None, TODAY)[0]
+    assert (entry.cluster, entry.context) == (server, "prod-admin")
+    assert "CVE-1" in client.get("/accepted", params={"context": "prod"}).text  # the other context sees it
+    assert _post(client, f"/accepted/{entry.id}/revoke", context="prod").status_code == 303

@@ -1004,3 +1004,17 @@ def test_history_says_why_a_run_failed(client, seed):
     row = next(r for r in rows if f"Run {empty}<" in r)
     assert '<div class="hint">no namespace matched the scope; nothing was scanned</div>' in row
     assert 'class="hint"' not in next(r for r in rows if f"Run {plain}<" in r)
+
+
+def test_the_history_says_which_context_a_run_went_through(client, seed, kube_contexts, kube_servers):
+    server = "https://prod.example.com:6443"
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": server, "prod-admin": server})
+    for context in ("prod", "prod-admin"):
+        run_id = seed.repo.start_run(server, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+        seed.repo.finish_run(run_id, "ok")
+    html = client.get("/scans", params={"context": "prod"}).text
+    rows = _rows(html)
+    assert len(rows) == 2
+    assert '<div class="hint">via prod-admin</div>' in rows[0]
+    assert "via " not in rows[1]

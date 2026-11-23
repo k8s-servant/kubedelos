@@ -49,7 +49,8 @@ def about(request: Request) -> HTMLResponse:
     now = request.app.state.clock()
     with open_db(request) as conn:
         context = shown_context(request, conn)
-        newest = newest_run(conn, context, cluster_scope=False)
+        cluster = request.state.cluster
+        newest = newest_run(conn, cluster, cluster_scope=False)
     if newest is None:
         scanned = "none yet"
     elif newest.finished_at is None:

@@ -112,11 +112,12 @@ def failure(row) -> dict:
     }
 
 
-def retry_problem(request: Request, conn: sqlite3.Connection, context: str, run: RunLabel) -> str | None:
-    """Why the failed images of ``run`` can't be retried, or None when they can."""
-    newest = newest_run(conn, context, cluster_scope=False)
+def retry_problem(request: Request, conn: sqlite3.Connection, run: RunLabel) -> str | None:
+    """Why the failed images of ``run`` can't be retried, or None when they can. ``run`` is of the shown context's
+    cluster, so the page has called ``shown_context`` first."""
+    newest = newest_run(conn, request.state.cluster, cluster_scope=False)
     if newest is None or newest.id != run.id:
-        return f"only the newest run of {context} can be retried"
+        return f"only the newest run of {request.state.context} can be retried"
     if newest.status != "partial" or not run_failures(conn, run.id, limit=1)[1]:
         return f"run {run.number} has no failed images"
     trivy = CUSTOM_TRIVY if request.app.state.settings.trivy_path else TRIVY_VERSION
@@ -157,16 +158,17 @@ def _page(
     """
     with open_db(request) as conn:
         context = shown_context(request, conn, context)
+        cluster = request.state.cluster
         try:
-            run = run_label(conn, context, run_id)
+            run = run_label(conn, cluster, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         kinds = failure_kinds(conn, run.id)
         rows, shown = run_failures(conn, run.id, limit=PER_PAGE, offset=(page - 1) * PER_PAGE, kind=kind)
         total = sum(n for _, n in kinds)
         auth_refs = auth_failed_refs(conn, run.id) if total else []
-        newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
-        retryable = retry_problem(request, conn, context, run) is None
+        newest = newest_run(conn, cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
+        retryable = retry_problem(request, conn, run) is None
         notes = retry_notes(conn, run.id)
     settings = request.app.state.settings
     present = {k for k, _ in kinds}
@@ -247,10 +249,10 @@ def _retry(request: Request, run_id: int, body: bytes) -> Response:
             if request.app.state.serve and context != request.app.state.context:
                 # serve scans only its own cluster, so a run kept from another context can't be retried here.
                 raise RunNotShown(f"only runs of {request.app.state.context} can be retried here")
-            run = run_label(conn, context, run_id)
+            run = run_label(conn, request.state.cluster, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
-        problem = retry_problem(request, conn, context, run)
+        problem = retry_problem(request, conn, run)
         present = {k for k, _ in failure_kinds(conn, run.id)}
     if problem:
         return page(problem, 409)

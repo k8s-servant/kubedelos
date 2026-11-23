@@ -157,7 +157,14 @@ def test_pages_under_300ms(settings):
     pages += ["/report", "/reports", "/settings", f"/scans/{run_id}/times"]
     pages += ["/diff", f"/diff?from={run_id - PRIOR_RUNS}&to={run_id}"]
     pages += ["/accepted", "/findings?accepted=only", f"/findings?accepted=all&sort=cve&page={middle}"]
-    app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT, list_contexts=lambda: [CONTEXT])
+    app = create_app(
+        settings,
+        context=CONTEXT,
+        token=TOKEN,
+        port=PORT,
+        list_contexts=lambda: [CONTEXT],
+        cluster_keys=lambda: {CONTEXT: CONTEXT},
+    )
     with TestClient(app, base_url=BASE_URL) as client:
         assert client.get(f"/?token={TOKEN}", follow_redirects=False).status_code == 303
         for path in pages:

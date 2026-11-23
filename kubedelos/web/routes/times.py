@@ -20,13 +20,14 @@ SHOWN = 50
 @router.get("/scans/{run_id}/times", response_class=HTMLResponse)
 def times(request: Request, run_id: int = Path(ge=1, le=MAX_ID)) -> HTMLResponse:
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         try:
-            run = run_label(conn, context, run_id)
+            run = run_label(conn, cluster, run_id)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         rows, summary = scan_times(conn, run.id, SHOWN)
-        newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        newest = newest_run(conn, cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
     chips = [f"{summary.timed} {plural(summary.timed, 'image')} scanned"]
     if summary.cached:
         chips.append(f"{summary.cached} cached")

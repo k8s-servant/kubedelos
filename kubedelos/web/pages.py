@@ -4,9 +4,10 @@ They live apart from ``kubedelos.web.app`` so the routes and the security middle
 this module imports nothing from ``app``, ``routes`` or ``security``, which keeps the import graph acyclic. Pages call
 ``open_db`` for a read-only connection of their own (sqlite3 objects never cross threads); only the POST routes call
 ``open_db_rw`` for a writable one. In ``kubedelos serve`` the scan and retry routes queue their request through
-``queue_ui_request``. ``short_image`` is how every page names an image. ``render`` fills a template with what every
-page needs: the request, the kube-context, the CSP nonce and the nav. A page may override the context and nav (the
-signed-out page shows neither).
+``queue_ui_request``. ``shown_context`` resolves the page's kube-context and the cluster key it stands for, which the
+store queries take, since contexts that point at one API server share one history. ``short_image`` is how every page
+names an image. ``render`` fills a template with what every page needs: the request, the kube-context, the CSP nonce
+and the nav. A page may override the context and nav (the signed-out page shows neither).
 """
 
 import contextlib
@@ -25,7 +26,7 @@ from kubedelos.store import (
     intel,
     queue,
 )  # through the module, so a test that patches db.connect reaches every caller
-from kubedelos.store.queries import context_scans
+from kubedelos.store.queries import cluster_scans, context_cluster
 from kubedelos.web.identity import identity
 
 QUEUE_FULL = "the queue is full"
@@ -85,7 +86,7 @@ def queue_ui_request(
 
 
 class UnknownContext(Exception):
-    """The ``context`` asked for is neither in the kubeconfig nor in the scan history."""
+    """The ``context`` asked for is neither in the kubeconfig nor the name of a cluster in the scan history."""
 
     def __init__(self, name: str) -> None:
         super().__init__(name)
@@ -97,34 +98,64 @@ class ContextEntry:
     """One line of the sidebar's context switcher."""
 
     name: str
-    finished_at: datetime | None  # when its newest result run finished, None when it has none
-    scannable: bool  # in the kubeconfig, so the UI can scan it; a context known only from history can only be viewed
+    finished_at: datetime | None  # when its cluster's newest result run finished, None when it has none
+    scannable: bool  # in the kubeconfig, so the UI can scan it; a cluster known only from history can only be viewed
     href: str  # the same page for that context, without the other parameters (run ids and filters are per cluster)
     shown: bool
 
 
 def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None = None) -> str:
     """Resolve the page's context, ``wanted`` or else ``?context=`` (the UI's startup context by default), and record
-    it, with the switcher's entries, on ``request.state``. Raises :class:`UnknownContext` for a name the UI doesn't
-    know.
+    it, its cluster key (``request.state.cluster``, what the store queries take) and the switcher's entries on
+    ``request.state``. Raises :class:`UnknownContext` for a name the UI doesn't know.
 
-    The kubeconfig is listed on every call, so a context added while the UI runs shows up; listing never loads one.
+    The switcher lists every kubeconfig context, each with its cluster's last scan, so two contexts of one cluster
+    show the same one, plus one entry per cluster no kubeconfig context points at, named after the context of its
+    newest run (or by its key when that name already stands for another cluster). The kubeconfig is listed on every
+    call, so a context added while the UI runs shows up; listing never loads one.
     """
     default = request.app.state.context
     wanted = wanted or request.query_params.get("context") or default
     kubeconfig = scannable_contexts(request)
-    scans = context_scans(conn)
-    known = sorted(kubeconfig | set(scans), key=str.casefold)
-    if wanted not in known:
+    scans = {scan.cluster: scan for scan in cluster_scans(conn)}
+    clusters = {name: cluster_of(request, conn, name) for name in kubeconfig}  # entry name -> cluster key
+    claimed = set(clusters.values())
+    for scan in scans.values():  # by name, so a clash keeps the same winner on every page
+        if scan.cluster in claimed:
+            continue
+        name = scan.name
+        if name in clusters or cluster_of(request, conn, name) != scan.cluster:
+            name = scan.cluster  # a key resolves to itself, since no context is named after it
+        if name not in clusters:
+            clusters[name] = scan.cluster
+    if wanted not in clusters:
         raise UnknownContext(wanted)
     request.state.context = wanted
+    request.state.cluster = clusters[wanted]
     request.state.contexts = [
         ContextEntry(
-            name, scans.get(name), name in kubeconfig, _with_context(request, request.url.path, name), name == wanted
+            name,
+            scan.finished_at if (scan := scans.get(clusters[name])) else None,
+            name in kubeconfig,
+            _with_context(request, request.url.path, name),
+            name == wanted,
         )
-        for name in known
+        for name in sorted(clusters, key=str.casefold)
     ]
     return wanted
+
+
+def cluster_keys(request: Request) -> dict[str, str]:
+    """Each kubeconfig context's cluster key, as the kubeconfig is now; read once per request."""
+    if not hasattr(request.state, "kube_cluster_keys"):
+        request.state.kube_cluster_keys = dict(request.app.state.cluster_keys())
+    return request.state.kube_cluster_keys
+
+
+def cluster_of(request: Request, conn: sqlite3.Connection, name: str) -> str:
+    """The cluster key a context name stands for: the kubeconfig's, else the cluster of the newest run made through
+    that context (one the kubeconfig no longer has), else the name itself."""
+    return cluster_keys(request).get(name) or context_cluster(conn, name) or name
 
 
 RISK_HIDDEN = (

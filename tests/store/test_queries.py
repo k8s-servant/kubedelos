@@ -193,6 +193,15 @@ def test_cluster_scans_name_each_cluster_after_its_newest_run(db):
     ]
 
 
+def test_context_cluster_is_the_cluster_of_the_newest_run_through_the_context(db):
+    conn, repo = db
+    _run(repo, context="prod", cluster="prod")
+    _run(repo, context="prod", cluster=K)
+    _run(repo, context="prod-admin", cluster="other")
+    assert queries.context_cluster(conn, "prod") == K
+    assert queries.context_cluster(conn, "nowhere") is None
+
+
 def test_exclusions_still_cluster_scope(db):
     conn, repo = db
     run_id = _run(repo, scope=_scope(exclude_images=["busybox:*"], exclude_namespaces=["kube-system"]))

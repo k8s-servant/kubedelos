@@ -116,14 +116,15 @@ def findings(
 ) -> HTMLResponse:
     ctx: dict = {"now": request.app.state.clock(), "run": None, "pinned": run_id is not None}
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         if run_id is not None:
             try:
-                run = get_run(conn, context, run_id)
+                run = get_run(conn, cluster, run_id)
             except RunNotShown as exc:
                 return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         else:
-            run = newest_run(conn, context, cluster_scope=False)
+            run = newest_run(conn, cluster, cluster_scope=False)
         if run is None:
             return render(request, "findings.html", ctx)
         risk = risk_view(conn, run.id)

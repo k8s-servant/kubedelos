@@ -48,14 +48,15 @@ def diff(
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "old": None, "new": None, "result": None}
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         try:
-            new = get_run(conn, context, to_id) if to_id else newest_run(conn, context, cluster_scope=True)
-            new = new or newest_run(conn, context, cluster_scope=False)
-            old = get_run(conn, context, from_id) if from_id else (previous_comparable(conn, new) if new else None)
+            new = get_run(conn, cluster, to_id) if to_id else newest_run(conn, cluster, cluster_scope=True)
+            new = new or newest_run(conn, cluster, cluster_scope=False)
+            old = get_run(conn, cluster, from_id) if from_id else (previous_comparable(conn, new) if new else None)
         except RunNotShown as exc:
             return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
-        ctx.update(run=newest_run(conn, context, cluster_scope=False), choices=result_runs(conn, context))
+        ctx.update(run=newest_run(conn, cluster, cluster_scope=False), choices=result_runs(conn, cluster))
         if new is None:
             return render(request, "diff.html", ctx)
         if old is not None and old.id > new.id:
