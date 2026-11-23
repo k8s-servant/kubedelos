@@ -111,7 +111,8 @@ def test_migration_14_keys_existing_runs_by_their_context(tmp_path):
         ]
         assert _rows(conn, "SELECT cluster, context FROM acceptance ORDER BY id") == [("a", "a"), (None, None)]
         indexes = {r[0]: r[1] for r in conn.execute("SELECT name, sql FROM sqlite_master WHERE tbl_name = 'scan_run'")}
-        assert "idx_scan_run_context" not in indexes and "idx_scan_run_number_no_context" not in indexes
+        assert "idx_scan_run_number_no_context" not in indexes
+        assert "(context, id)" in indexes["idx_scan_run_context"]  # for the newest run through a context
         assert "(cluster, number)" in indexes["idx_scan_run_number"]
         assert "WHERE cluster IS NULL" in indexes["idx_scan_run_number_no_cluster"]
         assert "(cluster, status, id)" in indexes["idx_scan_run_cluster"]

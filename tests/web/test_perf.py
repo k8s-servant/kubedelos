@@ -92,6 +92,7 @@ def test_query_plans_use_indexes(tmp_path):
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),
         "result_runs": lambda: queries.result_runs(conn, CONTEXT),
+        "context_cluster": lambda: queries.context_cluster(conn, CONTEXT),
         "workloads": lambda: workloads.workloads(conn, run_id, namespace="ns-01", name="app1"),
         "workloads cve": lambda: workloads.workloads(conn, run_id, vuln_id=vuln_id),
         "cve_packages": lambda: workloads.cve_packages(conn, run_id, vuln_id),

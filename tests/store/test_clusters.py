@@ -80,3 +80,23 @@ def test_merge_rolls_back_on_error(conn):
         merge_contexts(conn, {"prod": K})
     assert not conn.in_transaction
     assert _rows(conn) == [(1, "prod", 1, "prod"), (2, K, 1, "prod-admin"), (3, "prod", 2, "prod")]
+
+
+def test_two_contexts_with_old_runs_merge_into_one_key_in_one_call(conn):
+    _run(conn, "prod", "prod", 1)  # id 1
+    _run(conn, "prod-admin", "prod-admin", 1)  # id 2: the same number as id 1, under its own name
+    _run(conn, "prod", "prod", 2)  # id 3
+    _run(conn, "prod-admin", "prod-admin", 2)  # id 4
+    conn.execute(
+        "INSERT INTO acceptance (vuln_id, cluster, context, reason, owner, expires_at, created_at)"
+        " VALUES ('CVE-1', 'prod-admin', 'prod-admin', 'r', 'o', '2099-01-01', 't')"
+    )
+    conn.commit()
+    assert merge_contexts(conn, {"prod": K, "prod-admin": K}) == [("prod", K), ("prod-admin", K)]
+    assert _rows(conn) == [
+        (1, K, 1, "prod"),
+        (2, K, 2, "prod-admin"),
+        (3, K, 3, "prod"),
+        (4, K, 4, "prod-admin"),
+    ]
+    assert [tuple(r) for r in conn.execute("SELECT cluster, context FROM acceptance")] == [(K, "prod-admin")]
