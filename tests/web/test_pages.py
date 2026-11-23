@@ -162,3 +162,17 @@ def test_a_history_only_cluster_opens_by_its_newest_context(client, seed, kube_c
     rows = response.text[response.text.index("<tbody>") :]
     assert rows.count("<tr>") == 2  # the cluster's whole history
     assert "via gone</div>" in rows
+
+
+def test_an_old_context_of_a_cluster_still_opens_its_history(client, seed, kube_contexts, kube_servers):
+    server = "https://prod.example.com:6443"
+    kube_contexts.append("prod")
+    kube_servers["prod"] = server
+    old = seed.repo.start_run(server, "prod-old", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(old, "ok")  # through a context the kubeconfig no longer has
+    newest = seed.repo.start_run(server, "prod", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(newest, "ok")
+    response = client.get("/", params={"context": "prod-old"})
+    assert response.status_code == 200
+    assert '<li class="chip">Run 2</li>' in response.text and f"run_id={newest}" in response.text
+    assert client.get("/", params={"context": "never-seen"}).status_code == 404

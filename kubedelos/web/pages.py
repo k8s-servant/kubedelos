@@ -86,7 +86,7 @@ def queue_ui_request(
 
 
 class UnknownContext(Exception):
-    """The ``context`` asked for is neither in the kubeconfig nor the name of a cluster in the scan history."""
+    """The ``context`` asked for is neither in the kubeconfig, nor a switcher entry, nor the context of any run."""
 
     def __init__(self, name: str) -> None:
         super().__init__(name)
@@ -111,8 +111,9 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
 
     The switcher lists every kubeconfig context, each with its cluster's last scan, so two contexts of one cluster
     show the same one, plus one entry per cluster no kubeconfig context points at, named after the context of its
-    newest run (or by its key when that name already stands for another cluster). The kubeconfig is listed on every
-    call, so a context added while the UI runs shows up; listing never loads one.
+    newest run (or by its key when that name already stands for another cluster). Any other context a run went through
+    still opens its cluster, with no entry marked as shown. The kubeconfig is listed on every call, so a context added
+    while the UI runs shows up; listing never loads one.
     """
     default = request.app.state.context
     wanted = wanted or request.query_params.get("context") or default
@@ -128,10 +129,12 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
             name = scan.cluster  # a key resolves to itself, since no context is named after it
         if name not in clusters:
             clusters[name] = scan.cluster
-    if wanted not in clusters:
+    # A context with runs through it opens its cluster even when the switcher lists that cluster under another name.
+    cluster = clusters.get(wanted) or context_cluster(conn, wanted)
+    if cluster is None:
         raise UnknownContext(wanted)
     request.state.context = wanted
-    request.state.cluster = clusters[wanted]
+    request.state.cluster = cluster
     request.state.contexts = [
         ContextEntry(
             name,
