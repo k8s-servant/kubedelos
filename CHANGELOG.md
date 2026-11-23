@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/k8s-servant/kubedelos/compare/v0.2.0...v0.3.0) (2026-11-23)
+
+
+### Features
+
+* share one history between kube-contexts of the same cluster ([#94](https://github.com/k8s-servant/kubedelos/issues/94)) ([b22802b](https://github.com/k8s-servant/kubedelos/commit/b22802be1b1d482de6a8cb6107f6a8918854e252))
+
 ## [0.2.0](https://github.com/k8s-servant/kubedelos/compare/v0.1.1...v0.2.0) (2026-11-23)
 
 
