@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.1.1](https://github.com/k8s-servant/kubedelos/compare/v0.1.0...v0.1.1) (2026-11-22)
+
+
+### Documentation
+
+* tidy the 0.1.0 changelog and install from the release ([#84](https://github.com/k8s-servant/kubedelos/issues/84)) ([d3ff2f2](https://github.com/k8s-servant/kubedelos/commit/d3ff2f2b44db99dd32673dca6ae1c5b2959eede9))
+
+
+### Build
+
+* run the image on python 3.14, the newest version ci tests ([#86](https://github.com/k8s-servant/kubedelos/issues/86)) ([610bfb3](https://github.com/k8s-servant/kubedelos/commit/610bfb3966ad6624b74c6f60051912661d463012)), closes [#70](https://github.com/k8s-servant/kubedelos/issues/70)
+
 ## 0.1.0 (2026-11-22)
 
 
