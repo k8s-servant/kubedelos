@@ -26,13 +26,18 @@ With more than one context, the sidebar's context card opens a list of them: eve
 read again on each page, plus any cluster that only appears in the scan history, each with when it was last scanned.
 Picking one shows that cluster on the same page. The context travels in the URL (`?context=prod-eu`), so two tabs can
 show two clusters and a link keeps its cluster. A cluster known only from the history is listed under the context of its
-newest run, and can be viewed but not scanned.
+newest run, or under its key when that name is taken (a kubeconfig context of that name, or a context reused for
+another cluster since), and can be viewed but not scanned.
 
-Contexts that point at the same API server (say `prod` and the `prod-admin` login that `az aks get-credentials --admin`
-adds) are one cluster and share one history: the same runs, run numbers, accepted risks and last scan. A run made
-through another context than the one shown says so, as "via prod-admin" in the run line and in the Scans history. Runs
-recorded before this are merged into their cluster the next time `kubedelos ui` starts, which prints one line per merged
-context; the merged runs are renumbered by date.
+Contexts that point at the same cluster (say `prod` and the `prod-admin` login that `az aks get-credentials --admin`
+adds) are one cluster and share one history: the same runs, run numbers, accepted risks and last scan. A cluster is
+known by its key: the kubeconfig cluster entry's API server URL (lower-cased, without a default port or trailing `/`),
+its `tls-server-name` if set, and a fingerprint of its CA certificate, as in
+`https://127.0.0.1:6443#sni=api.example.com#ca=1a2b3c4d5e6f`. So two clusters behind one URL, such as SSH tunnels to
+`127.0.0.1:6443`, stay apart while their CAs differ. Only the cluster entry is read: no credentials, no login plugin.
+A run made through another context than the one shown says so, as "via prod-admin" in the run line and in the Scans
+history. Runs recorded before this are merged into their cluster the next time `kubedelos ui` starts, which prints one
+line per merged context; the merged runs are renumbered in the order they ran.
 
 A scan runs the context's kubeconfig login, as kubectl does. If that login needs a browser or a device code (`kubelogin`,
 `aws sso`, `gcloud`), it happens in the terminal running `kubedelos ui`, and the scan fails with an error if nobody
