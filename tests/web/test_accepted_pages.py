@@ -96,6 +96,30 @@ def test_empty_register_points_to_the_findings(client):
     assert "Nothing accepted" in html and 'href="/findings"' in html
 
 
+def test_register_says_all_clusters_from_the_cluster_not_the_context(client, seed):
+    _seed(seed)
+    for vuln_id, cluster, context in (("CVE-ALL", None, "my-cluster"), ("CVE-OWN", "my-cluster", None)):
+        accepted.add(
+            seed.repo._conn,
+            vuln_id=vuln_id,
+            reason="behind the proxy",
+            owner="sam",
+            expires=TODAY + timedelta(days=30),
+            cluster=cluster,
+            context=context,
+            now=seed.clock.now,
+        )
+    html = client.get("/accepted").text
+    rows = {
+        vuln: row
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html[html.index("<tbody>") :], re.S)
+        for vuln in ("CVE-ALL", "CVE-OWN")
+        if vuln in row
+    }
+    assert '<span class="chip chip-pinned">all clusters</span>' in rows["CVE-ALL"]
+    assert '<span class="chip">my-cluster</span>' in rows["CVE-OWN"]
+
+
 def test_register_shows_state_days_left_and_cover(client, seed):
     _seed(seed)
     soon = _accept(seed, days=3, namespace="web")

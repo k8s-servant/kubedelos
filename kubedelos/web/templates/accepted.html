@@ -32,7 +32,7 @@
         <tr class="state-{{ e.state }}">
           <th scope="row" class="cve">{{ e.vuln_id }}</th>
           <td class="where">
-            <span class="chip{% if e.context is none %} chip-pinned{% endif %}">{{ "all clusters" if e.context is none else e.context }}</span>
+            <span class="chip{% if e.cluster is none %} chip-pinned{% endif %}">{{ "all clusters" if e.cluster is none else e.context or e.cluster }}</span>
             {%- if e.namespace %} <span>namespace {{ e.namespace }}</span>{% endif %}
             {%- if e.repo %} <span>image <code>{{ e.repo }}</code></span>{% endif %}
             {%- if e.pkg_name %} <span>package {{ e.pkg_name }}</span>{% endif %}
