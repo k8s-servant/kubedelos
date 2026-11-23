@@ -398,6 +398,7 @@ def test_cluster_keys_without_a_ca_are_the_server_alone(tmp_path):
     [
         {"certificate-authority": "missing.crt"},
         {"certificate-authority": "."},  # a directory
+        {"certificate-authority": "ca\x00.crt"},  # open() refuses a NUL byte with ValueError
         {"certificate-authority-data": "not base64!"},
         {"certificate-authority-data": _b64("no certificate here")},
         {"certificate-authority-data": _b64("-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n")},

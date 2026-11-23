@@ -253,7 +253,7 @@ def _cluster_ca(fields: dict, kubeconfig: Path) -> str | None:
         try:
             with open(kubeconfig.parent / path, "rb") as f:
                 return f.read(CA_FILE_LIMIT).decode("ascii", errors="ignore")
-        except OSError:
+        except (OSError, ValueError):  # ValueError: a path with a NUL byte
             return None
     return None
 
