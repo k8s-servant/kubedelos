@@ -108,6 +108,11 @@ class _Job:
     retry_of: int | None = None
 
 
+def _same_cluster(context: str) -> str:
+    """The default ``cluster_of``: a context is its own cluster."""
+    return context
+
+
 class ScanRunner:
     """Runs at most one UI scan at a time, of any context. All job state is guarded by one lock."""
 
@@ -120,8 +125,10 @@ class ScanRunner:
         retry: Callable[..., ScanOutcome] = retry_failed,
         clock: Callable[[], datetime] = _utcnow,
         fixed_cluster: bool = False,
+        cluster_of: Callable[[str], str] = _same_cluster,
     ) -> None:
         self._settings = settings
+        self._cluster_of = cluster_of
         self._context = context
         self._fixed = fixed_cluster
         self._scan = scan
@@ -194,8 +201,11 @@ class ScanRunner:
             if target != self._context:
                 raise ValueError(f"this server scans only {self._context}")
             return target, self._settings.model_copy(update={**overrides, "context": self._settings.context})
-        # A laptop scan stores the kube-context's own name; KUBEDELOS_CLUSTER_NAME names only the one served cluster.
-        return target, self._settings.model_copy(update={**overrides, "context": target, "cluster_name": None})
+        # A laptop scan stores its run under the cluster the kube-context points at (``cluster_of``, which is the
+        # context's own name when none is known) and keeps the context; KUBEDELOS_CLUSTER_NAME names only the one
+        # served cluster. Neither can be overridden.
+        update = {**overrides, "context": target, "cluster_name": self._cluster_of(target)}
+        return target, self._settings.model_copy(update=update)
 
     def _launch(
         self,
