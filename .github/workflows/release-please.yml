@@ -143,9 +143,20 @@ jobs:
           sources=()
           for digest in *; do sources+=("${IMAGE}@sha256:${digest}"); done
           [ "${#sources[@]}" -eq 2 ] || { echo "expected 2 platform digests, got ${#sources[@]}" >&2; exit 1; }
-          docker buildx imagetools create -t "${IMAGE}:${VERSION}" -t "${IMAGE}:${VERSION%.*}" "${sources[@]}"
-          digest="$(docker buildx imagetools inspect "${IMAGE}:${VERSION}" --format '{{json .Manifest}}' | jq -r .digest)"
-          case "${digest}" in sha256:*) ;; *) echo "no digest for ${IMAGE}:${VERSION}" >&2; exit 1 ;; esac
+          metadata="${RUNNER_TEMP}/merge.json"
+          docker buildx imagetools create --metadata-file "${metadata}" \
+            -t "${IMAGE}:${VERSION}" -t "${IMAGE}:${VERSION%.*}" "${sources[@]}"
+          # The digest comes from the create itself, never from re-reading the tag, so a tag moved in between can't
+          # be what gets signed. The index is then checked by digest: it must hold exactly the manifests of the two
+          # platform pushes (each image and its attestations), for linux/amd64 and linux/arm64.
+          digest="$(jq -r '."containerimage.descriptor".digest' "${metadata}")"
+          case "${digest}" in sha256:*) ;; *) echo "imagetools create reported no digest" >&2; exit 1 ;; esac
+          want="$(for s in "${sources[@]}"; do docker buildx imagetools inspect "${s}" --raw | jq -r '.manifests[].digest'; done | sort)"
+          raw="$(docker buildx imagetools inspect "${IMAGE}@${digest}" --raw)"
+          got="$(jq -r '.manifests[].digest' <<<"${raw}" | sort)"
+          [ "${got}" = "${want}" ] || { echo "the index does not hold exactly the two platform pushes" >&2; exit 1; }
+          arches="$(jq -r '[.manifests[].platform | select(.os == "linux") | .architecture] | sort | join(",")' <<<"${raw}")"
+          [ "${arches}" = "amd64,arm64" ] || { echo "the index has platforms ${arches}, not amd64,arm64" >&2; exit 1; }
           echo "digest=${digest}" >> "${GITHUB_OUTPUT}"
 
   sign-image:
