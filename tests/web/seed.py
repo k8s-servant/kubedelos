@@ -94,9 +94,9 @@ def seed_large(
     finished = (_START + timedelta(hours=run_count + 1)).isoformat()
     with conn:
         run_id = conn.execute(
-            "INSERT INTO scan_run (started_at, finished_at, status, context, trigger, trivy_version, pkg_types, scope,"
-            " number) VALUES (?, ?, 'ok', ?, 'cli', '0.76.1', 'library,os', ?, ?)",
-            (finished, finished, CONTEXT, Settings().scope, run_count + 1),
+            "INSERT INTO scan_run (started_at, finished_at, status, cluster, context, trigger, trivy_version, pkg_types,"
+            " scope, number) VALUES (?, ?, 'ok', ?, ?, 'cli', '0.76.1', 'library,os', ?, ?)",
+            (finished, finished, CONTEXT, CONTEXT, Settings().scope, run_count + 1),
         ).lastrowid
         failed = images * FAILED_PERCENT // 100
         ok = images - failed
@@ -159,12 +159,22 @@ def seed_acceptances(conn: sqlite3.Connection, count: int = ACCEPTANCES) -> None
         namespace = f"ns-{i % 50:02}" if i % 3 == 1 else None
         repo = f"reg.example.com/team{i % 20}/app{i}" if i % 3 == 2 else None
         rows.append(
-            (vuln, CONTEXT if i % 2 else None, namespace, repo, "seeded", "me", "2099-01-01", _START.isoformat())
+            (
+                vuln,
+                CONTEXT if i % 2 else None,
+                CONTEXT if i % 2 else None,
+                namespace,
+                repo,
+                "seeded",
+                "me",
+                "2099-01-01",
+                _START.isoformat(),
+            )
         )
     with conn:
         conn.executemany(
-            "INSERT INTO acceptance (vuln_id, context, namespace, repo, reason, owner, expires_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO acceptance (vuln_id, cluster, context, namespace, repo, reason, owner, expires_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             rows,
         )
 

@@ -13,7 +13,8 @@ TODAY = date(2026, 1, 1)  # the test clock's day
 
 
 def _run(seed, context=None):
-    run_id = seed.repo.start_run(context or seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, "ok")
     return run_id
 
@@ -54,6 +55,7 @@ def _accept(seed, vuln_id="CVE-1", *, context="my-cluster", days=30, **narrow):
         reason="behind the proxy",
         owner="sam",
         expires=TODAY + timedelta(days=days),
+        cluster=context,
         context=context,
         now=seed.clock.now,
         **narrow,
@@ -92,6 +94,30 @@ def test_nav_lists_accepted_after_namespaces(client, seed):
 def test_empty_register_points_to_the_findings(client):
     html = client.get("/accepted").text
     assert "Nothing accepted" in html and 'href="/findings"' in html
+
+
+def test_register_says_all_clusters_from_the_cluster_not_the_context(client, seed):
+    _seed(seed)
+    for vuln_id, cluster, context in (("CVE-ALL", None, "my-cluster"), ("CVE-OWN", "my-cluster", None)):
+        accepted.add(
+            seed.repo._conn,
+            vuln_id=vuln_id,
+            reason="behind the proxy",
+            owner="sam",
+            expires=TODAY + timedelta(days=30),
+            cluster=cluster,
+            context=context,
+            now=seed.clock.now,
+        )
+    html = client.get("/accepted").text
+    rows = {
+        vuln: row
+        for row in re.findall(r"<tr[^>]*>(.*?)</tr>", html[html.index("<tbody>") :], re.S)
+        for vuln in ("CVE-ALL", "CVE-OWN")
+        if vuln in row
+    }
+    assert '<span class="chip chip-pinned">all clusters</span>' in rows["CVE-ALL"]
+    assert '<span class="chip">my-cluster</span>' in rows["CVE-OWN"]
 
 
 def test_register_shows_state_days_left_and_cover(client, seed):
@@ -347,3 +373,15 @@ def test_empty_owner_without_identity_is_refused(serve_client, seed):
 
 def test_empty_owner_on_the_laptop_is_refused(client, seed):
     assert _post(client, "/accepted", **{**FORM, "owner": ""}).status_code == 400
+
+
+def test_an_acceptance_made_through_one_context_covers_its_cluster(client, seed, kube_contexts, kube_servers):
+    server = "https://prod.example.com:6443"
+    kube_contexts[:] = ["my-cluster", "prod", "prod-admin"]
+    kube_servers.update({"prod": server, "prod-admin": server})
+    response = _post(client, "/accepted", **FORM, context="prod-admin")
+    assert response.headers["location"] == "/accepted?context=prod-admin"
+    entry = accepted.register(seed.repo._conn, server, None, TODAY)[0]
+    assert (entry.cluster, entry.context) == (server, "prod-admin")
+    assert "CVE-1" in client.get("/accepted", params={"context": "prod"}).text  # the other context sees it
+    assert _post(client, f"/accepted/{entry.id}/revoke", context="prod").status_code == 303

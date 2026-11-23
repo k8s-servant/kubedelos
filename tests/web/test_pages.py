@@ -1,12 +1,14 @@
 import contextlib
 import sqlite3
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import Request
 from fastapi.responses import PlainTextResponse
 
+from kubedelos.mcp_server import tools
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image, short_name
+from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image, short_name, shown_context
 
 
 @pytest.fixture(autouse=True)
@@ -24,6 +26,13 @@ def _test_routes(app):
             except sqlite3.OperationalError as exc:
                 return PlainTextResponse(f"{version} {exc}")
         return PlainTextResponse("writable")
+
+    @app.get("/_cluster")
+    def cluster(request: Request):
+        with open_db(request) as conn:
+            shown_context(request, conn)
+        names = ",".join(entry.name for entry in request.state.contexts)
+        return PlainTextResponse(f"{request.state.cluster} {names}")
 
 
 def test_render_escapes_context(app, client):
@@ -75,7 +84,7 @@ def test_short_name_keeps_the_last_path_segment_and_a_short_tag():
 
 
 def _ok_run(seed, context):
-    run_id = seed.repo.start_run(context, "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
     seed.repo.finish_run(run_id, "ok")
     return run_id
 
@@ -143,3 +152,57 @@ def test_awkward_context_names_are_escaped_and_encoded(client, kube_contexts):
 )
 def test_seconds_text(seconds, text):
     assert seconds_text(seconds) == text
+
+
+def test_a_history_only_cluster_opens_by_its_newest_context(client, seed, kube_contexts):
+    server = "https://gone.example.com"
+    for context in ("gone", "gone-admin"):  # both contexts have left the kubeconfig since
+        run_id = seed.repo.start_run(server, context, "ui", "0.76.1", scan_level="library,os", scope=None)
+        seed.repo.finish_run(run_id, "ok")
+    _ok_run(seed, seed.context)
+    kube_contexts.append("other")  # a second entry, so the switcher shows
+    html = client.get("/").text
+    switcher = html[html.index('<details class="context context-switch"') :]
+    switcher = switcher[: switcher.index("</details>")]
+    assert 'href="/?context=gone-admin">gone-admin</a>' in switcher  # one entry, named by its newest run's context
+    assert ">gone</a>" not in switcher
+    response = client.get("/scans", params={"context": "gone-admin"})
+    assert response.status_code == 200
+    rows = response.text[response.text.index("<tbody>") :]
+    assert rows.count("<tr>") == 2  # the cluster's whole history
+    assert "via gone</div>" in rows
+
+
+def test_an_old_context_of_a_cluster_still_opens_its_history(client, seed, kube_contexts, kube_servers):
+    server = "https://prod.example.com:6443"
+    kube_contexts.append("prod")
+    kube_servers["prod"] = server
+    old = seed.repo.start_run(server, "prod-old", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(old, "ok")  # through a context the kubeconfig no longer has
+    newest = seed.repo.start_run(server, "prod", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    seed.repo.finish_run(newest, "ok")
+    response = client.get("/", params={"context": "prod-old"})
+    assert response.status_code == 200
+    assert '<li class="chip">Run 2</li>' in response.text and f"run_id={newest}" in response.text
+    assert client.get("/", params={"context": "never-seen"}).status_code == 404
+
+
+def test_the_ui_and_the_mcp_server_resolve_a_reused_context_name_alike(client, seed, kube_contexts, app):
+    old, new = "https://a.example.com", "https://b.example.com"  # "prod" now means the recreated cluster
+    for key in (old, new):
+        run_id = seed.repo.start_run(key, "prod", "ui", "0.76.1", scan_level="library,os", scope=None)
+        seed.repo.finish_run(run_id, "ok")
+    kube_contexts.append("other")  # neither cluster is in the kubeconfig any more
+    db = tools.Db(seed.settings.db_path, None)
+    conn = db.open()
+    try:
+        listed = {
+            c["key"]: c["name"] for c in tools.list_clusters(conn, db, datetime(2026, 2, 1, tzinfo=UTC))["clusters"]
+        }
+        for given in listed.values():  # each name the switcher and list_clusters show
+            cluster, names = client.get("/_cluster", params={"context": given}).text.split(" ")
+            assert cluster == tools.resolve_cluster(conn, db, given)
+            assert set(listed.values()) <= set(names.split(","))  # both surfaces list the same names
+    finally:
+        conn.close()
+    assert listed == {old: old, new: "prod"}

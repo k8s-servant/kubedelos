@@ -38,7 +38,7 @@ from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
-from kubedelos.web.pages import open_db, render, shown_context
+from kubedelos.web.pages import cluster_of, open_db, render, shown_context
 
 router = APIRouter()
 logger = logging.getLogger("kubedelos.web")
@@ -110,7 +110,7 @@ def _host_source(request: Request, host: str) -> str | None:
     if any(re.fullmatch(pattern, host) for _, pattern in CLOUD_HOSTS.get(settings.cloud_provider, [])):
         return "cloud"
     with open_db(request) as conn:
-        run = newest_run(conn, request.app.state.context, cluster_scope=False)
+        run = newest_run(conn, cluster_of(request, conn, request.app.state.context), cluster_scope=False)
         if run is not None and host in {h.lower().rstrip(".") for h in run_registry_hosts(conn, run.id)}:
             return "run"
     return None
@@ -175,8 +175,9 @@ def _rows(settings: Settings, flags: frozenset[str]) -> list[dict]:
 def settings(request: Request) -> HTMLResponse:
     current: Settings = request.app.state.settings
     with open_db(request) as conn:
-        context = shown_context(request, conn)
-        newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        shown_context(request, conn)
+        cluster = request.state.cluster
+        newest = newest_run(conn, cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
         fetched = intel.feeds(conn)
     trivy = f"custom: {Path(current.trivy_path)}" if current.trivy_path else f"v{TRIVY_VERSION} (pinned)"
     ctx = {

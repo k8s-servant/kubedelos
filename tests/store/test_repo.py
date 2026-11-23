@@ -118,7 +118,7 @@ def test_failed_migration_rolls_back_and_releases_the_write_lock(tmp_path, monke
 
 def test_run_roundtrip_counts(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     assert repo.get_run(run)["status"] == "running"
     for i, status in enumerate(["ok", "ok", "error"]):
         item = _item(ref=f"reg.io/app:{i}", digest=f"sha256:{i:064d}")
@@ -149,7 +149,7 @@ def test_latest_run_id_empty(tmp_path):
 
 def test_add_result_stores_each_finding_per_workload(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     wls = [
         Workload(namespace="zz", kind="Deployment", name="b", container="c", owner="o@x", team="t"),
         Workload(namespace="aa", kind="StatefulSet", name="a", container="c"),
@@ -172,7 +172,7 @@ def test_add_result_stores_each_finding_per_workload(tmp_path):
 
 def test_cached_status_stored_as_is(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     item = _item()
     repo.add_result(run, item, _result(item, "cached", findings=[_finding()]))
     assert repo._conn.execute("SELECT status FROM image_result").fetchone()[0] == "cached"
@@ -181,7 +181,7 @@ def test_cached_status_stored_as_is(tmp_path):
 
 def test_add_result_is_atomic(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     item = _item()
     with pytest.raises(sqlite3.IntegrityError):
         repo.add_result(run + 100, item, _result(item, findings=[_finding()]))
@@ -226,7 +226,7 @@ def test_tag_refs_not_cached(tmp_path):
 @pytest.mark.parametrize("status", ["running", "bogus", ""])
 def test_finish_run_rejects_bad_status(tmp_path, status):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     with pytest.raises(ValueError):
         repo.finish_run(run, status)
     assert repo.get_run(run)["status"] == "running"
@@ -263,7 +263,7 @@ def test_db_files_are_private(tmp_path):
     path = tmp_path / "kubedelos" / "k.db"
     conn = connect(path)
     _OPEN.append(conn)
-    Repo(conn).start_run("c", "cli", "v", scan_level="library,os")
+    Repo(conn).start_run("c", "c", "cli", "v", scan_level="library,os")
     for f in (path, path.with_name("k.db-wal"), path.with_name("k.db-shm")):
         if f.exists():
             assert stat.S_IMODE(f.stat().st_mode) == 0o600, f
@@ -286,11 +286,11 @@ def test_existing_kubedelos_dir_is_tightened(tmp_path):
 
 def test_error_results_keep_their_kind_and_message(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     ok, bad = _item(), _item(ref="reg.io/bad:1", digest=None)
     repo.add_result(run, ok, _result(ok))
     repo.add_result(run, bad, _result(bad, status="error", error_kind="not_found", error="manifest unknown"))
-    other = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    other = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     repo.add_result(other, bad, _result(bad, status="error", error_kind="auth", error="denied"))
     rows = [
         dict(r)
@@ -317,13 +317,13 @@ def test_cache_is_keyed_by_scan_level(tmp_path):
 
 def test_run_records_scan_level(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os")
     assert repo.get_run(run)["pkg_types"] == "os"
 
 
 def test_add_result_stores_pkg_class(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     finding = _finding().model_copy(update={"pkg_class": "library"})
     repo.add_result(run, _item(), _result(_item(), findings=[finding]))
     assert [r["pkg_class"] for r in _run_findings(repo, run)] == ["library"]
@@ -353,13 +353,13 @@ def test_migration_from_v1_keeps_runs_drops_cache(tmp_path):
 
 def test_run_records_scope(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope='{"x":1}')
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os", scope='{"x":1}')
     assert repo.get_run(run)["scope"] == '{"x":1}'
 
 
 def test_add_and_read_warnings(tmp_path):
     repo = _repo(tmp_path)
-    run_id = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    run_id = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os")
     repo.add_warnings(
         run_id,
         [
@@ -395,14 +395,14 @@ def test_connect_readonly_path_with_space_and_hash(tmp_path):
 
 def test_run_records_owner(tmp_path):
     repo = _repo(tmp_path)
-    assert repo.get_run(repo.start_run("ctx", "cli", "0.76.1", scan_level="os"))["owner"] is None
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", owner="ab" * 16)
+    assert repo.get_run(repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os"))["owner"] is None
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os", owner="ab" * 16)
     assert repo.get_run(run)["owner"] == "ab" * 16
 
 
 def test_close_stale_closes_a_running_run_and_notes_why(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os")
     assert repo.close_stale(run, "closed by kubedelos") is True
     row = repo.get_run(run)
     assert row["status"] == "failed" and row["finished_at"] is not None
@@ -412,20 +412,40 @@ def test_close_stale_closes_a_running_run_and_notes_why(tmp_path):
 
 def test_close_stale_leaves_a_finished_run_alone(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os")
     repo.finish_run(run, "ok")
     assert repo.close_stale(run, "closed by kubedelos") is False
     assert repo.get_run(run)["status"] == "ok"
     assert repo.run_warnings(run) == []
 
 
-def test_runs_are_numbered_per_context(tmp_path):
+def test_runs_are_numbered_per_cluster(tmp_path):
     repo = _repo(tmp_path)
-    a1 = repo.start_run("a", "ui", "0.76.1", scan_level="library,os")
-    b1 = repo.start_run("b", "ui", "0.76.1", scan_level="library,os")
-    a2 = repo.start_run("a", "ui", "0.76.1", scan_level="library,os")
-    none = repo.start_run(None, "cli", "0.76.1", scan_level="library,os")
-    assert [repo.get_run(i)["number"] for i in (a1, b1, a2, none)] == [1, 1, 2, 1]
+    a1 = repo.start_run("a", "a", "ui", "0.76.1", scan_level="library,os")
+    b1 = repo.start_run("b", "b", "ui", "0.76.1", scan_level="library,os")
+    a2 = repo.start_run("a", "a", "ui", "0.76.1", scan_level="library,os")
+    assert [repo.get_run(i)["number"] for i in (a1, b1, a2)] == [1, 1, 2]
+
+
+def test_runs_are_numbered_per_cluster_not_per_context(tmp_path):
+    repo = _repo(tmp_path)
+    first = repo.start_run("https://k.example.com", "prod", "ui", "0.76.1", scan_level="os")
+    second = repo.start_run("https://k.example.com", "prod-admin", "ui", "0.76.1", scan_level="os")
+    other = repo.start_run("https://other.example.com", "prod", "ui", "0.76.1", scan_level="os")
+    rows = [repo.get_run(i) for i in (first, second, other)]
+    assert [(r["cluster"], r["context"], r["number"]) for r in rows] == [
+        ("https://k.example.com", "prod", 1),
+        ("https://k.example.com", "prod-admin", 2),
+        ("https://other.example.com", "prod", 1),
+    ]
+
+
+def test_a_run_without_a_context_is_still_numbered_in_its_cluster(tmp_path):
+    repo = _repo(tmp_path)
+    repo.start_run("my-cluster", "my-cluster", "schedule", "0.76.1", scan_level="os")
+    run = repo.start_run("my-cluster", None, "schedule", "0.76.1", scan_level="os")
+    row = repo.get_run(run)
+    assert (row["cluster"], row["context"], row["number"]) == ("my-cluster", None, 2)
 
 
 def test_migration_numbers_existing_runs_per_context(tmp_path):
@@ -446,22 +466,22 @@ def test_migration_numbers_existing_runs_per_context(tmp_path):
     rows = conn.execute("SELECT context, number FROM scan_run ORDER BY id").fetchall()
     assert [tuple(r) for r in rows] == [("a", 1), ("b", 1), ("a", 2), (None, 1), ("a", 3)]
     repo = Repo(conn)
-    assert repo.get_run(repo.start_run("a", "ui", "0.76.1", scan_level="os"))["number"] == 4
+    assert repo.get_run(repo.start_run("a", "a", "ui", "0.76.1", scan_level="os"))["number"] == 4
 
 
-def test_run_numbers_are_unique_with_or_without_a_context(tmp_path):
+def test_run_numbers_are_unique_per_cluster(tmp_path):
     repo = _repo(tmp_path)
-    for context in ("a", None):
-        run = repo.start_run(context, "ui", "0.76.1", scan_level="os")
-        number = repo.get_run(run)["number"]
-        with pytest.raises(sqlite3.IntegrityError):
-            repo._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, number) VALUES ('x', 'ok', ?, ?)", (context, number)
-            )
+    run = repo.start_run("a", "a", "ui", "0.76.1", scan_level="os")
+    number = repo.get_run(run)["number"]
+    with pytest.raises(sqlite3.IntegrityError):
+        repo._conn.execute(
+            "INSERT INTO scan_run (started_at, status, cluster, context, number) VALUES ('x', 'ok', 'a', 'b', ?)",
+            (number,),
+        )
 
 
 def _failed_run(repo):
-    run = repo.start_run("a", "ui", "0.76.1", scan_level="os")
+    run = repo.start_run("a", "a", "ui", "0.76.1", scan_level="os")
     ok, bad, gone = _item("reg.io/app:1"), _item("reg.io/app:2", digest=None), _item("reg.io/old:1", digest=None)
     repo.add_result(run, ok, _result(ok, findings=[_finding()]))
     repo.add_result(run, bad, _result(bad, status="error", error_kind="timeout", error="deadline"))
@@ -558,7 +578,7 @@ def test_settle_retry_counts_only_the_retried_images(tmp_path):
 def test_results_keep_how_long_each_image_took(tmp_path):
     conn = connect(tmp_path / "k.db")
     repo = Repo(conn)
-    run_id = repo.start_run("ctx", "ui", "0.76.1", scan_level="library,os")
+    run_id = repo.start_run("ctx", "ctx", "ui", "0.76.1", scan_level="library,os")
     image = ImageRef(ref="reg.example.com/a:1", repo="reg.example.com/a", tag="1")
     item = InventoryItem(image=image, platform="linux/amd64", workloads=[])
     failed = ImageResult(image=image, platform="linux/amd64", status="error", error_kind="timeout", duration_s=630.2)
@@ -572,9 +592,12 @@ def test_results_keep_how_long_each_image_took(tmp_path):
 
 def test_start_run_stores_requested_by(tmp_path):
     repo = _repo(tmp_path)
-    run_id = repo.start_run("my-cluster", "ui", "0.76.1", scan_level="os", requested_by="a@example.com")
+    run_id = repo.start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="os", requested_by="a@example.com")
     assert repo.get_run(run_id)["requested_by"] == "a@example.com"
-    assert repo.get_run(repo.start_run("my-cluster", "cli", "0.76.1", scan_level="os"))["requested_by"] is None
+    assert (
+        repo.get_run(repo.start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os"))["requested_by"]
+        is None
+    )
 
 
 def test_migration_10_adds_scan_request(tmp_path):
@@ -595,7 +618,7 @@ def test_migration_10_adds_scan_request(tmp_path):
 
 def test_failed_items_keep_pull_secret_names(tmp_path):
     repo = _repo(tmp_path)
-    run = repo.start_run("a", "ui", "0.76.1", scan_level="os")
+    run = repo.start_run("a", "a", "ui", "0.76.1", scan_level="os")
     with_refs, without = _item("reg.io/app:2", digest=None), _item("reg.io/app:3", digest=None)
     with_refs.pull_secrets = [("web", "regcred"), ("ops", "other")]
     for item in (with_refs, without):
@@ -643,7 +666,7 @@ def test_add_result_stores_facts_per_workload(tmp_path):
         rights=Rights(status="off"),
     )  # fmt: skip
     item = _item(workloads=[first, second]).model_copy(update={"facts": {first: facts}})
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     repo.add_result(run, item, _result(item))
     rows = repo._conn.execute("SELECT facts FROM workload ORDER BY id").fetchall()
     assert json.loads(rows[0]["facts"])["v"] == 1
@@ -665,7 +688,7 @@ def test_add_result_stores_risk_points(tmp_path):
         rights=Rights(status="off"),
     )  # fmt: skip
     item = _item(workloads=[first, second]).model_copy(update={"facts": {first: facts}})
-    run = repo.start_run("ctx", "cli", "0.76.1", scan_level="library,os")
+    run = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="library,os")
     repo.add_result(run, item, _result(item))
     rows = repo._conn.execute("SELECT risk_points FROM workload ORDER BY id").fetchall()
     assert [r["risk_points"] for r in rows] == [workload_points(facts), 18]

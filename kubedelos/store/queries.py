@@ -9,6 +9,7 @@ read by ``kubedelos.store.accepted`` against ``today``; nothing that counts does
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Literal, get_args
@@ -29,7 +30,7 @@ CLUSTER_SCOPE_SQL = (
 )
 
 _RUN_SQL = """
-SELECT id, number, context, status, finished_at, pkg_types, scope, trivy_version, fact_sources,
+SELECT id, number, cluster, context, status, finished_at, pkg_types, scope, trivy_version, fact_sources,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS images_failed
 FROM scan_run
@@ -47,8 +48,9 @@ class RunNotShown(Exception):
 @dataclass(frozen=True)
 class Run:
     id: int  # the key, used in URLs
-    number: int  # the run's number within its context, which the UI shows
-    context: str | None
+    number: int  # the run's number within its cluster, which the UI shows
+    cluster: str
+    context: str | None  # the context the run went through
     status: str
     finished_at: datetime | None
     pkg_types: str | None
@@ -65,6 +67,7 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
     return Run(
         id=row["id"],
         number=row["number"],
+        cluster=row["cluster"],
         context=row["context"],
         status=row["status"],
         finished_at=datetime.fromisoformat(row["finished_at"]) if row["finished_at"] else None,
@@ -78,28 +81,30 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
     )
 
 
-def newest_run(conn: sqlite3.Connection, context: str, *, cluster_scope: bool) -> Run | None:
+def newest_run(conn: sqlite3.Connection, cluster: str, *, cluster_scope: bool) -> Run | None:
+    """The cluster's newest result run, through whichever context; only whole-cluster runs when ``cluster_scope``."""
     extra = f" AND {CLUSTER_SCOPE_SQL}" if cluster_scope else ""
     row = conn.execute(
-        f"{_RUN_SQL} WHERE context = ? AND status IN {_STATUS_SQL}{extra} ORDER BY id DESC LIMIT 1", (context,)
+        f"{_RUN_SQL} WHERE cluster = ? AND status IN {_STATUS_SQL}{extra} ORDER BY id DESC LIMIT 1", (cluster,)
     ).fetchone()
     return _build(conn, row) if row else None
 
 
-def run_by_number(conn: sqlite3.Connection, context: str, number: int) -> Run | None:
-    """The result run with this number in the context, whatever its scope; None when there is none."""
+def run_by_number(conn: sqlite3.Connection, cluster: str, number: int) -> Run | None:
+    """The result run with this number in the cluster, whatever its scope; None when there is none."""
     row = conn.execute(
-        f"{_RUN_SQL} WHERE context = ? AND number = ? AND status IN {_STATUS_SQL}", (context, number)
+        f"{_RUN_SQL} WHERE cluster = ? AND number = ? AND status IN {_STATUS_SQL}", (cluster, number)
     ).fetchone()
     return _build(conn, row) if row else None
 
 
-def get_run(conn: sqlite3.Connection, context: str, run_id: int) -> Run:
+def get_run(conn: sqlite3.Connection, cluster: str, run_id: int) -> Run:
+    """The result run ``run_id`` of ``cluster``; raises RunNotShown for a missing, another cluster's or empty run."""
     row = conn.execute(f"{_RUN_SQL} WHERE id = ?", (run_id,)).fetchone()
     if row is None:
         raise RunNotShown(f"no run {run_id}")
-    if row["context"] != context:
-        raise RunNotShown(f"that run belongs to context {row['context']}, not {context}")
+    if row["cluster"] != cluster:
+        raise RunNotShown("that run belongs to another cluster")
     if row["status"] not in RESULT_STATUSES:
         raise RunNotShown(f"run {row['number']} is {row['status']}, so it has no results to show")
     return _build(conn, row)
@@ -116,12 +121,12 @@ class RunChoice:
     pkg_types: str | None
 
 
-def result_runs(conn: sqlite3.Connection, context: str, limit: int = 200) -> list[RunChoice]:
-    """The context's newest result runs, newest first, for a picker."""
+def result_runs(conn: sqlite3.Connection, cluster: str, limit: int = 200) -> list[RunChoice]:
+    """The cluster's newest result runs, newest first, for a picker."""
     rows = conn.execute(
-        f"SELECT id, number, finished_at, scope, pkg_types FROM scan_run WHERE context = ? AND status IN {_STATUS_SQL}"  # noqa: S608
+        f"SELECT id, number, finished_at, scope, pkg_types FROM scan_run WHERE cluster = ? AND status IN {_STATUS_SQL}"  # noqa: S608
         " ORDER BY id DESC LIMIT ?",
-        (context, limit),
+        (cluster, limit),
     )
     return [
         RunChoice(
@@ -136,12 +141,13 @@ def result_runs(conn: sqlite3.Connection, context: str, limit: int = 200) -> lis
 
 
 def previous_comparable(conn: sqlite3.Connection, run: Run) -> Run | None:
-    """The newest earlier result run with the same context, scope text and package types; NULL scope never matches."""
+    """The newest earlier result run of the same cluster (through any context) with the same scope text and package
+    types; NULL scope never matches."""
     row = conn.execute(
-        f"{_RUN_SQL} WHERE id < :id AND context = :context AND status IN {_STATUS_SQL}"  # noqa: S608 - only module constants are interpolated
+        f"{_RUN_SQL} WHERE id < :id AND cluster = :cluster AND status IN {_STATUS_SQL}"  # noqa: S608 - only module constants are interpolated
         " AND scope IS NOT NULL AND scope = (SELECT scope FROM scan_run WHERE id = :id)"
         " AND pkg_types IS (SELECT pkg_types FROM scan_run WHERE id = :id) ORDER BY id DESC LIMIT 1",
-        {"id": run.id, "context": run.context},
+        {"id": run.id, "cluster": run.cluster},
     ).fetchone()
     return _build(conn, row) if row else None
 
@@ -646,18 +652,19 @@ class RunLabel:
 
     id: int
     number: int
-    context: str | None
+    cluster: str
+    context: str | None  # the context the run went through
     status: str
 
 
-def run_label(conn: sqlite3.Connection, context: str, run_id: int) -> RunLabel:
-    """The run ``run_id`` of ``context``, in any status; raises RunNotShown for a missing or another context's run."""
-    row = conn.execute("SELECT id, number, context, status FROM scan_run WHERE id = ?", (run_id,)).fetchone()
+def run_label(conn: sqlite3.Connection, cluster: str, run_id: int) -> RunLabel:
+    """The run ``run_id`` of ``cluster``, in any status; raises RunNotShown for a missing or another cluster's run."""
+    row = conn.execute("SELECT id, number, cluster, context, status FROM scan_run WHERE id = ?", (run_id,)).fetchone()
     if row is None:
         raise RunNotShown(f"no run {run_id}")
-    if row["context"] != context:
-        raise RunNotShown(f"that run belongs to context {row['context']}, not {context}")
-    return RunLabel(row["id"], row["number"], row["context"], row["status"])
+    if row["cluster"] != cluster:
+        raise RunNotShown("that run belongs to another cluster")
+    return RunLabel(row["id"], row["number"], row["cluster"], row["context"], row["status"])
 
 
 # A failure's error kind as the UI groups it: one of the kinds this version knows, and anything else (no kind, or a kind
@@ -1007,20 +1014,21 @@ class HistoryRow:
     trigger: str | None  # "ui", "schedule" or "cli"; None on runs from before triggers were recorded
     requested_by: str | None  # who asked for the run in ``serve``; None for a sweep and for laptop runs
     reason: str | None = None  # why a failed run holds nothing, when its note says so
+    context: str | None = None  # the context the run went through, for a "via" note
 
 
-def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
-    """One page of the context's runs of every status, newest first, and how many runs the context has in all."""
-    total = conn.execute("SELECT COUNT(*) FROM scan_run WHERE context = ?", (context,)).fetchone()[0]
+def run_history(conn: sqlite3.Connection, cluster: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
+    """One page of the cluster's runs of every status, newest first, and how many runs the cluster has in all."""
+    total = conn.execute("SELECT COUNT(*) FROM scan_run WHERE cluster = ?", (cluster,)).fetchone()[0]
     rows = conn.execute(
-        "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner, trigger, requested_by,"
+        "SELECT id, number, status, scope, pkg_types, started_at, finished_at, owner, trigger, requested_by, context,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed,"
         " (SELECT text FROM run_warning WHERE run_id = scan_run.id AND scan_run.status = 'failed' AND coverage = 0"
         "  AND (text LIKE '%' || :nothing OR text = :stale) ORDER BY id DESC LIMIT 1) AS reason"
-        " FROM scan_run WHERE context = :context ORDER BY id DESC LIMIT :limit OFFSET :offset",
+        " FROM scan_run WHERE cluster = :cluster ORDER BY id DESC LIMIT :limit OFFSET :offset",
         {
-            "context": context,
+            "cluster": cluster,
             "limit": per_page,
             "offset": (page - 1) * per_page,
             "nothing": NOTHING_SCANNED,
@@ -1042,6 +1050,7 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
             trigger=r["trigger"],
             requested_by=r["requested_by"],
             reason=r["reason"],
+            context=r["context"],
         )
         for r in rows
     ]
@@ -1049,18 +1058,68 @@ def run_history(conn: sqlite3.Connection, context: str, page: int, per_page: int
 
 
 def run_number(conn: sqlite3.Connection, run_id: int) -> int | None:
-    """The run's number within its context, or None when there is no such run."""
+    """The run's number within its cluster, or None when there is no such run."""
     row = conn.execute("SELECT number FROM scan_run WHERE id = ?", (run_id,)).fetchone()
     return row["number"] if row else None
 
 
-def context_scans(conn: sqlite3.Connection) -> dict[str, datetime | None]:
-    """Every context with a run, by name, mapped to when its newest result run finished (None when it has none)."""
+@dataclass(frozen=True)
+class ClusterScan:
+    """One cluster with a run: its key, the context it is named after, when its newest result run finished (None when
+    it has none), and every context its runs went through, sorted."""
+
+    cluster: str
+    name: str
+    finished_at: datetime | None
+    contexts: tuple[str, ...]
+
+
+def cluster_scans(conn: sqlite3.Connection) -> list[ClusterScan]:
+    """Every cluster with a run, by name. A cluster is named after the context of its newest run of any status (its
+    key when no run of it recorded a context)."""
     rows = conn.execute(
-        f"SELECT context, MAX(CASE WHEN status IN {_STATUS_SQL} THEN finished_at END) AS finished"  # noqa: S608 - only module constants are interpolated
-        " FROM scan_run WHERE context IS NOT NULL GROUP BY context ORDER BY context"
+        f"SELECT cluster, MAX(CASE WHEN status IN {_STATUS_SQL} THEN finished_at END) AS finished,"  # noqa: S608 - only module constants are interpolated
+        " (SELECT n.context FROM scan_run n WHERE n.cluster = s.cluster AND n.context IS NOT NULL"
+        "  ORDER BY n.id DESC LIMIT 1) AS name"
+        " FROM scan_run s WHERE cluster IS NOT NULL GROUP BY cluster"
     ).fetchall()
-    return {r["context"]: datetime.fromisoformat(r["finished"]) if r["finished"] else None for r in rows}
+    contexts: dict[str, list[str]] = {}
+    for r in conn.execute(
+        "SELECT DISTINCT cluster, context FROM scan_run WHERE cluster IS NOT NULL AND context IS NOT NULL"
+        " ORDER BY cluster, context"
+    ):
+        contexts.setdefault(r["cluster"], []).append(r["context"])
+    scans = [
+        ClusterScan(
+            cluster=r["cluster"],
+            name=r["name"] or r["cluster"],
+            finished_at=datetime.fromisoformat(r["finished"]) if r["finished"] else None,
+            contexts=tuple(contexts.get(r["cluster"], ())),
+        )
+        for r in rows
+    ]
+    return sorted(scans, key=lambda s: (s.name, s.cluster))
+
+
+def context_cluster(conn: sqlite3.Connection, context: str) -> str | None:
+    """The cluster of the newest run made through ``context``, or None when no run went through it. The UI uses it
+    for a context the kubeconfig no longer has."""
+    row = conn.execute(
+        "SELECT cluster FROM scan_run WHERE context = ? AND cluster IS NOT NULL ORDER BY id DESC LIMIT 1", (context,)
+    ).fetchone()
+    return row["cluster"] if row else None
+
+
+def listed_name(conn: sqlite3.Connection, scan: ClusterScan, cluster_of: Callable[[str], str] | None = None) -> str:
+    """The name a cluster is listed under, by the web switcher and the MCP server alike: the context of its newest run
+    (``scan.name``), unless that name stands for another cluster, then its key, which resolves to itself.
+
+    A name stands for the cluster ``cluster_of`` gives; by default the cluster of the newest run made through that
+    context (:func:`context_cluster`), else the name itself. So when one context name was used for two clusters (a
+    cluster recreated under the same context), the newer cluster keeps the name and the older one shows its key.
+    """
+    resolve = cluster_of or (lambda name: context_cluster(conn, name) or name)
+    return scan.name if resolve(scan.name) == scan.cluster else scan.cluster
 
 
 @dataclass(frozen=True)

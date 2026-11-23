@@ -214,16 +214,17 @@ def dashboard(
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "pinned": run_id is not None, "caution": CAUTION}
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         c = context_param(request)
         if run_id is not None:
             try:
-                run = get_run(conn, context, run_id)
+                run = get_run(conn, cluster, run_id)
             except RunNotShown as exc:
                 return render(request, "error.html", {"title": "Run not shown", "message": exc.reason}, 404)
         else:
-            run = newest_run(conn, context, cluster_scope=True)
-        newest_any = newest_run(conn, context, cluster_scope=False)
+            run = newest_run(conn, cluster, cluster_scope=True)
+        newest_any = newest_run(conn, cluster, cluster_scope=False)
         if run is None:
             ctx["narrower_href"] = findings_href(c, run_id=newest_any.id) if newest_any else None
             return render(request, "dashboard.html", ctx)
@@ -240,7 +241,7 @@ def dashboard(
         )
         kinds = failure_kinds(conn, run.id) if current.images_failed else []
         auth_refs = auth_failed_refs(conn, run.id) if kinds else []
-        retryable = bool(kinds) and retry_problem(request, conn, context, run_label(conn, context, run.id)) is None
+        retryable = bool(kinds) and retry_problem(request, conn, run_label(conn, cluster, run.id)) is None
         worst = worst_images(conn, run.id)
     ctx.update(risk)
     ctx.update(run=run, kpis=current, tiles=_tiles(run, current, before, c))

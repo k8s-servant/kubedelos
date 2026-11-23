@@ -26,6 +26,8 @@ attack-surface facts (exposure, NetworkPolicy isolation, host access, ServiceAcc
 {UNTRUSTED}
 A fact of null or "unknown" means kubedelos could not read it; treat it as possibly exposed, never as safe.
 """
+CLUSTER_HELP = "Cluster: a kube-context name or a cluster from list_clusters; the default cluster when omitted."
+ClusterArg = Annotated[str | None, Field(description=CLUSTER_HELP)]
 READ_ONLY = ToolAnnotations(read_only_hint=True, destructive_hint=False, idempotent_hint=True, open_world_hint=False)
 
 
@@ -43,8 +45,9 @@ def build_server(db: Db) -> MCPServer:
     @server.tool(
         name="list_clusters",
         description=(
-            "List the clusters (kube-contexts) that have scan results: when each was last scanned, the status of its "
-            "newest run, whether that is stale, and the default cluster other tools use. " + UNTRUSTED
+            "List the clusters that have scan results, each with the kube-contexts its runs went through, when it was "
+            "last scanned, the status of its newest run, whether that is stale, and the default cluster other tools "
+            "use. " + UNTRUSTED
         ),
         annotations=READ_ONLY,
     )
@@ -62,7 +65,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def run_summary(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
     ) -> dict[str, Any]:
         with closing(db.open()) as conn:
@@ -80,7 +83,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def fix_first(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
         view: Annotated[Literal["fix", "image"], Field(description="Group by fix or by image.")] = "fix",
         limit: Annotated[int, Field(description="Items to return; 25 by default, 100 at most.")] = 25,
@@ -106,7 +109,7 @@ def build_server(db: Db) -> MCPServer:
     )
     def find_vulnerability(
         vuln_id: Annotated[str, Field(description="The vulnerability id as Trivy writes it, e.g. CVE-2024-12345.")],
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
         limit: Annotated[int, Field(description="Workloads to return; 25 by default, 100 at most.")] = 25,
         offset: Annotated[int, Field(description="Workloads to skip, for the next page.")] = 0,
@@ -129,7 +132,7 @@ def build_server(db: Db) -> MCPServer:
         kind: Annotated[
             str | None, Field(description="Deployment, StatefulSet and so on; every kind when omitted.")
         ] = None,
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
     ) -> dict[str, Any]:
         with closing(db.open()) as conn:
@@ -146,7 +149,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def list_findings(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
         severity: Annotated[
             list[str] | None, Field(description="Severities to keep (CRITICAL, HIGH, MEDIUM, LOW, UNKNOWN), any case.")
@@ -190,7 +193,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def attack_surface(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         run: Annotated[int | None, Field(description="Run number within the cluster; the newest when omitted.")] = None,
         exposure: Annotated[
             list[Literal["external", "cluster", "none", "unknown"]] | None,
@@ -227,7 +230,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def compare_runs(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         from_run: Annotated[
             int | None, Field(description="The older run's number; the previous comparable run.")
         ] = None,
@@ -247,7 +250,7 @@ def build_server(db: Db) -> MCPServer:
         annotations=READ_ONLY,
     )
     def accepted_risks(
-        cluster: Annotated[str | None, Field(description="Cluster name; the default cluster when omitted.")] = None,
+        cluster: ClusterArg = None,
         state: Annotated[Literal["active", "all"], Field(description="Active entries, or all of them.")] = "active",
     ) -> dict[str, Any]:
         with closing(db.open()) as conn:

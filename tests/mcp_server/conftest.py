@@ -44,14 +44,14 @@ def seed(path, contexts):
     conn = connect(path)
     for name, day in contexts.items():
         repo = Repo(conn, clock=Clock(datetime(2026, 1, day, tzinfo=UTC)))
-        run_id = repo.start_run(name, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+        run_id = repo.start_run(name, name, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
         repo.finish_run(run_id, "ok")
     conn.close()
 
 
 def new_run(repo, context, status="ok", *, scope=None):
     """Start a run (whole-cluster unless ``scope`` is given) and finish it with ``status``, unless it is running."""
-    run_id = repo.start_run(context, "cli", "0.76.1", scan_level="library,os", scope=scope or Settings().scope)
+    run_id = repo.start_run(context, context, "cli", "0.76.1", scan_level="library,os", scope=scope or Settings().scope)
     if status != "running":
         repo.finish_run(run_id, status)
     return run_id

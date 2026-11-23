@@ -26,6 +26,7 @@ from kubedelos.store.queries import (
     CLUSTER_SCOPE_SQL,
     FINDING_UNITS_SQL,
     RESULT_STATUSES,
+    ClusterScan,
     FindingFilter,
     HistoryRow,
     RunNotShown,
@@ -41,8 +42,11 @@ from kubedelos.store.queries import (
     kpis,
     newest_run,
     previous_comparable,
+    result_runs,
+    run_by_number,
     run_failures,
     run_history,
+    run_label,
     run_namespaces,
     run_registry_hosts,
     scan_times,
@@ -77,8 +81,8 @@ def db(tmp_path):
     return conn, Repo(conn, clock=Clock())
 
 
-def _run(repo, status="ok", *, context="ctx", scope=CLUSTER, level="library,os"):
-    run_id = repo.start_run(context, "cli", "0.76.1", scan_level=level, scope=scope)
+def _run(repo, status="ok", *, context="ctx", cluster=None, scope=CLUSTER, level="library,os"):
+    run_id = repo.start_run(cluster or context, context, "cli", "0.76.1", scan_level=level, scope=scope)
     if status != "running":
         repo.finish_run(run_id, status)
     return run_id
@@ -131,6 +135,88 @@ def test_newest_run_skips_failed_cancelled_running_and_other_context(db):
     assert run.scope["namespaces"] == []
 
 
+K = "https://k.example.com"
+
+
+def test_newest_run_is_shared_by_contexts_of_one_cluster(db):
+    conn, repo = db
+    _run(repo, context="prod", cluster=K)
+    newest = _run(repo, context="prod-admin", cluster=K)
+    _run(repo, context="prod", cluster="https://other.example.com")
+    run = newest_run(conn, K, cluster_scope=False)
+    assert (run.id, run.cluster, run.context, run.number) == (newest, K, "prod-admin", 2)
+    assert newest_run(conn, "prod", cluster_scope=False) is None  # a context name is not a cluster key
+
+
+def test_per_cluster_reads_cross_contexts_of_one_cluster(db):
+    conn, repo = db
+    first = _run(repo, context="prod", cluster=K)
+    second = _run(repo, context="prod-admin", cluster=K)
+    _run(repo, context="prod", cluster="https://other.example.com")
+    assert run_by_number(conn, K, 2).id == second
+    assert [c.id for c in result_runs(conn, K)] == [second, first]
+    label = run_label(conn, K, first)
+    assert (label.cluster, label.context, label.number) == (K, "prod", 1)
+    rows, total = run_history(conn, K, 1)
+    assert total == 2 and [(r.id, r.context) for r in rows] == [(second, "prod-admin"), (first, "prod")]
+
+
+def test_get_run_refuses_a_run_of_another_cluster(db):
+    conn, repo = db
+    mine = _run(repo, context="prod", cluster=K)
+    theirs = _run(repo, context="prod", cluster="https://other.example.com")
+    assert get_run(conn, K, mine).context == "prod"
+    for read in (get_run, run_label):
+        with pytest.raises(RunNotShown) as exc:
+            read(conn, K, theirs)
+        assert exc.value.reason == "that run belongs to another cluster"
+
+
+def test_previous_comparable_crosses_contexts_of_one_cluster(db):
+    conn, repo = db
+    first = _run(repo, context="prod", cluster=K)
+    _run(repo, context="prod", cluster="https://other.example.com")
+    current = _run(repo, context="prod-admin", cluster=K)
+    assert previous_comparable(conn, get_run(conn, K, current)).id == first
+
+
+def test_cluster_scans_name_each_cluster_after_its_newest_run(db):
+    conn, repo = db
+    _run(repo, context="prod", cluster=K)
+    newest = _run(repo, context="prod-admin", cluster=K)
+    _run(repo, context="prod", cluster=K, status="failed")  # newer, but no results: the name still follows it
+    _run(repo, context="lab", status="failed")
+    finished = conn.execute("SELECT finished_at FROM scan_run WHERE id = ?", (newest,)).fetchone()[0]
+    assert queries.cluster_scans(conn) == [  # by name
+        ClusterScan("lab", "lab", None, ("lab",)),
+        ClusterScan(K, "prod", datetime.fromisoformat(finished), ("prod", "prod-admin")),
+    ]
+
+
+def test_context_cluster_is_the_cluster_of_the_newest_run_through_the_context(db):
+    conn, repo = db
+    _run(repo, context="prod", cluster="prod")
+    _run(repo, context="prod", cluster=K)
+    _run(repo, context="prod-admin", cluster="other")
+    assert queries.context_cluster(conn, "prod") == K
+    assert queries.context_cluster(conn, "nowhere") is None
+
+
+def test_listed_name_is_the_newest_context_unless_that_context_now_means_another_cluster(db):
+    conn, repo = db
+    old, new = "https://a.example.com", "https://b.example.com"
+    _run(repo, context="prod", cluster=old)  # the cluster was recreated later, under the same context name
+    _run(repo, context="prod", cluster=new)
+    _run(repo, context="lab", status="failed")
+    scans = {scan.cluster: scan for scan in queries.cluster_scans(conn)}
+    assert scans[old].name == scans[new].name == "prod"
+    assert queries.listed_name(conn, scans[new]) == "prod"
+    assert queries.listed_name(conn, scans[old]) == old  # its key, which resolves to itself
+    assert queries.listed_name(conn, scans["lab"]) == "lab"
+    # The UI passes its own resolver, which knows the kubeconfig first.
+    assert queries.listed_name(conn, scans[new], lambda name: "https://elsewhere.example.com") == new
+
+
 def test_exclusions_still_cluster_scope(db):
     conn, repo = db
     run_id = _run(repo, scope=_scope(exclude_images=["busybox:*"], exclude_namespaces=["kube-system"]))
@@ -156,7 +242,7 @@ def test_get_run_reasons(db):
     assert exc.value.reason == "no run 999"
     with pytest.raises(RunNotShown) as exc:
         get_run(conn, "ctx", other)
-    assert exc.value.reason == "that run belongs to context other, not ctx"
+    assert exc.value.reason == "that run belongs to another cluster"
     with pytest.raises(RunNotShown) as exc:
         get_run(conn, "ctx", failed)
     assert exc.value.reason == "run 2 is failed, so it has no results to show"  # its number in ctx
@@ -164,7 +250,7 @@ def test_get_run_reasons(db):
 
 def test_run_counts_distinct_refs(db):
     conn, repo = db
-    run_id = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
+    run_id = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
     _add(repo, run_id, "reg.example.com/app:1", "linux/amd64", "ok")
     _add(repo, run_id, "reg.example.com/app:1", "linux/arm64", "error")
     _add(repo, run_id, "reg.example.com/app:2", "linux/amd64", "cached")
@@ -175,9 +261,9 @@ def test_run_counts_distinct_refs(db):
 
 def test_run_carries_its_trivy_version(db):
     conn, repo = db
-    pinned = repo.start_run("ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
+    pinned = repo.start_run("ctx", "ctx", "cli", "0.76.1", scan_level="os", scope=CLUSTER)
     repo.finish_run(pinned, "ok")
-    custom = repo.start_run("ctx", "ui", "custom", scan_level="os", scope=CLUSTER)
+    custom = repo.start_run("ctx", "ctx", "ui", "custom", scan_level="os", scope=CLUSTER)
     repo.finish_run(custom, "ok")
     assert get_run(conn, "ctx", pinned).trivy_version == "0.76.1"
     assert newest_run(conn, "ctx", cluster_scope=True).trivy_version == "custom"
@@ -821,8 +907,8 @@ def test_run_history_pages_newest_first_with_total(db):
 
 def test_run_history_carries_the_trigger_and_requester(db):
     conn, repo = db
-    repo.start_run("ctx", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com")
-    repo.start_run("ctx", "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    repo.start_run("ctx", "ctx", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com")
+    repo.start_run("ctx", "ctx", "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
     rows, _ = run_history(conn, "ctx", 1)
     assert [(r.trigger, r.requested_by) for r in rows] == [("schedule", None), ("ui", "a@example.com")]
 
@@ -847,19 +933,6 @@ def test_run_history_gives_a_failed_runs_reason(db):
         trivy: None,
         ok: None,
     }
-
-
-def test_context_scans_gives_each_context_its_newest_result(db):
-    conn, repo = db
-    old = _run(repo, context="kind-lab")
-    _run(repo, context="prod-eu", status="failed")
-    newest = _run(repo, context="kind-lab", status="partial")
-    _run(repo, context="kind-lab", status="cancelled")  # newer, but no results
-    finished = {r["id"]: r["finished_at"] for r in conn.execute("SELECT id, finished_at FROM scan_run")}
-    scans = queries.context_scans(conn)
-    assert list(scans) == ["kind-lab", "prod-eu"]
-    assert scans["kind-lab"] == datetime.fromisoformat(finished[newest]) != datetime.fromisoformat(finished[old])
-    assert scans["prod-eu"] is None  # known from its history, never scanned to a result
 
 
 def _add_to_namespaces(
@@ -922,7 +995,15 @@ def _seed_accepting(repo):
 
 def _accept(conn, vuln_id, **narrow):
     accepted.add(
-        conn, vuln_id=vuln_id, reason="r", owner="me", expires=date(2026, 6, 1), context="ctx", now=ACCEPT_NOW, **narrow
+        conn,
+        vuln_id=vuln_id,
+        reason="r",
+        owner="me",
+        expires=date(2026, 6, 1),
+        cluster="ctx",
+        context="ctx",
+        now=ACCEPT_NOW,
+        **narrow,
     )
 
 

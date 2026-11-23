@@ -110,8 +110,10 @@ def run_scan(
     # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
     with runlock.hold(settings.data_dir) as owner:
         # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
+        context = settings.context or settings.cluster_name or api.current_context()
         run_id = repo.start_run(
-            settings.cluster_name or api.current_context(),
+            settings.cluster_name or context,
+            context,
             trigger,
             CUSTOM_TRIVY if settings.trivy_path else TRIVY_VERSION,
             scan_level=settings.scan_level,

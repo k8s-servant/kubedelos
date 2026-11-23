@@ -1,10 +1,14 @@
 {#- The page head: the page title and, when there is a run, chips that name it, then the gaps and attack-surface callouts.
-    Needs: page_title, run (or None), pinned, now. -#}
+    Needs: page_title, run (or None), pinned, now, and the shown context, which a run made through another context of
+    its cluster names ("via"). -#}
 <div class="page-head">
   <h1>{{ page_title }}</h1>
   {%- if run %}
   <ul class="chips">
     <li class="chip">Run {{ run.number }}</li>
+    {%- if run.context and run.context != context %}
+    <li class="chip">via {{ run.context }}</li>
+    {%- endif %}
     <li class="chip">{{ describe_scope(run.scope) }}</li>
     <li class="chip">{{ describe_pkg_types(run.pkg_types) }}</li>
     <li class="chip">finished {{ finished_text(run, now) }}</li>

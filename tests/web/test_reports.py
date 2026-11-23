@@ -11,7 +11,8 @@ CLUSTER = Settings().scope
 
 
 def _run(seed, status="ok", context=None):
-    run_id = seed.repo.start_run(context or seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, status)
     return run_id
 
@@ -79,7 +80,7 @@ def test_csv_has_every_row_of_the_view_and_is_formula_safe(client, seed):
 def test_csv_follows_the_findings_filters_and_accepted_mode(client, seed):
     run_id = _seed(seed)
     accepted.add(
-        seed.repo._conn, vuln_id="CVE-2", reason="r", owner="me", expires=seed.clock.now.date(), context=None,
+        seed.repo._conn, vuln_id="CVE-2", reason="r", owner="me", expires=seed.clock.now.date(), cluster=None, context=None,
         now=seed.clock.now,
     )  # fmt: skip
     hidden = _csv(client.get("/findings.csv", params={"run_id": run_id}))
@@ -121,7 +122,7 @@ def test_report_sheet_of_the_dashboard_run(client, seed):
     run_id = _seed(seed)
     _add(seed, run_id, "reg.example.com/broken:1", status="error", error="unexpected EOF")
     accepted.add(
-        seed.repo._conn, vuln_id="CVE-2", reason="r", owner="me", expires=seed.clock.now.date(), context=None,
+        seed.repo._conn, vuln_id="CVE-2", reason="r", owner="me", expires=seed.clock.now.date(), cluster=None, context=None,
         now=seed.clock.now,
     )  # fmt: skip
     html = client.get("/report").text

@@ -194,3 +194,25 @@ def test_read_only_pages_show_the_notice(make_serve_client, path):
 def test_writable_serve_and_laptop_never_show_the_notice(serve_client, client):
     assert READ_ONLY_NOTICE not in serve_client.get("/").text
     assert READ_ONLY_NOTICE not in client.get("/").text
+
+
+def test_laptop_scans_store_the_run_under_the_contexts_cluster_as_the_kubeconfig_has_it(seed, monkeypatch):
+    built = {}
+
+    class Runner:
+        def __init__(self, settings, context, **kwargs):
+            built.update(kwargs)
+
+    keys = {"prod": "https://prod.example.com:6443"}
+    monkeypatch.setattr(app_module, "ScanRunner", Runner)
+    app_module.create_app(seed.settings, context="prod", token="t", port=9370, cluster_keys=lambda: dict(keys))
+    cluster_of = built["cluster_of"]
+    assert cluster_of("prod") == "https://prod.example.com:6443"
+    assert cluster_of("dev") == "dev"  # not in the kubeconfig: its own name
+    keys["dev"] = "https://dev.example.com"  # added while the UI runs
+    assert cluster_of("dev") == "https://dev.example.com"
+
+
+def test_the_serve_app_keys_its_cluster_by_its_name(serve_client):
+    app = serve_client.app
+    assert app.state.cluster_keys() == {app.state.context: app.state.context}

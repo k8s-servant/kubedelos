@@ -370,7 +370,7 @@ def test_registry_test_cloud_hosts_need_the_matching_provider(strict_hosts, make
 
 
 def test_registry_test_allows_a_host_the_cluster_runs(strict_hosts, make_serve_client, seed, scanned):
-    run_id = seed.repo.start_run("my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
+    run_id = seed.repo.start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
     ref = ImageRef(ref="cluster.example.com/team/app:1", repo="cluster.example.com/team/app", tag="1", digest=None)
     item = InventoryItem(image=ref, platform="linux/amd64")
     seed.repo.add_result(run_id, item, ImageResult(image=ref, platform="linux/amd64", status="ok"))
@@ -380,7 +380,7 @@ def test_registry_test_allows_a_host_the_cluster_runs(strict_hosts, make_serve_c
 
 
 def _seed_cluster_host(seed):
-    run_id = seed.repo.start_run("my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
+    run_id = seed.repo.start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="library,os", scope="{}")
     ref = ImageRef(ref="cluster.example.com/team/app:1", repo="cluster.example.com/team/app", tag="1", digest=None)
     seed.repo.add_result(
         run_id,

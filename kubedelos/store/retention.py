@@ -1,7 +1,7 @@
 """Retention: delete scan runs past the retention period, and expired image-cache rows.
 
 ``kubedelos serve`` runs on a schedule and would otherwise grow the database without bound. The newest ``ok`` or
-``partial`` run of each (context, scope, scan level) always stays, so the latest result of every comparable scan
+``partial`` run of each (cluster, scope, scan level) always stays, so the latest result of every comparable scan
 survives however old it is, and a run a queued retry still names stays too. Acceptances are never touched.
 """
 
@@ -31,7 +31,7 @@ def prune(
                 WHERE started_at < :cutoff AND status != 'running'
                   AND id NOT IN (
                       SELECT MAX(id) FROM scan_run WHERE status IN ('ok', 'partial')
-                      GROUP BY context, scope, pkg_types)
+                      GROUP BY cluster, scope, pkg_types)
                   AND id NOT IN (
                       SELECT target_run_id FROM scan_request WHERE state = 'queued' AND target_run_id IS NOT NULL)
                 ORDER BY id

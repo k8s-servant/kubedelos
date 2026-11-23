@@ -98,8 +98,9 @@ def findings_csv(
 ) -> Response:
     with open_db(request) as conn:
         context = shown_context(request, conn)
+        cluster = request.state.cluster
         try:
-            run = get_run(conn, context, run_id)
+            run = get_run(conn, cluster, run_id)
         except RunNotShown as exc:
             return _not_shown(request, exc)
         flt = replace(flt, scored=risk_view(conn, run.id)["risk_shown"])
@@ -127,12 +128,13 @@ def report(request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID)) 
     now = request.app.state.clock()
     ctx: dict = {"now": now, "run": None, "shown": None}
     with open_db(request) as conn:
-        context = shown_context(request, conn)
+        shown_context(request, conn)
+        cluster = request.state.cluster
         try:
-            run = get_run(conn, context, run_id) if run_id else newest_run(conn, context, cluster_scope=True)
+            run = get_run(conn, cluster, run_id) if run_id else newest_run(conn, cluster, cluster_scope=True)
         except RunNotShown as exc:
             return _not_shown(request, exc)
-        ctx["run"] = newest_run(conn, context, cluster_scope=False)
+        ctx["run"] = newest_run(conn, cluster, cluster_scope=False)
         if run is None:
             return render(request, "report.html", ctx)
         counts = kpis(conn, run.id)
@@ -153,10 +155,11 @@ def report(request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID)) 
 @router.get("/reports", response_class=HTMLResponse)
 def reports(request: Request) -> HTMLResponse:
     with open_db(request) as conn:
-        context = shown_context(request, conn)
-        choices = result_runs(conn, context)
+        shown_context(request, conn)
+        cluster = request.state.cluster
+        choices = result_runs(conn, cluster)
         namespaces = run_namespaces(conn, choices[0].id) if choices else []
-        newest = newest_run(conn, context, cluster_scope=False)  # the sidebar's "scanned N ago"
+        newest = newest_run(conn, cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
     ctx = {
         "now": request.app.state.clock(),
         "run": newest,

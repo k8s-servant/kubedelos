@@ -92,6 +92,7 @@ def test_query_plans_use_indexes(tmp_path):
         "namespace_counts": lambda: queries.namespace_counts(conn, run_id),
         "compare": lambda: diff.compare(conn, run_id - 1, run_id),
         "result_runs": lambda: queries.result_runs(conn, CONTEXT),
+        "context_cluster": lambda: queries.context_cluster(conn, CONTEXT),
         "workloads": lambda: workloads.workloads(conn, run_id, namespace="ns-01", name="app1"),
         "workloads cve": lambda: workloads.workloads(conn, run_id, vuln_id=vuln_id),
         "cve_packages": lambda: workloads.cve_packages(conn, run_id, vuln_id),
@@ -157,7 +158,14 @@ def test_pages_under_300ms(settings):
     pages += ["/report", "/reports", "/settings", f"/scans/{run_id}/times"]
     pages += ["/diff", f"/diff?from={run_id - PRIOR_RUNS}&to={run_id}"]
     pages += ["/accepted", "/findings?accepted=only", f"/findings?accepted=all&sort=cve&page={middle}"]
-    app = create_app(settings, context=CONTEXT, token=TOKEN, port=PORT, list_contexts=lambda: [CONTEXT])
+    app = create_app(
+        settings,
+        context=CONTEXT,
+        token=TOKEN,
+        port=PORT,
+        list_contexts=lambda: [CONTEXT],
+        cluster_keys=lambda: {CONTEXT: CONTEXT},
+    )
     with TestClient(app, base_url=BASE_URL) as client:
         assert client.get(f"/?token={TOKEN}", follow_redirects=False).status_code == 303
         for path in pages:

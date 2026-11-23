@@ -110,6 +110,7 @@ def _build(
     *,
     context: str,
     list_contexts: Callable[[], list[str]],
+    cluster_keys: Callable[[], dict[str, str]],
     clock: Callable[[], datetime],
     csrf_token: Callable[[Request], str],
     can_write: Callable[[Request], bool],
@@ -122,6 +123,7 @@ def _build(
     app.state.context = context
     app.state.flags = flags
     app.state.list_contexts = list_contexts
+    app.state.cluster_keys = cluster_keys
     app.state.clock = clock
     app.state.serve = serve
     app.state.templates = _templates(csrf_token, can_write, serve=serve)
@@ -166,21 +168,30 @@ def create_app(
     port: int,
     clock: Callable[[], datetime] = _utcnow,
     list_contexts: Callable[[], list[str]] | None = None,
+    cluster_keys: Callable[[], dict[str, str]] | None = None,
     flags: frozenset[str] = frozenset(),
 ) -> FastAPI:
     """Build the UI. ``context`` is the one shown by default, ``token`` the startup secret, ``port`` what the Host
-    check expects, ``list_contexts`` lists the kubeconfig's contexts (read on each page), and ``flags`` names the
-    settings given as flags to ``kubedelos ui`` (for the Settings page)."""
+    check expects, ``list_contexts`` lists the kubeconfig's contexts and ``cluster_keys`` maps each to its cluster key
+    (both read on each page, and the keys again when a scan starts), and ``flags`` names the settings given as flags
+    to ``kubedelos ui`` (for the Settings page)."""
     guard = Guard(token, port)
 
     def csrf_token(request: Request) -> str:
         sid = request.cookies.get(guard.cookie_name)
         return guard.csrf_token(sid) if guard.valid_session(sid) else ""
 
+    keys = cluster_keys or (lambda: kube_client.cluster_keys(settings))
+
+    def cluster_of(target: str) -> str:
+        """The cluster a scan through ``target`` belongs to, as the kubeconfig has it when the scan starts."""
+        return keys().get(target, target)
+
     app = _build(
         settings,
         context=context,
         list_contexts=list_contexts or (lambda: kube_client.list_contexts(settings)),
+        cluster_keys=keys,
         clock=clock,
         csrf_token=csrf_token,
         can_write=lambda request: True,
@@ -188,7 +199,7 @@ def create_app(
         flags=flags,
     )
     app.state.guard = guard
-    app.state.scans = ScanRunner(settings, context, clock=clock)
+    app.state.scans = ScanRunner(settings, context, clock=clock, cluster_of=cluster_of)
     install(app, guard)
     return app
 
@@ -219,6 +230,7 @@ def create_serve_app(
         settings,
         context=name,
         list_contexts=lambda: [name],
+        cluster_keys=lambda: {name: name},  # the one cluster serve scans is keyed by its name
         clock=clock,
         csrf_token=csrf_token,
         can_write=lambda request: not guard.read_only,

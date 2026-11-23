@@ -61,7 +61,8 @@ class Settings(BaseSettings):
     # NoDecode: KUBEDELOS_PKG_TYPES=os,library is a plain comma list, not JSON.
     pkg_types: Annotated[tuple[str, ...], NoDecode] = ("library", "os")
 
-    cluster_name: str | None = None  # the name runs are stored under, instead of the kube context (set by serve)
+    # The cluster key runs are stored under, else the context name: serve sets its clusterName, a UI scan its key.
+    cluster_name: str | None = None
     sweep_schedule: str = "0 3 * * *"  # cron expression of the scheduled sweep
     sweep_timezone: str = "UTC"
     sweep_enabled: bool = True

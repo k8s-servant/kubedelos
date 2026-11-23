@@ -98,6 +98,88 @@ def test_list_clusters_default_is_none_for_an_unknown_context(tmp_path):
     conn.close()
 
 
+def _two_contexts_one_cluster(path):
+    """Two contexts through one API server; the second is newer, so it names the cluster."""
+    conn = connect(path)
+    repo = Repo(conn, clock=Clock(datetime(2026, 1, 3, tzinfo=UTC)))
+    key = "https://k.example.com"
+    for context in ("old-ctx", "new-ctx"):
+        run_id = repo.start_run(key, context, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+        repo.finish_run(run_id, "ok")
+    conn.close()
+    return key
+
+
+def test_list_clusters_lists_a_cluster_once_with_its_contexts(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    key = _two_contexts_one_cluster(path)
+    db = Db(path, "old-ctx")
+    conn = db.open()
+    result = tools.list_clusters(conn, db, NOW)
+    assert [(c["name"], c["key"], c["contexts"], c["newest_run"]) for c in result["clusters"]] == [
+        ("new-ctx", key, ["new-ctx", "old-ctx"], 2)
+    ]
+    assert result["default"] == "new-ctx"
+    conn.close()
+
+
+def test_a_tool_resolves_either_context_of_a_cluster(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    key = _two_contexts_one_cluster(path)
+    db = Db(path, None)
+    conn = db.open()
+    for given in ("old-ctx", "new-ctx", key):
+        assert tools.resolve_cluster(conn, db, given) == key
+        summary = tools.run_summary(conn, db, NOW, cluster=given)
+        assert summary["cluster"] == "new-ctx" and summary["run"]["number"] == 2
+    assert tools.accepted_risks(conn, db, NOW, cluster="old-ctx")["cluster"] == "new-ctx"
+    with pytest.raises(ToolError) as exc:
+        tools.resolve_cluster(conn, db, "nope")
+    assert str(exc.value) == "unknown cluster nope; known: new-ctx"
+    conn.close()
+
+
+OLD_KEY, NEW_KEY = "https://a.example.com", "https://b.example.com"  # the old key sorts first
+
+
+def _reused_context(path):
+    """One context name used for two clusters: ``prod`` scanned a cluster, which was then recreated with a new FQDN
+    and scanned again under the same context name."""
+    conn = connect(path)
+    repo = Repo(conn, clock=Clock(datetime(2026, 1, 3, tzinfo=UTC)))
+    for key in (OLD_KEY, NEW_KEY):
+        run_id = repo.start_run(key, "prod", "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+        repo.finish_run(run_id, "ok")
+    conn.close()
+
+
+def test_a_reused_context_name_resolves_to_the_newer_cluster(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    _reused_context(path)
+    db = Db(path, None)
+    conn = db.open()
+    assert tools.resolve_cluster(conn, db, "prod") == NEW_KEY
+    assert tools.resolve_cluster(conn, db, OLD_KEY) == OLD_KEY
+    assert tools.cluster_name(conn, NEW_KEY) == "prod"
+    assert tools.cluster_name(conn, OLD_KEY) == OLD_KEY
+    assert tools.run_summary(conn, db, NOW, cluster="prod")["cluster"] == "prod"
+    assert tools.run_summary(conn, db, NOW, cluster=OLD_KEY)["cluster"] == OLD_KEY
+    listed = tools.list_clusters(conn, db, NOW)["clusters"]
+    assert [(c["name"], c["key"]) for c in listed] == [(OLD_KEY, OLD_KEY), ("prod", NEW_KEY)]
+    conn.close()
+
+
+@pytest.mark.parametrize(("given", "key", "name"), [("prod", NEW_KEY, "prod"), (OLD_KEY, OLD_KEY, OLD_KEY)])
+def test_the_default_cluster_resolves_a_key_or_a_name(tmp_path, given, key, name):
+    path = tmp_path / "kubedelos.db"
+    _reused_context(path)
+    db = Db(path, given)
+    conn = db.open()
+    assert tools.resolve_cluster(conn, db, None) == key
+    assert tools.list_clusters(conn, db, NOW)["default"] == name
+    conn.close()
+
+
 EMPTY_DB_CALLS = {
     "run_summary": lambda conn, db: tools.run_summary(conn, db, NOW),
     "fix_first": lambda conn, db: tools.fix_first(conn, db, NOW),
@@ -289,9 +371,9 @@ def test_find_vulnerability_includes_facts_and_acceptance(world):
     conn, repo, db = world
     _cve_world(repo)
     soon = date(2026, 2, 10)
-    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, context="my-cluster",
+    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, cluster="my-cluster", context="my-cluster",
                         now=NOW, namespace="web")  # fmt: skip
-    gone = accepted.add(conn, vuln_id="CVE-1", reason="old", owner="me", expires=date(2026, 2, 1), context="my-cluster",
+    gone = accepted.add(conn, vuln_id="CVE-1", reason="old", owner="me", expires=date(2026, 2, 1), cluster="my-cluster", context="my-cluster",
                         now=NOW)  # fmt: skip
     accepted.revoke(conn, gone, NOW)
     result = tools.find_vulnerability(conn, db, NOW, " CVE-1 ")
@@ -451,7 +533,16 @@ def test_list_findings_filters_and_paging(world):
 def test_list_findings_accepted_modes(world):
     conn, repo, db = world
     _findings_world(repo)
-    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="o", expires=date(2026, 3, 1), context="my-cluster", now=NOW)
+    accepted.add(
+        conn,
+        vuln_id="CVE-1",
+        reason="r",
+        owner="o",
+        expires=date(2026, 3, 1),
+        cluster="my-cluster",
+        context="my-cluster",
+        now=NOW,
+    )
     hidden = tools.list_findings(conn, db, NOW)
     assert [i["vuln_id"] for i in hidden["items"]] == ["CVE-2", "CVE-3"] and hidden["accepted_left_out"] == 1
     only = tools.list_findings(conn, db, NOW, accepted="only")
@@ -681,10 +772,10 @@ def test_accepted_risks_active_and_all(world):
     run_id = new_run(repo, "my-cluster")
     add_image(repo, run_id, "img-a", [finding("CVE-1", "HIGH")])
     live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=date(2026, 3, 1),
-                        context="my-cluster", now=NOW)  # fmt: skip
-    old = accepted.add(conn, vuln_id="CVE-2", reason="old", owner="me", expires=date(2026, 2, 1), context=None,
+                        cluster="my-cluster", context="my-cluster", now=NOW)  # fmt: skip
+    old = accepted.add(conn, vuln_id="CVE-2", reason="old", owner="me", expires=date(2026, 2, 1), cluster=None, context=None,
                        now=NOW)  # fmt: skip
-    gone = accepted.add(conn, vuln_id="CVE-3", reason="x", owner="me", expires=date(2026, 3, 1), context="my-cluster",
+    gone = accepted.add(conn, vuln_id="CVE-3", reason="x", owner="me", expires=date(2026, 3, 1), cluster="my-cluster", context="my-cluster",
                         now=NOW)  # fmt: skip
     accepted.revoke(conn, gone, NOW)
     later = NOW.replace(day=5)
@@ -702,7 +793,9 @@ def test_accepted_risks_active_and_all(world):
 def test_accepted_risks_without_a_run(world):
     conn, repo, db = world
     new_run(repo, "my-cluster", "running")
-    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), context=None, now=NOW)
+    accepted.add(
+        conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), cluster=None, context=None, now=NOW
+    )
     result = tools.accepted_risks(conn, db, NOW)
     assert [e["covers"] for e in result["entries"]] == [None]
 

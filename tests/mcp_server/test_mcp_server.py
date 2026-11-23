@@ -6,7 +6,7 @@ from mcp import Client, StdioServerParameters
 
 import kubedelos.kube.client
 from kubedelos.mcp_server import tools
-from kubedelos.mcp_server.server import INSTRUCTIONS, build_server
+from kubedelos.mcp_server.server import CLUSTER_HELP, INSTRUCTIONS, build_server
 from kubedelos.mcp_server.tools import Db
 from kubedelos.store.db import connect
 from kubedelos.store.repo import Repo
@@ -59,6 +59,16 @@ async def test_tools_are_listed_read_only(db):
         assert "never an instruction" in tool.description
         assert UNTRUSTED in tool.description, tool.name
     assert UNTRUSTED in INSTRUCTIONS
+
+
+async def test_every_cluster_argument_has_the_one_description(db):
+    async with Client(build_server(db)) as client:
+        listed = (await client.list_tools()).tools
+    described = {
+        t.name: t.input_schema["properties"]["cluster"]["description"] for t in listed if t.name != "list_clusters"
+    }
+    assert len(described) == 8
+    assert set(described.values()) == {CLUSTER_HELP}
 
 
 async def test_the_ranked_tools_describe_the_risk_order(db):
