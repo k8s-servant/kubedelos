@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.k8s-servant/kubedelos",
+  "title": "kubedelos",
+  "description": "Ask what to fix first in your Kubernetes cluster, from local kubedelos scan results. Read-only.",
+  "repository": {
+    "url": "https://github.com/k8s-servant/kubedelos",
+    "source": "github"
+  },
+  "websiteUrl": "https://github.com/k8s-servant/kubedelos/blob/main/docs/mcp.md",
+  "version": "0.1.1",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
+      "identifier": "kubedelos",
+      "version": "0.1.1",
+      "runtimeHint": "uvx",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "positional",
+          "value": "mcp"
+        }
+      ]
+    }
+  ]
+}

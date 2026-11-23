@@ -1,5 +1,7 @@
-"""The wheel's contents, and the container image's hashed lock files kept in step with pyproject.toml."""
+"""The wheel's contents, the container image's hashed lock files and the MCP Registry entry (server.json), all kept in
+step with pyproject.toml."""
 
+import json
 import re
 import subprocess
 import sys
@@ -74,3 +76,23 @@ def test_locks_are_resolved_for_the_image_python():
     base = re.search(r"^FROM python:(\d+\.\d+)-alpine@", (ROOT / "Dockerfile").read_text(), re.M)
     target = re.search(r"--python-version (\d+\.\d+)", (ROOT / "scripts" / "lock-image.sh").read_text())
     assert base and target and base[1] == target[1]
+
+
+def test_mcp_registry_entry_matches_the_package():
+    # The MCP Registry checks that the PyPI description names the server, and installs the version server.json gives;
+    # release-please bumps both versions, so they must stay listed in its config.
+    root = Path(__file__).resolve().parent.parent
+    server = json.loads((root / "server.json").read_text())
+    version = tomllib.loads((root / "pyproject.toml").read_text())["project"]["version"]
+    (package,) = server["packages"]
+    assert f"<!-- mcp-name: {server['name']} -->" in (root / "README.pypi.md").read_text()
+    assert server["version"] == package["version"] == version
+    assert package["registryType"] == "pypi" and package["identifier"] == "kubedelos"
+    assert package["packageArguments"] == [{"type": "positional", "value": "mcp"}]
+    assert len(server["description"]) <= 100
+    bumped = {
+        f["jsonpath"]
+        for f in json.loads((root / "release-please-config.json").read_text())["packages"]["."]["extra-files"]
+        if f["path"] == "server.json"
+    }
+    assert bumped == {"$.version", "$.packages[0].version"}
