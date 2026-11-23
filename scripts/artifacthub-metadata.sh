@@ -10,9 +10,10 @@
 set -euo pipefail
 
 repository_id="${1:?usage: scripts/artifacthub-metadata.sh REPOSITORY_ID}"
-case "${repository_id}" in
-  *[!0-9a-f-]*) echo "the repository ID is a UUID (hex digits and dashes)" >&2; exit 2 ;;
-esac
+if [[ ! "${repository_id}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+  echo "the repository ID is a UUID, such as 01234567-89ab-cdef-0123-456789abcdef" >&2
+  exit 2
+fi
 ref="${CHART_REF:-ghcr.io/k8s-servant/charts/kubedelos}:artifacthub.io"
 
 work="$(mktemp -d)"
