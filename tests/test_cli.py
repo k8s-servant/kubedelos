@@ -369,6 +369,43 @@ def test_ui_prints_no_note_without_stale_runs(ui_env):
     assert "interrupted run" not in r.output
 
 
+def test_ui_merges_existing_runs_into_their_cluster_on_start(ui_env, monkeypatch):
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    server = "https://prod.example.com:6443"
+    conn = connect(Settings().db_path)
+    try:
+        for context in ("prod", "prod-admin", "dev"):
+            run_id = Repo(conn).start_run(context, context, "ui", "0.76.1", scan_level="os", owner=None)
+            Repo(conn).finish_run(run_id, "ok")
+    finally:
+        conn.close()
+    keys = {"prod": server, "prod-admin": server, "dev": "dev"}
+    monkeypatch.setattr(cli.kube_client, "cluster_keys", lambda settings: dict(keys))
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert f"note: merged the runs of context prod into its cluster {server}\n" in r.output
+    assert f"note: merged the runs of context prod-admin into its cluster {server}\n" in r.output
+    assert "context dev" not in r.output
+    conn = connect(Settings().db_path)
+    try:
+        rows = conn.execute("SELECT cluster, context, number FROM scan_run ORDER BY id").fetchall()
+    finally:
+        conn.close()
+    assert [tuple(r) for r in rows] == [(server, "prod", 1), (server, "prod-admin", 2), ("dev", "dev", 1)]
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])  # nothing left to merge on the next start
+    assert r.exit_code == 0 and "merged" not in r.output
+
+
+def test_ui_starts_when_the_kubeconfig_has_no_clusters(ui_env, monkeypatch):
+    monkeypatch.setattr(cli.kube_client, "cluster_keys", lambda settings: {})
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "merged" not in r.output
+
+
 @pytest.fixture
 def serve_env(fake_env, monkeypatch):
     """Fake out kube, the socket, the server, the worker and the sweeper; record what ``serve`` hands them."""

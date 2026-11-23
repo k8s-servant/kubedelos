@@ -32,6 +32,7 @@ from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.scheduler import Sweeper, cron_error
 from kubedelos.store import queue, runlock
+from kubedelos.store.clusters import merge_contexts
 from kubedelos.store.db import connect
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
@@ -248,6 +249,9 @@ def ui(
         try:
             # A run left "running" by a killed scan stays that way for ever; close the ones no live process owns.
             stale = runlock.close_stale_runs(conn, settings.data_dir)
+            # Runs recorded before a context's API server was known are keyed by its name; fold them into its cluster,
+            # so contexts of one cluster share one history. An unreadable kubeconfig maps nothing, so nothing moves.
+            merged = merge_contexts(conn, kube_client.cluster_keys(settings))
         finally:
             conn.close()
     except Exception as exc:
@@ -255,6 +259,8 @@ def ui(
         raise typer.Exit(2) from exc
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
+    for merged_context, key in merged:
+        typer.echo(f"note: merged the runs of context {_one_line(merged_context)} into its cluster {_one_line(key)}")
     token = secrets.token_urlsafe(32)
     try:
         sock = server.bind(host, port)
