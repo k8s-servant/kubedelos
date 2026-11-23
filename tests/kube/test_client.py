@@ -221,3 +221,71 @@ def test_list_contexts_is_empty_without_a_readable_kubeconfig(tmp_path, content)
     if content is not None:
         kubeconfig.write_text(content)
     assert kube_client.list_contexts(Settings(kubeconfig=kubeconfig)) == []
+
+
+@pytest.mark.parametrize("raw", ["https://AKS.example.com", "https://aks.example.com/", "https://aks.example.com:443"])
+def test_normalise_server_folds_case_slash_and_default_port(raw):
+    assert kube_client.normalise_server(raw) == "https://aks.example.com"
+
+
+def test_normalise_server_keeps_other_ports_paths_and_ipv6():
+    assert kube_client.normalise_server("https://10.0.0.1:6443") == "https://10.0.0.1:6443"
+    assert kube_client.normalise_server("http://Example.com:80/") == "http://example.com"
+    assert (
+        kube_client.normalise_server("https://example.com/k8s/clusters/c-1/") == "https://example.com/k8s/clusters/c-1"
+    )
+    assert kube_client.normalise_server("https://[fd00::1]:443/") == "https://[fd00::1]"
+    assert kube_client.normalise_server("https://[fd00::1]:6443") == "https://[fd00::1]:6443"
+
+
+def _write_kubeconfig(path, clusters, contexts):
+    """``clusters`` maps name -> server (None for no server); ``contexts`` maps name -> cluster name."""
+    lines = ["clusters:"] if clusters else []
+    for name, server in clusters.items():
+        lines.append(
+            f"- name: {name}\n  cluster: {{{'server: ' + server if server else 'insecure-skip-tls-verify: true'}}}"
+        )
+    lines.append("contexts:")
+    lines += [f"- name: {name}\n  context: {{cluster: {cluster}, user: u}}" for name, cluster in contexts.items()]
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
+def test_cluster_keys_group_contexts_of_one_server(tmp_path):
+    kubeconfig = _write_kubeconfig(
+        tmp_path / "config",
+        {
+            "prod": "https://prod.example.com:443/",
+            "prod-admin": "https://PROD.example.com",
+            "dev": "https://dev.example.com",
+        },
+        {"prod": "prod", "prod-admin": "prod-admin", "dev": "dev"},
+    )
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {
+        "prod": "https://prod.example.com",
+        "prod-admin": "https://prod.example.com",
+        "dev": "https://dev.example.com",
+    }
+
+
+def test_cluster_keys_fall_back_to_the_context_name(tmp_path):
+    kubeconfig = _write_kubeconfig(
+        tmp_path / "config", {"no-server": None}, {"broken": "missing", "no-server": "no-server"}
+    )
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {"broken": "broken", "no-server": "no-server"}
+
+
+def test_cluster_keys_first_file_wins_like_kubectl(monkeypatch, tmp_path):
+    one = _write_kubeconfig(tmp_path / "one", {"prod": "https://a.example.com"}, {"prod": "prod"})
+    two = _write_kubeconfig(tmp_path / "two", {"prod": "https://b.example.com"}, {"prod": "prod", "other": "prod"})
+    monkeypatch.setattr(kube_client.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", f"{one}{os.pathsep}{two}")
+    assert kube_client.cluster_keys(Settings()) == {"prod": "https://a.example.com", "other": "https://a.example.com"}
+
+
+def test_cluster_keys_skip_an_unreadable_file(monkeypatch, tmp_path):
+    bad = tmp_path / "bad"
+    bad.write_text("contexts: [unclosed\n")
+    good = _write_kubeconfig(tmp_path / "good", {"c": "https://c.example.com"}, {"a": "c"})
+    monkeypatch.setattr(kube_client.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", f"{bad}{os.pathsep}{good}")
+    assert kube_client.cluster_keys(Settings()) == {"a": "https://c.example.com"}
+    assert kube_client.cluster_keys(Settings(kubeconfig=tmp_path / "missing")) == {}

@@ -4,7 +4,9 @@ The attack-surface lists (services, ingresses, network policies, RBAC) are reads
 """
 
 import os
+from collections.abc import Iterator
 from typing import Protocol
+from urllib.parse import urlsplit
 
 import yaml
 from kubernetes import client, config
@@ -164,21 +166,68 @@ def load(settings: Settings) -> KubeApi:
     return _RealKubeApi(settings.context or active["name"])
 
 
-def list_contexts(settings: Settings) -> list[str]:
-    """The context names in the kubeconfig (every ``KUBECONFIG`` path, as kubectl reads them), sorted, or none when it
-    can't be read. Parsing only: no context is loaded, so no login plugin runs, and no current context is needed. A
-    file another tool is halfway through rewriting is skipped rather than failing the page."""
+def _kubeconfig_docs(settings: Settings) -> Iterator[dict]:
+    """The parsed YAML of every kubeconfig path (as kubectl reads ``KUBECONFIG``), in order. Data only: nothing is
+    loaded, so no login plugin runs. A file that is missing, half-written or not a mapping is skipped."""
     paths = str(settings.kubeconfig) if settings.kubeconfig else kube_config.KUBE_CONFIG_DEFAULT_LOCATION
-    names: set[str] = set()
     for path in filter(None, paths.split(kube_config.ENV_KUBECONFIG_PATH_SEPARATOR)):
         try:
             with open(os.path.expanduser(path)) as f:
                 data = yaml.safe_load(f)
         except (OSError, ValueError, yaml.YAMLError):
             continue
-        contexts = data.get("contexts") if isinstance(data, dict) else None
-        for entry in contexts if isinstance(contexts, list) else []:
-            name = entry.get("name") if isinstance(entry, dict) else None
-            if isinstance(name, str) and name:
-                names.add(name)
+        if isinstance(data, dict):
+            yield data
+
+
+def _named_entries(doc: dict, key: str) -> Iterator[tuple[str, dict]]:
+    """The ``(name, entry)`` pairs of a kubeconfig list such as ``contexts``, skipping malformed ones."""
+    entries = doc.get(key)
+    for entry in entries if isinstance(entries, list) else []:
+        name = entry.get("name") if isinstance(entry, dict) else None
+        if isinstance(name, str) and name:
+            yield name, entry
+
+
+def list_contexts(settings: Settings) -> list[str]:
+    """The context names in the kubeconfig (every ``KUBECONFIG`` path), sorted, or none when it can't be read.
+    Parsing only: no context is loaded, so no login plugin runs, and no current context is needed."""
+    names = {name for doc in _kubeconfig_docs(settings) for name, _ in _named_entries(doc, "contexts")}
     return sorted(names, key=str.casefold)
+
+
+def normalise_server(url: str) -> str:
+    """An API server URL folded so equal servers compare equal: lower-case scheme and host, no default port
+    (``:443`` for https, ``:80`` for http) and no trailing slash."""
+    parts = urlsplit(url.strip())
+    scheme = parts.scheme.lower()
+    host = (parts.hostname or "").lower()
+    if ":" in host:
+        host = f"[{host}]"
+    try:
+        port = parts.port
+    except ValueError:
+        port = None
+    if port is not None and port != {"https": 443, "http": 80}.get(scheme):
+        host = f"{host}:{port}"
+    return f"{scheme}://{host}{parts.path.rstrip('/')}"
+
+
+def cluster_keys(settings: Settings) -> dict[str, str]:
+    """Each kubeconfig context name mapped to its cluster key: the normalised API server of the cluster it names, so
+    two logins to one server (a user and an ``--admin`` context) share a key. A context whose cluster entry is
+    missing or has no server is keyed by its own name. As in kubectl, the first definition of a name wins."""
+    servers: dict[str, str] = {}
+    cluster_of: dict[str, str | None] = {}
+    for doc in _kubeconfig_docs(settings):
+        for name, entry in _named_entries(doc, "clusters"):
+            server = (entry.get("cluster") or {}).get("server") if isinstance(entry.get("cluster"), dict) else None
+            if isinstance(server, str) and server.strip():
+                servers.setdefault(name, server)
+        for name, entry in _named_entries(doc, "contexts"):
+            ctx = entry.get("context")
+            cluster = ctx.get("cluster") if isinstance(ctx, dict) else None
+            cluster_of.setdefault(name, cluster if isinstance(cluster, str) else None)
+    return {
+        name: normalise_server(servers[cluster]) if cluster in servers else name for name, cluster in cluster_of.items()
+    }
