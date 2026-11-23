@@ -13,7 +13,8 @@ TODAY = date(2026, 1, 1)  # the test clock's day
 
 
 def _run(seed, context=None):
-    run_id = seed.repo.start_run(context or seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, "ok")
     return run_id
 

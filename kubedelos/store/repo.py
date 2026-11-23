@@ -54,6 +54,7 @@ class Repo:
 
     def start_run(
         self,
+        cluster: str,
         context: str | None,
         trigger: str | None,
         trivy_version: str,
@@ -63,13 +64,19 @@ class Repo:
         owner: str | None = None,
         requested_by: str | None = None,
     ) -> int:
+        """Record a running run of ``cluster``, numbered within it; ``context`` is the context it goes through."""
         with self._conn:
             cur = self._conn.execute(
-                "INSERT INTO scan_run (started_at, status, context, trigger, trivy_version, pkg_types, scope, owner,"
-                " requested_by, number) VALUES (?, 'running', ?, ?, ?, ?, ?, ?, ?,"
-                " (SELECT COALESCE(MAX(number), 0) + 1 FROM scan_run WHERE context IS ?))",
-                (self._now(), context, trigger, trivy_version, scan_level, scope, owner, requested_by, context),
-            )
+                "INSERT INTO scan_run (started_at, status, cluster, context, trigger, trivy_version, pkg_types, scope,"
+                " owner, requested_by, number) VALUES (:now, 'running', :cluster, :context, :trigger, :trivy_version,"
+                " :pkg_types, :scope, :owner, :requested_by,"
+                " (SELECT COALESCE(MAX(number), 0) + 1 FROM scan_run WHERE cluster = :cluster))",
+                {
+                    "now": self._now(), "cluster": cluster, "context": context, "trigger": trigger,
+                    "trivy_version": trivy_version, "pkg_types": scan_level, "scope": scope, "owner": owner,
+                    "requested_by": requested_by,
+                },
+            )  # fmt: skip
         return int(cur.lastrowid)  # type: ignore[arg-type]
 
     def set_fact_sources(self, run_id: int, sources: FactSources) -> None:

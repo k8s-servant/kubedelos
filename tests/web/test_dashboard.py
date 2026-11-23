@@ -15,7 +15,8 @@ CLUSTER = Settings().scope
 
 
 def _run(seed, *, scope=CLUSTER, level="library,os", status="ok", context=None):
-    run_id = seed.repo.start_run(context or seed.context, "cli", "0.76.1", scan_level=level, scope=scope)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "cli", "0.76.1", scan_level=level, scope=scope)
     seed.repo.finish_run(run_id, status)
     return run_id
 
@@ -110,7 +111,7 @@ def test_pinned_run_and_404_reasons(client, seed):
     assert "a newer run" not in pinned.text
     assert '<li class="chip">Run 2</li>' in pinned.text
     foreign = client.get(f"/?run_id={other}")
-    assert foreign.status_code == 404 and "belongs to context elsewhere" in foreign.text
+    assert foreign.status_code == 404 and "that run belongs to another cluster" in foreign.text
     bad = client.get(f"/?run_id={failed}")
     assert bad.status_code == 404 and "is failed" in bad.text
     missing = client.get("/?run_id=99")
@@ -163,7 +164,7 @@ def test_sidebar_footer_names_the_shown_runs_trivy(client, seed):
 
 
 def test_sidebar_footer_names_the_pinned_runs_trivy_not_the_newest(client, seed):
-    old = seed.repo.start_run(seed.context, "cli", "0.70.0", scan_level="library,os", scope=CLUSTER)
+    old = seed.repo.start_run(seed.context, seed.context, "cli", "0.70.0", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(old, "ok")
     _run(seed)  # newer, scanned with v0.76.1
     assert "Trivy v0.76.1" in _sidebar(client.get("/").text)
@@ -173,7 +174,7 @@ def test_sidebar_footer_names_the_pinned_runs_trivy_not_the_newest(client, seed)
 
 
 def test_sidebar_footer_names_a_custom_trivy(client, seed):
-    run_id = seed.repo.start_run(seed.context, "cli", "custom", scan_level="library,os", scope=CLUSTER)
+    run_id = seed.repo.start_run(seed.context, seed.context, "cli", "custom", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, "ok")
     sidebar = _sidebar(client.get("/").text)
     assert '<p class="sidebar-foot">Scanned with a custom Trivy</p>' in sidebar
@@ -749,7 +750,7 @@ def test_switcher_lists_every_context_with_its_last_scan(client, seed, kube_cont
     kube_contexts.extend(["prod-eu", "Staging"])
     _run(seed)
     _run(seed, context="prod-eu")
-    old = seed.repo.start_run("old-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    old = seed.repo.start_run("old-cluster", "old-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(old, "ok")
     html = _sidebar(client.get("/findings", params={"context": "prod-eu", "severity": "HIGH"}).text)
     switcher = _between(html, '<details class="context context-switch"', "</details>")

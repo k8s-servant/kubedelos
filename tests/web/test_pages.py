@@ -75,7 +75,7 @@ def test_short_name_keeps_the_last_path_segment_and_a_short_tag():
 
 
 def _ok_run(seed, context):
-    run_id = seed.repo.start_run(context, "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
     seed.repo.finish_run(run_id, "ok")
     return run_id
 

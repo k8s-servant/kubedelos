@@ -19,7 +19,7 @@ def repo(tmp_path):
 
 
 def _start(repo, owner):
-    return repo.start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=owner)
+    return repo.start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os", owner=owner)
 
 
 def test_hold_makes_the_owner_live_until_it_exits(tmp_path):

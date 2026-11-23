@@ -334,7 +334,7 @@ def test_ui_closes_stale_runs_at_startup(ui_env):
 
     conn = connect(Settings().db_path)
     try:
-        run_id = Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+        run_id = Repo(conn).start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
     finally:
         conn.close()
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
@@ -355,7 +355,7 @@ def test_ui_counts_stale_runs_in_the_plural(ui_env):
     conn = connect(Settings().db_path)
     try:
         for _ in range(2):
-            Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+            Repo(conn).start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
     finally:
         conn.close()
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
@@ -484,7 +484,7 @@ def test_serve_startup_closes_stale_state(serve_env):
 
     conn = connect(Settings().db_path)
     try:
-        run_id = Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
+        run_id = Repo(conn).start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os", owner=None)
         conn.execute(
             "INSERT INTO scan_request (kind, trigger, requested_at, overrides, state) "
             "VALUES ('scan', 'schedule', '2026-11-18T00:00:00+00:00', '{}', 'started')"

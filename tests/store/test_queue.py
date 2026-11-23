@@ -27,7 +27,7 @@ def _schedule(conn):
 
 
 def _run(conn):
-    return Repo(conn).start_run("my-cluster", "cli", "0.76.1", scan_level="os", owner="o")
+    return Repo(conn).start_run("my-cluster", "my-cluster", "cli", "0.76.1", scan_level="os", owner="o")
 
 
 def test_schedule_requests_coalesce_while_queued(conn):

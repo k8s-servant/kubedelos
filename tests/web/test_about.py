@@ -51,7 +51,7 @@ def test_missing_dbs_say_the_first_scan_downloads_them(client, app, tmp_path):
 def test_about_names_the_newest_scan_of_the_shown_context(client, seed, app, tmp_path):
     _dbs(app, tmp_path)
     assert _row(client.get("/about").text, "Newest scan of my-cluster") == "none yet"
-    run_id = seed.repo.start_run(seed.context, "ui", TRIVY_VERSION, scan_level="library,os", scope="{}")
+    run_id = seed.repo.start_run(seed.context, seed.context, "ui", TRIVY_VERSION, scan_level="library,os", scope="{}")
     seed.repo.finish_run(run_id, "ok")
     seed.clock.now += timedelta(hours=5)
     assert _row(client.get("/about").text, "Newest scan of my-cluster") == "Run 1, 5 h ago"

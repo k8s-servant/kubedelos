@@ -19,10 +19,10 @@ def conn(tmp_path):
     c.close()
 
 
-def _run(conn, age_days, *, status="ok", context="my-cluster", scope="{}", level="os", findings=True):
+def _run(conn, age_days, *, status="ok", context="my-cluster", cluster=None, scope="{}", level="os", findings=True):
     """Seed a finished run that started age_days ago, with one image, workload and finding."""
     repo = Repo(conn, clock=lambda: NOW - timedelta(days=age_days))
-    run_id = repo.start_run(context, "cli", "0.76.1", scan_level=level, scope=scope)
+    run_id = repo.start_run(cluster or context, context, "cli", "0.76.1", scan_level=level, scope=scope)
     image = ImageRef(ref="reg.example.com/app:1", repo="reg.example.com/app", tag="1", digest=DIGEST)
     item = InventoryItem(
         image=image,
@@ -80,6 +80,13 @@ def test_scopes_are_kept_apart(conn):
     assert prune(conn, now=NOW, retention_days=90) == [old]
     for kept in (other_scope, other_level, other_context):
         assert _count(conn, "scan_run", "id = ?", (kept,)) == 1
+
+
+def test_retention_keeps_the_newest_result_per_cluster_scope_and_level(conn):
+    old = _run(conn, 400, context="prod", cluster="https://k.example.com")
+    newest = _run(conn, 300, context="prod-admin", cluster="https://k.example.com")
+    assert prune(conn, now=NOW, retention_days=90) == [old]  # one cluster, so only its newest result stays
+    assert _count(conn, "scan_run", "id = ?", (newest,)) == 1
 
 
 def test_failed_runs_do_not_count_as_the_kept_result(conn):

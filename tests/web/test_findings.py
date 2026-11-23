@@ -11,7 +11,7 @@ CLUSTER = Settings().scope
 
 
 def _run(seed, *, scope=CLUSTER, level="library,os", status="ok"):
-    run_id = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level=level, scope=scope)
+    run_id = seed.repo.start_run(seed.context, seed.context, "cli", "0.76.1", scan_level=level, scope=scope)
     seed.repo.finish_run(run_id, status)
     return run_id
 
@@ -275,7 +275,9 @@ def test_filters_are_an_even_grid_with_steady_pills(client, seed):
 
 def test_findings_keep_the_shown_context_in_links_and_the_filter_form(client, seed, kube_contexts):
     kube_contexts.append("prod-eu")
-    run_id = seed.repo.start_run("prod-eu", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope)
+    run_id = seed.repo.start_run(
+        "prod-eu", "prod-eu", "ui", "0.76.1", scan_level="library,os", scope=seed.settings.scope
+    )
     seed.repo.finish_run(run_id, "ok")
     html = client.get("/findings", params={"context": "prod-eu"}).text
     form = html[html.index('<form method="get" action="/findings"') : html.index("</form>")]

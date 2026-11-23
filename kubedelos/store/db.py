@@ -239,6 +239,22 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     # 13: the threat feeds (KEV and EPSS, one row per CVE, filled by the feed refresh) and what each feed last fetched,
     # plus each workload row's stored risk points; see _migrate_13. Readers COALESCE to NO_FACTS_POINTS.
     _migrate_13,
+    # 14: the cluster each run belongs to, so contexts that point at one API server share one history. The context
+    # stays as the context the run went through. Run numbers, the unique indexes on them and the per-cluster reads move
+    # from context to cluster; every existing row is keyed by its context, so nothing moves here. acceptance gains the
+    # same column (NULL still means all clusters) and keeps its context for display.
+    """
+    ALTER TABLE scan_run ADD COLUMN cluster TEXT;
+    UPDATE scan_run SET cluster = context;
+    DROP INDEX idx_scan_run_number;
+    DROP INDEX idx_scan_run_number_no_context;
+    DROP INDEX idx_scan_run_context;
+    CREATE UNIQUE INDEX idx_scan_run_number ON scan_run(cluster, number);
+    CREATE UNIQUE INDEX idx_scan_run_number_no_cluster ON scan_run(number) WHERE cluster IS NULL;
+    CREATE INDEX idx_scan_run_cluster ON scan_run(cluster, status, id);
+    ALTER TABLE acceptance ADD COLUMN cluster TEXT;
+    UPDATE acceptance SET cluster = context;
+    """,
 ]
 
 

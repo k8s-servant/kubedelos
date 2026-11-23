@@ -94,9 +94,9 @@ def seed_large(
     finished = (_START + timedelta(hours=run_count + 1)).isoformat()
     with conn:
         run_id = conn.execute(
-            "INSERT INTO scan_run (started_at, finished_at, status, context, trigger, trivy_version, pkg_types, scope,"
-            " number) VALUES (?, ?, 'ok', ?, 'cli', '0.76.1', 'library,os', ?, ?)",
-            (finished, finished, CONTEXT, Settings().scope, run_count + 1),
+            "INSERT INTO scan_run (started_at, finished_at, status, cluster, context, trigger, trivy_version, pkg_types,"
+            " scope, number) VALUES (?, ?, 'ok', ?, ?, 'cli', '0.76.1', 'library,os', ?, ?)",
+            (finished, finished, CONTEXT, CONTEXT, Settings().scope, run_count + 1),
         ).lastrowid
         failed = images * FAILED_PERCENT // 100
         ok = images - failed

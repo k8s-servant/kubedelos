@@ -247,7 +247,9 @@ def risk_run(seed):
             rights=Rights(status="off"),
         )  # fmt: skip
 
-    run_id = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+    run_id = seed.repo.start_run(
+        seed.context, seed.context, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope
+    )
     refs = []
     for name, vuln, severity, level, root in (
         ("hot", "CVE-HOT", "HIGH", "external", True),

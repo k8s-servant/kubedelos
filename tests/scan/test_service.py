@@ -260,15 +260,22 @@ def test_service_uses_scan_level_for_cache(env, monkeypatch):
     assert repo.get_run(second.run_id)["pkg_types"] == "library,os"
 
 
-def test_run_scan_stores_the_cluster_name(env, monkeypatch):
+def _stored(repo, run_id):
+    row = repo.get_run(run_id)
+    return row["cluster"], row["context"]
+
+
+def test_run_scan_stores_the_cluster_and_the_context(env, monkeypatch):
     settings, repo, calls = env
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     api = _api()
     monkeypatch.setattr(api, "current_context", lambda: "kind-x")
-    named = service.run_scan(settings.model_copy(update={"cluster_name": "my-cluster"}), api=api, repo=repo)
-    assert repo.get_run(named.run_id)["context"] == "my-cluster"
     plain = service.run_scan(settings, api=api, repo=repo)
-    assert repo.get_run(plain.run_id)["context"] == "kind-x"
+    assert _stored(repo, plain.run_id) == ("kind-x", "kind-x")
+    laptop = settings.model_copy(update={"context": "prod-admin", "cluster_name": "https://k.example.com"})
+    assert _stored(repo, service.run_scan(laptop, api=api, repo=repo).run_id) == ("https://k.example.com", "prod-admin")
+    serve = settings.model_copy(update={"context": None, "cluster_name": "my-cluster"})
+    assert _stored(repo, service.run_scan(serve, api=api, repo=repo).run_id) == ("my-cluster", "my-cluster")
 
 
 def test_run_scan_stores_the_requester(env, monkeypatch):

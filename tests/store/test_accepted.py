@@ -21,7 +21,7 @@ def db(tmp_path):
 
 
 def _run(repo, context="ctx"):
-    run_id = repo.start_run(context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    run_id = repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     repo.finish_run(run_id, "ok")
     return run_id
 

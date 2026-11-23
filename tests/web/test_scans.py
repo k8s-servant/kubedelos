@@ -27,7 +27,9 @@ CLUSTER = Settings().scope
 
 
 def _run(seed, status="ok", *, owner=None):
-    run_id = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level="library,os", scope=CLUSTER, owner=owner)
+    run_id = seed.repo.start_run(
+        seed.context, seed.context, "cli", "0.76.1", scan_level="library,os", scope=CLUSTER, owner=owner
+    )
     if status != "running":
         seed.repo.finish_run(run_id, status)
     return run_id
@@ -172,7 +174,9 @@ def test_scan_form_escapes_saved_values(client, app):
 
 def test_scans_page_hides_other_contexts(client, seed):
     mine = _run(seed)
-    other = seed.repo.start_run("other-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    other = seed.repo.start_run(
+        "other-cluster", "other-cluster", "cli", "0.76.1", scan_level="library,os", scope=CLUSTER
+    )
     seed.repo.finish_run(other, "ok")
     rows = _rows(client.get("/scans").text)
     assert len(rows) == 1
@@ -623,7 +627,7 @@ def test_live_region_is_a_stable_ancestor_of_the_swapped_box(client, fake):
 def test_scans_page_of_another_context_scans_that_context(client, seed, kube_contexts):
     kube_contexts.append("prod-eu")
     _run(seed)
-    theirs = seed.repo.start_run("prod-eu", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    theirs = seed.repo.start_run("prod-eu", "prod-eu", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(theirs, "ok")
     html = client.get("/scans", params={"context": "prod-eu"}).text
     form = html.split('<form method="post" action="/scans"', 1)[1].split("</form>", 1)[0]
@@ -643,7 +647,7 @@ def test_start_scans_the_posted_context(client, kube_contexts, fake):
 
 
 def test_start_refuses_a_context_not_in_the_kubeconfig(client, seed, fake):
-    gone = seed.repo.start_run("old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    gone = seed.repo.start_run("old-cluster", "old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(gone, "ok")  # known from history, so the page renders
     response = _start(client, context="old-cluster")
     assert response.status_code == 400
@@ -653,7 +657,7 @@ def test_start_refuses_a_context_not_in_the_kubeconfig(client, seed, fake):
 
 
 def test_history_only_context_offers_no_scan(client, seed):
-    gone = seed.repo.start_run("old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    gone = seed.repo.start_run("old-cluster", "old-cluster", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(gone, "ok")
     html = client.get("/scans", params={"context": "old-cluster"}).text
     assert '<form method="post" action="/scans"' not in html
@@ -802,10 +806,12 @@ def test_serve_scans_page_offers_the_start_form_and_the_queue(serve_client):
 
 def test_serve_history_shows_requester(serve_client, seed):
     asked = seed.repo.start_run(
-        seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com"
+        seed.context, seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER, requested_by="a@example.com"
     )
-    swept = seed.repo.start_run(seed.context, "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER)
-    old = seed.repo.start_run(seed.context, "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    swept = seed.repo.start_run(
+        seed.context, seed.context, "schedule", "0.76.1", scan_level="library,os", scope=CLUSTER
+    )
+    old = seed.repo.start_run(seed.context, seed.context, "cli", "0.76.1", scan_level="library,os", scope=CLUSTER)
     for run_id in (asked, swept, old):
         seed.repo.finish_run(run_id, "ok")
     html = serve_client.get("/scans").text
@@ -884,7 +890,7 @@ def test_serve_blank_namespaces_mean_the_configured_ones(make_serve_client, seed
 
 
 def test_anonymous_ui_run_shows_anonymous(serve_client, seed):
-    run_id = seed.repo.start_run(seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    run_id = seed.repo.start_run(seed.context, seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     seed.repo.finish_run(run_id, "ok")
     html = serve_client.get("/scans").text
     row = next(r for r in _rows(html) if f"Run {run_id}<" in r)

@@ -34,7 +34,9 @@ class FakeScan:
         try:
             conn = db.connect(settings.db_path)
             try:
-                run_id = Repo(conn).start_run("my-cluster", kw.get("trigger"), "0.76.1", scan_level="library,os")
+                run_id = Repo(conn).start_run(
+                    "my-cluster", "my-cluster", kw.get("trigger"), "0.76.1", scan_level="library,os"
+                )
             finally:
                 conn.close()
             self.calls.append({"settings": settings, "run_id": run_id, **kw})
@@ -166,7 +168,7 @@ def test_retry_request_runs_the_retry(settings, conn):
         retries.append({"settings": retry_settings, **kw})
         return ScanOutcome(run_id=kw["run_id"], warnings=[], status="ok")
 
-    target = Repo(conn).start_run("my-cluster", "schedule", "0.76.1", scan_level="library,os")
+    target = Repo(conn).start_run("my-cluster", "my-cluster", "schedule", "0.76.1", scan_level="library,os")
     runner = ScanRunner(settings, "my-cluster", fixed_cluster=True, scan=FakeScan(), retry=retry)
     worker = QueueWorker(settings, runner, clock=lambda: NOW, poll_s=0.01)
     try:
@@ -290,7 +292,7 @@ def test_a_foreign_job_is_never_attributed_to_the_worker_request(stub, conn, pru
     runner.current = _view("running", job_id=2)
     worker._pass(conn)
     assert _request(conn, mine)["run_id"] is None and _request(conn, mine)["state"] == "started"
-    foreign_run = Repo(conn).start_run("my-cluster", "ui", "0.76.1", scan_level="library,os")
+    foreign_run = Repo(conn).start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="library,os")
     runner.current = _view("finished", job_id=2, run_id=foreign_run, status="ok")
     later = _ui(conn, namespaces=["team-a"]).id
     worker._pass(conn)
@@ -303,7 +305,7 @@ def test_the_worker_settles_its_own_job_by_id(stub, conn, pruned):
     runner, worker = stub
     mine = queue.enqueue(conn, kind="scan", trigger="schedule", overrides={"rescan": True}, now=NOW).id
     worker._pass(conn)
-    run = Repo(conn).start_run("my-cluster", "schedule", "0.76.1", scan_level="library,os")
+    run = Repo(conn).start_run("my-cluster", "my-cluster", "schedule", "0.76.1", scan_level="library,os")
     runner.current = _view("finished", job_id=1, run_id=run, status="ok")
     worker._pass(conn)
     assert _request(conn, mine)["run_id"] == run and len(pruned) == 1

@@ -22,7 +22,8 @@ AUTH_ERROR = "2026-11-16T09:15:44+02:00\tFATAL\tFatal error\tGET https://reg.exa
 
 
 def _run(seed, status="ok", context=None):
-    run_id = seed.repo.start_run(context or seed.context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
     if status != "running":
         seed.repo.finish_run(run_id, status)
     return run_id

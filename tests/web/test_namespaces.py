@@ -7,7 +7,8 @@ CLUSTER = Settings().scope
 
 
 def _run(seed, *, scope=CLUSTER, context=None):
-    run_id = seed.repo.start_run(context or seed.context, "ui", "0.76.1", scan_level="library,os", scope=scope)
+    context = context or seed.context
+    run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="library,os", scope=scope)
     seed.repo.finish_run(run_id, "ok")
     return run_id
 
