@@ -5,6 +5,7 @@
 [![PyPI](https://img.shields.io/pypi/v/kubedelos)](https://pypi.org/project/kubedelos/)
 [![Python](https://img.shields.io/pypi/pyversions/kubedelos)](https://pypi.org/project/kubedelos/)
 [![Release](https://img.shields.io/github/v/release/k8s-servant/kubedelos)](https://github.com/k8s-servant/kubedelos/releases)
+[![Artifact Hub](https://img.shields.io/endpoint?url=https://artifacthub.io/badge/repository/kubedelos)](https://artifacthub.io/packages/helm/kubedelos/kubedelos)
 [![License](https://img.shields.io/github/license/k8s-servant/kubedelos)](LICENSE)
 
 Scan the container images running in a Kubernetes cluster with Trivy.
