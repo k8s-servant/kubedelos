@@ -9,6 +9,7 @@ read by ``kubedelos.store.accepted`` against ``today``; nothing that counts does
 
 import json
 import sqlite3
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Literal, get_args
@@ -1107,6 +1108,18 @@ def context_cluster(conn: sqlite3.Connection, context: str) -> str | None:
         "SELECT cluster FROM scan_run WHERE context = ? AND cluster IS NOT NULL ORDER BY id DESC LIMIT 1", (context,)
     ).fetchone()
     return row["cluster"] if row else None
+
+
+def listed_name(conn: sqlite3.Connection, scan: ClusterScan, cluster_of: Callable[[str], str] | None = None) -> str:
+    """The name a cluster is listed under, by the web switcher and the MCP server alike: the context of its newest run
+    (``scan.name``), unless that name stands for another cluster, then its key, which resolves to itself.
+
+    A name stands for the cluster ``cluster_of`` gives; by default the cluster of the newest run made through that
+    context (:func:`context_cluster`), else the name itself. So when one context name was used for two clusters (a
+    cluster recreated under the same context), the newer cluster keeps the name and the older one shows its key.
+    """
+    resolve = cluster_of or (lambda name: context_cluster(conn, name) or name)
+    return scan.name if resolve(scan.name) == scan.cluster else scan.cluster
 
 
 @dataclass(frozen=True)

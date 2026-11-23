@@ -202,6 +202,21 @@ def test_context_cluster_is_the_cluster_of_the_newest_run_through_the_context(db
     assert queries.context_cluster(conn, "nowhere") is None
 
 
+def test_listed_name_is_the_newest_context_unless_that_context_now_means_another_cluster(db):
+    conn, repo = db
+    old, new = "https://a.example.com", "https://b.example.com"
+    _run(repo, context="prod", cluster=old)  # the cluster was recreated later, under the same context name
+    _run(repo, context="prod", cluster=new)
+    _run(repo, context="lab", status="failed")
+    scans = {scan.cluster: scan for scan in queries.cluster_scans(conn)}
+    assert scans[old].name == scans[new].name == "prod"
+    assert queries.listed_name(conn, scans[new]) == "prod"
+    assert queries.listed_name(conn, scans[old]) == old  # its key, which resolves to itself
+    assert queries.listed_name(conn, scans["lab"]) == "lab"
+    # The UI passes its own resolver, which knows the kubeconfig first.
+    assert queries.listed_name(conn, scans[new], lambda name: "https://elsewhere.example.com") == new
+
+
 def test_exclusions_still_cluster_scope(db):
     conn, repo = db
     run_id = _run(repo, scope=_scope(exclude_images=["busybox:*"], exclude_namespaces=["kube-system"]))

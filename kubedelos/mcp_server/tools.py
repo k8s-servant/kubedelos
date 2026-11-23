@@ -71,8 +71,9 @@ def clamp(limit: int, default: int = DEFAULT_LIMIT) -> int:
 
 
 def resolve_cluster(conn: sqlite3.Connection, db: Db, cluster: str | None) -> str:
-    """The key of the cluster to query. ``cluster`` (else ``--context``) may be a key, a cluster's name or any context
-    its runs went through; with neither, the cluster with the newest finished result run."""
+    """The key of the cluster to query. ``cluster`` (else ``--context``) may be a key or a context name, which stands
+    for the cluster of the newest run made through it, as in the UI; with neither, the cluster with the newest finished
+    result run."""
     scans = queries.cluster_scans(conn)
     if not scans:
         raise ToolError(f'no scans yet in {db.path}; run "kubedelos ui" and start a scan first')
@@ -83,24 +84,21 @@ def resolve_cluster(conn: sqlite3.Connection, db: Db, cluster: str | None) -> st
     else:
         key = _match(conn, scans, wanted)
     if key is None:
-        raise ToolError(f"unknown cluster {wanted}; known: {', '.join(s.name for s in scans)}")
+        known = sorted(queries.listed_name(conn, s) for s in scans)
+        raise ToolError(f"unknown cluster {wanted}; known: {', '.join(known)}")
     return key
 
 
 def _match(conn: sqlite3.Connection, scans: list[queries.ClusterScan], wanted: str) -> str | None:
-    """The key ``wanted`` names: a key, else a cluster's name, else a context a run went through."""
-    for scan in scans:
-        if wanted == scan.cluster:
-            return scan.cluster
-    for scan in scans:
-        if wanted == scan.name:
-            return scan.cluster
+    """The key ``wanted`` names: a key, else the cluster of the newest run made through that context, as in the UI."""
+    if any(wanted == scan.cluster for scan in scans):
+        return wanted
     return queries.context_cluster(conn, wanted)
 
 
 def cluster_name(conn: sqlite3.Connection, key: str) -> str:
-    """What the payloads call the cluster ``key``: the context of its newest run, else the key."""
-    return next((s.name for s in queries.cluster_scans(conn) if s.cluster == key), key)
+    """What the payloads call the cluster ``key``: the name ``list_clusters`` lists it under, else the key."""
+    return next((queries.listed_name(conn, s) for s in queries.cluster_scans(conn) if s.cluster == key), key)
 
 
 def _dashboard_run(conn: sqlite3.Connection, cluster: str) -> queries.Run | None:
@@ -132,7 +130,7 @@ def list_clusters(conn: sqlite3.Connection, db: Db, now: datetime) -> dict:
         run = _dashboard_run(conn, scan.cluster)
         clusters.append(
             {
-                "name": scan.name,
+                "name": queries.listed_name(conn, scan),
                 "key": scan.cluster,
                 "contexts": list(scan.contexts),
                 "last_scan": scan.finished_at.isoformat() if scan.finished_at else None,
@@ -141,6 +139,7 @@ def list_clusters(conn: sqlite3.Connection, db: Db, now: datetime) -> dict:
                 "newest_run": run.number if run else None,
             }
         )
+    clusters.sort(key=lambda c: (c["name"], c["key"]))
     default = None
     if scans:
         with contextlib.suppress(ToolError):  # a --context with no scans leaves no default

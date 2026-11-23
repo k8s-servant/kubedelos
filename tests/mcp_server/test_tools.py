@@ -139,6 +139,47 @@ def test_a_tool_resolves_either_context_of_a_cluster(tmp_path):
     conn.close()
 
 
+OLD_KEY, NEW_KEY = "https://a.example.com", "https://b.example.com"  # the old key sorts first
+
+
+def _reused_context(path):
+    """One context name used for two clusters: ``prod`` scanned a cluster, which was then recreated with a new FQDN
+    and scanned again under the same context name."""
+    conn = connect(path)
+    repo = Repo(conn, clock=Clock(datetime(2026, 1, 3, tzinfo=UTC)))
+    for key in (OLD_KEY, NEW_KEY):
+        run_id = repo.start_run(key, "prod", "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+        repo.finish_run(run_id, "ok")
+    conn.close()
+
+
+def test_a_reused_context_name_resolves_to_the_newer_cluster(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    _reused_context(path)
+    db = Db(path, None)
+    conn = db.open()
+    assert tools.resolve_cluster(conn, db, "prod") == NEW_KEY
+    assert tools.resolve_cluster(conn, db, OLD_KEY) == OLD_KEY
+    assert tools.cluster_name(conn, NEW_KEY) == "prod"
+    assert tools.cluster_name(conn, OLD_KEY) == OLD_KEY
+    assert tools.run_summary(conn, db, NOW, cluster="prod")["cluster"] == "prod"
+    assert tools.run_summary(conn, db, NOW, cluster=OLD_KEY)["cluster"] == OLD_KEY
+    listed = tools.list_clusters(conn, db, NOW)["clusters"]
+    assert [(c["name"], c["key"]) for c in listed] == [(OLD_KEY, OLD_KEY), ("prod", NEW_KEY)]
+    conn.close()
+
+
+@pytest.mark.parametrize(("given", "key", "name"), [("prod", NEW_KEY, "prod"), (OLD_KEY, OLD_KEY, OLD_KEY)])
+def test_the_default_cluster_resolves_a_key_or_a_name(tmp_path, given, key, name):
+    path = tmp_path / "kubedelos.db"
+    _reused_context(path)
+    db = Db(path, given)
+    conn = db.open()
+    assert tools.resolve_cluster(conn, db, None) == key
+    assert tools.list_clusters(conn, db, NOW)["default"] == name
+    conn.close()
+
+
 EMPTY_DB_CALLS = {
     "run_summary": lambda conn, db: tools.run_summary(conn, db, NOW),
     "fix_first": lambda conn, db: tools.fix_first(conn, db, NOW),

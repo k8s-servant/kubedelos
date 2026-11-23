@@ -26,7 +26,7 @@ from kubedelos.store import (
     intel,
     queue,
 )  # through the module, so a test that patches db.connect reaches every caller
-from kubedelos.store.queries import cluster_scans, context_cluster
+from kubedelos.store.queries import cluster_scans, context_cluster, listed_name
 from kubedelos.web.identity import identity
 
 QUEUE_FULL = "the queue is full"
@@ -124,8 +124,8 @@ def shown_context(request: Request, conn: sqlite3.Connection, wanted: str | None
     for scan in scans.values():  # by name, so a clash keeps the same winner on every page
         if scan.cluster in claimed:
             continue
-        name = scan.name
-        if name in clusters or cluster_of(request, conn, name) != scan.cluster:
+        name = listed_name(conn, scan, lambda n: cluster_of(request, conn, n))
+        if name in clusters:
             name = scan.cluster  # a key resolves to itself, since no context is named after it
         if name not in clusters:
             clusters[name] = scan.cluster

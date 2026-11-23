@@ -35,15 +35,17 @@ Options:
 
 | Option | What it does |
 | --- | --- |
-| `--context NAME` | Default cluster for the tools, given as a context name or a cluster name; else the one with the newest finished run. |
+| `--context NAME` | Default cluster: a context name or a cluster key; else the newest finished run's cluster. |
 | `--data-dir DIR` | The directory holding the kubedelos database (also `KUBEDELOS_DATA_DIR`). |
 
 ## Tools
 
-All tools are read-only. A tool's `cluster` argument is a kube-context name or a cluster from `list_clusters`; it defaults to the `--context` cluster, and `run` to the newest run the
-dashboard shows. `run` is the run number you see in the UI (within that cluster), not a database id. An unknown cluster
-answers `unknown cluster <name>; known: ...`. `list_clusters` reports `default` as `null` when `--context` names a
-cluster with no scans.
+All tools are read-only. A tool's `cluster` argument is a kube-context name or a cluster from `list_clusters`; it
+defaults to the `--context` cluster, and `run` to the newest run the dashboard shows. A context name stands for the
+cluster of the newest run made through it, as in the UI, so a context name reused for a new cluster finds the new one.
+`run` is the run number you see in the UI (within that cluster), not a database id. An unknown cluster answers
+`unknown cluster <name>; known: ...`. `list_clusters` reports `default` as `null` when `--context` names a cluster with
+no scans.
 
 Lists are bounded at 100 rows a call. `limit` (or `per_page`) defaults to 25 and is capped at 100; a larger value is
 clamped, not refused. How each tool bounds its lists:
@@ -80,7 +82,10 @@ Argument values and defaults:
   `accepted`: `hide` (default), `only` or `all`. `severity` is a list such as `["CRITICAL", "HIGH"]`.
 - `min_severity` (`attack_surface`): `CRITICAL` or `HIGH`. `offset` skips items, for the next page.
 - `state` (`accepted_risks`): `active` (default) or `all`.
-- `list_clusters` returns, per cluster, `name` (the context of its newest run), `key`, `contexts` (every kube-context its runs went through), `last_scan`, `status`, `stale` and `newest_run`. Contexts that reach the same API server are one cluster with one history.
+- `list_clusters` returns, per cluster, `name`, `key`, `contexts` (every kube-context its runs went through),
+  `last_scan`, `status`, `stale` and `newest_run`. `name` is the context of the cluster's newest run, or its `key` when
+  that context's newest run went to another cluster (a context name reused for a new cluster), as in the UI's
+  switcher. Contexts that reach one cluster (the same API server, TLS server name and CA) share one history.
 - `workload` and `find_vulnerability` items carry `facts`, which is `null` when none were collected.
 - The risk score (0-100, kubedelos's own ranking, not a CVE severity):
   - Each `fix_first` item and each `find_vulnerability` workload carries `score` and `factors`: a list of
