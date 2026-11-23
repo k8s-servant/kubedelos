@@ -1062,15 +1062,6 @@ def run_number(conn: sqlite3.Connection, run_id: int) -> int | None:
     return row["number"] if row else None
 
 
-def context_scans(conn: sqlite3.Connection) -> dict[str, datetime | None]:
-    """Every context with a run, by name, mapped to when its newest result run finished (None when it has none)."""
-    rows = conn.execute(
-        f"SELECT context, MAX(CASE WHEN status IN {_STATUS_SQL} THEN finished_at END) AS finished"  # noqa: S608 - only module constants are interpolated
-        " FROM scan_run WHERE context IS NOT NULL GROUP BY context ORDER BY context"
-    ).fetchall()
-    return {r["context"]: datetime.fromisoformat(r["finished"]) if r["finished"] else None for r in rows}
-
-
 @dataclass(frozen=True)
 class ClusterScan:
     """One cluster with a run: its key, the context it is named after, when its newest result run finished (None when

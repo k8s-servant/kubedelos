@@ -4,6 +4,7 @@ They are kept apart from the SDK wiring in ``server.py`` so they can be tested, 
 protocol round trip. Errors that the agent should read are raised as ``ToolError``.
 """
 
+import contextlib
 import dataclasses
 import json
 import sqlite3
@@ -70,19 +71,36 @@ def clamp(limit: int, default: int = DEFAULT_LIMIT) -> int:
 
 
 def resolve_cluster(conn: sqlite3.Connection, db: Db, cluster: str | None) -> str:
-    """The cluster to query: the argument, else ``--context``, else the context with the newest finished run."""
-    scans = queries.context_scans(conn)
+    """The key of the cluster to query. ``cluster`` (else ``--context``) may be a key, a cluster's name or any context
+    its runs went through; with neither, the cluster with the newest finished result run."""
+    scans = queries.cluster_scans(conn)
     if not scans:
         raise ToolError(f'no scans yet in {db.path}; run "kubedelos ui" and start a scan first')
-    name = cluster or db.default_cluster or _newest_finished(scans)
-    if name is None or name not in scans:
-        raise ToolError(f"unknown cluster {name}; known: {', '.join(sorted(scans))}")
-    return name
+    wanted = cluster or db.default_cluster
+    if wanted is None:
+        finished = {s.cluster: s.finished_at for s in scans if s.finished_at is not None}
+        key = max(finished, key=lambda k: finished[k]) if finished else None
+    else:
+        key = _match(conn, scans, wanted)
+    if key is None:
+        raise ToolError(f"unknown cluster {wanted}; known: {', '.join(s.name for s in scans)}")
+    return key
 
 
-def _newest_finished(scans: dict[str, datetime | None]) -> str | None:
-    finished = {name: when for name, when in scans.items() if when is not None}
-    return max(finished, key=lambda name: finished[name]) if finished else None
+def _match(conn: sqlite3.Connection, scans: list[queries.ClusterScan], wanted: str) -> str | None:
+    """The key ``wanted`` names: a key, else a cluster's name, else a context a run went through."""
+    for scan in scans:
+        if wanted == scan.cluster:
+            return scan.cluster
+    for scan in scans:
+        if wanted == scan.name:
+            return scan.cluster
+    return queries.context_cluster(conn, wanted)
+
+
+def cluster_name(conn: sqlite3.Connection, key: str) -> str:
+    """What the payloads call the cluster ``key``: the context of its newest run, else the key."""
+    return next((s.name for s in queries.cluster_scans(conn) if s.cluster == key), key)
 
 
 def _dashboard_run(conn: sqlite3.Connection, cluster: str) -> queries.Run | None:
@@ -107,22 +125,27 @@ def run_payload(run: queries.Run, now: datetime) -> dict:
 
 
 def list_clusters(conn: sqlite3.Connection, db: Db, now: datetime) -> dict:
-    scans = queries.context_scans(conn)
+    """Every cluster with a run: its name, key, the contexts its runs went through, and how fresh its dashboard run is."""
+    scans = queries.cluster_scans(conn)
     clusters = []
-    for name in sorted(scans):
-        run = _dashboard_run(conn, name)
-        last = scans[name]
+    for scan in scans:
+        run = _dashboard_run(conn, scan.cluster)
         clusters.append(
             {
-                "name": name,
-                "last_scan": last.isoformat() if last else None,
+                "name": scan.name,
+                "key": scan.cluster,
+                "contexts": list(scan.contexts),
+                "last_scan": scan.finished_at.isoformat() if scan.finished_at else None,
                 "status": run.status if run else None,
-                "stale": analytics.is_stale(last, now),
+                "stale": analytics.is_stale(scan.finished_at, now),
                 "newest_run": run.number if run else None,
             }
         )
-    default = db.default_cluster or _newest_finished(scans)
-    return {"clusters": clusters, "default": default if default in scans else None}
+    default = None
+    if scans:
+        with contextlib.suppress(ToolError):  # a --context with no scans leaves no default
+            default = cluster_name(conn, resolve_cluster(conn, db, None))
+    return {"clusters": clusters, "default": default}
 
 
 def _jsonable(value: Any) -> Any:
@@ -141,11 +164,11 @@ def select_run(conn: sqlite3.Connection, cluster: str, run: int | None) -> queri
     if run is not None:
         found = queries.run_by_number(conn, cluster, run)
         if found is None:
-            raise ToolError(f"no run {run} for {cluster}")
+            raise ToolError(f"no run {run} for {cluster_name(conn, cluster)}")
         return found
     found = _dashboard_run(conn, cluster)
     if found is None:
-        raise ToolError(f"{cluster} has no finished scan yet")
+        raise ToolError(f"{cluster_name(conn, cluster)} has no finished scan yet")
     return found
 
 
@@ -156,7 +179,7 @@ def run_summary(
     selected = select_run(conn, name, run)
     previous = queries.previous_comparable(conn, selected)
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "run": run_payload(selected, now),
         "kpis": _jsonable(dataclasses.asdict(queries.kpis(conn, selected.id))),
         "coverage_gaps": selected.gaps,
@@ -186,7 +209,7 @@ def fix_first(
         item["factors"] = _factors_payload(row.factors)
         items.append(item)
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "run": run_payload(selected, now),
         "view": view,
         "items": items,
@@ -287,7 +310,7 @@ def find_vulnerability(
     ]
     active = [e for e in accepted.register(conn, name, selected.id, now.date(), vuln_id) if e.state == "active"]
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "run": run_payload(selected, now),
         "vuln_id": vuln_id,
         "kev": found.kev if "kev" in intel.feeds(conn) else None,  # no KEV copy: unknown, never "not listed"
@@ -327,14 +350,14 @@ def workload(
     cluster: str | None = None,
     run: int | None = None,
 ) -> dict:
-    cluster_name = resolve_cluster(conn, db, cluster)
-    selected = select_run(conn, cluster_name, run)
+    key = resolve_cluster(conn, db, cluster)
+    selected = select_run(conn, key, run)
     rows = workloads.workloads(conn, selected.id, namespace=namespace, name=name, kind=kind)
     if not rows:
         raise ToolError(f"no workload {namespace}/{name} in run {selected.number}")
     top = {ref: workloads.top_findings(conn, selected.id, ref) for ref in sorted({row.ref for row in rows})}
     return {
-        "cluster": cluster_name,
+        "cluster": cluster_name(conn, key),
         "run": run_payload(selected, now),
         "containers": [
             {
@@ -389,7 +412,7 @@ def list_findings(
     page, per_page = min(max(page, 1), MAX_PAGE), clamp(per_page)
     rows, total, left_out = queries.findings_page(conn, selected.id, f, page, per_page, today=now.date())
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "run": run_payload(selected, now),
         "items": [_finding_item(row) for row in rows],
         "total": total,
@@ -458,7 +481,7 @@ def attack_surface(
     start = max(offset, 0)
     page = kept[start : start + clamp(limit)]
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "run": run_payload(selected, now),
         "facts_collected": any(row.facts is not None for row in rows),
         "items": [
@@ -496,7 +519,7 @@ def compare_runs(
     if old is None:
         raise ToolError("no earlier comparable run to compare with; pass from_run")
     result = _jsonable(dataclasses.asdict(diff.compare(conn, old.id, new.id, clamp(limit))))
-    return {"cluster": name, "from": run_payload(old, now), "to": run_payload(new, now), **result}
+    return {"cluster": cluster_name(conn, name), "from": run_payload(old, now), "to": run_payload(new, now), **result}
 
 
 def accepted_risks(
@@ -510,7 +533,7 @@ def accepted_risks(
     run = _dashboard_run(conn, name)
     entries = accepted.register(conn, name, run.id if run else None, now.date())
     return {
-        "cluster": name,
+        "cluster": cluster_name(conn, name),
         "state": state,
         "entries": [
             _jsonable(dataclasses.asdict(entry)) for entry in entries if state == "all" or entry.state == "active"

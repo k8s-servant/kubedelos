@@ -98,6 +98,47 @@ def test_list_clusters_default_is_none_for_an_unknown_context(tmp_path):
     conn.close()
 
 
+def _two_contexts_one_cluster(path):
+    """Two contexts through one API server; the second is newer, so it names the cluster."""
+    conn = connect(path)
+    repo = Repo(conn, clock=Clock(datetime(2026, 1, 3, tzinfo=UTC)))
+    key = "https://k.example.com"
+    for context in ("old-ctx", "new-ctx"):
+        run_id = repo.start_run(key, context, "cli", "0.76.1", scan_level="library,os", scope=Settings().scope)
+        repo.finish_run(run_id, "ok")
+    conn.close()
+    return key
+
+
+def test_list_clusters_lists_a_cluster_once_with_its_contexts(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    key = _two_contexts_one_cluster(path)
+    db = Db(path, "old-ctx")
+    conn = db.open()
+    result = tools.list_clusters(conn, db, NOW)
+    assert [(c["name"], c["key"], c["contexts"], c["newest_run"]) for c in result["clusters"]] == [
+        ("new-ctx", key, ["new-ctx", "old-ctx"], 2)
+    ]
+    assert result["default"] == "new-ctx"
+    conn.close()
+
+
+def test_a_tool_resolves_either_context_of_a_cluster(tmp_path):
+    path = tmp_path / "kubedelos.db"
+    key = _two_contexts_one_cluster(path)
+    db = Db(path, None)
+    conn = db.open()
+    for given in ("old-ctx", "new-ctx", key):
+        assert tools.resolve_cluster(conn, db, given) == key
+        summary = tools.run_summary(conn, db, NOW, cluster=given)
+        assert summary["cluster"] == "new-ctx" and summary["run"]["number"] == 2
+    assert tools.accepted_risks(conn, db, NOW, cluster="old-ctx")["cluster"] == "new-ctx"
+    with pytest.raises(ToolError) as exc:
+        tools.resolve_cluster(conn, db, "nope")
+    assert str(exc.value) == "unknown cluster nope; known: new-ctx"
+    conn.close()
+
+
 EMPTY_DB_CALLS = {
     "run_summary": lambda conn, db: tools.run_summary(conn, db, NOW),
     "fix_first": lambda conn, db: tools.fix_first(conn, db, NOW),

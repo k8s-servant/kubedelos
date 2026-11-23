@@ -920,19 +920,6 @@ def test_run_history_gives_a_failed_runs_reason(db):
     }
 
 
-def test_context_scans_gives_each_context_its_newest_result(db):
-    conn, repo = db
-    old = _run(repo, context="kind-lab")
-    _run(repo, context="prod-eu", status="failed")
-    newest = _run(repo, context="kind-lab", status="partial")
-    _run(repo, context="kind-lab", status="cancelled")  # newer, but no results
-    finished = {r["id"]: r["finished_at"] for r in conn.execute("SELECT id, finished_at FROM scan_run")}
-    scans = queries.context_scans(conn)
-    assert list(scans) == ["kind-lab", "prod-eu"]
-    assert scans["kind-lab"] == datetime.fromisoformat(finished[newest]) != datetime.fromisoformat(finished[old])
-    assert scans["prod-eu"] is None  # known from its history, never scanned to a result
-
-
 def _add_to_namespaces(
     repo, run_id, ref, namespaces, findings=(), *, status="ok", platform="linux/amd64", owner=None, team=None
 ):

@@ -35,12 +35,12 @@ Options:
 
 | Option | What it does |
 | --- | --- |
-| `--context NAME` | Default cluster for the tools; else the one with the newest finished run. |
+| `--context NAME` | Default cluster for the tools, given as a context name or a cluster name; else the one with the newest finished run. |
 | `--data-dir DIR` | The directory holding the kubedelos database (also `KUBEDELOS_DATA_DIR`). |
 
 ## Tools
 
-All tools are read-only. A tool's `cluster` argument defaults to the `--context` cluster and `run` to the newest run the
+All tools are read-only. A tool's `cluster` argument is a kube-context name or a cluster from `list_clusters`; it defaults to the `--context` cluster, and `run` to the newest run the
 dashboard shows. `run` is the run number you see in the UI (within that cluster), not a database id. An unknown cluster
 answers `unknown cluster <name>; known: ...`. `list_clusters` reports `default` as `null` when `--context` names a
 cluster with no scans.
@@ -80,7 +80,7 @@ Argument values and defaults:
   `accepted`: `hide` (default), `only` or `all`. `severity` is a list such as `["CRITICAL", "HIGH"]`.
 - `min_severity` (`attack_surface`): `CRITICAL` or `HIGH`. `offset` skips items, for the next page.
 - `state` (`accepted_risks`): `active` (default) or `all`.
-- `list_clusters` returns, per cluster, `name`, `last_scan`, `status`, `stale` and `newest_run`.
+- `list_clusters` returns, per cluster, `name` (the context of its newest run), `key`, `contexts` (every kube-context its runs went through), `last_scan`, `status`, `stale` and `newest_run`. Contexts that reach the same API server are one cluster with one history.
 - `workload` and `find_vulnerability` items carry `facts`, which is `null` when none were collected.
 - The risk score (0-100, kubedelos's own ranking, not a CVE severity):
   - Each `fix_first` item and each `find_vulnerability` workload carries `score` and `factors`: a list of
