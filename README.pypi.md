@@ -1,5 +1,7 @@
 # kubedelos
 
+<!-- mcp-name: io.github.k8s-servant/kubedelos -->
+
 Scan the container images running in a Kubernetes cluster with Trivy, from a local web UI.
 
 Status: pre-alpha. Interfaces and output may change.

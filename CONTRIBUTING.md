@@ -64,3 +64,9 @@ The chart is listed on [Artifact Hub](https://artifacthub.io/packages/helm/kubed
 the `artifacthub.io/*` annotations in `charts/kubedelos/Chart.yaml` and the chart's `README.md`. After the repository is
 added on Artifact Hub, `scripts/artifacthub-metadata.sh REPOSITORY_ID` pushes the repository metadata once, which marks
 it as a verified publisher.
+
+`kubedelos mcp` is listed in the [MCP Registry](https://registry.modelcontextprotocol.io) as
+`io.github.k8s-servant/kubedelos`. The registry reads `server.json` and checks the `mcp-name` comment in
+`README.pypi.md`; release-please bumps the versions in `server.json`. After a release is on PyPI, an owner of the
+k8s-servant org publishes it with `mcp-publisher login github --token <token with read:org>` and `mcp-publisher publish`
+(`mcp-publisher login github` alone cannot publish to an org namespace yet).
