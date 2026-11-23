@@ -55,6 +55,7 @@ def _accept(seed, vuln_id="CVE-1", *, context="my-cluster", days=30, **narrow):
         reason="behind the proxy",
         owner="sam",
         expires=TODAY + timedelta(days=days),
+        cluster=context,
         context=context,
         now=seed.clock.now,
         **narrow,

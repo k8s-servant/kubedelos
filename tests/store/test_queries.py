@@ -984,7 +984,15 @@ def _seed_accepting(repo):
 
 def _accept(conn, vuln_id, **narrow):
     accepted.add(
-        conn, vuln_id=vuln_id, reason="r", owner="me", expires=date(2026, 6, 1), context="ctx", now=ACCEPT_NOW, **narrow
+        conn,
+        vuln_id=vuln_id,
+        reason="r",
+        owner="me",
+        expires=date(2026, 6, 1),
+        cluster="ctx",
+        context="ctx",
+        now=ACCEPT_NOW,
+        **narrow,
     )
 
 

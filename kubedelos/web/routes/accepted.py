@@ -165,6 +165,7 @@ def _create(request: Request, body: bytes) -> Response:
                 reason=values["reason"],
                 owner=values["owner"],
                 expires=expires,
+                cluster=context if values["scope"] == "context" else None,  # until contexts resolve to cluster keys
                 context=context if values["scope"] == "context" else None,
                 namespace=values["namespace"],
                 repo=values["image"],
@@ -190,7 +191,7 @@ def _revoke(request: Request, entry_id: int, body: bytes) -> Response:
         context = _target(request, conn, fields)
     with open_db_rw(request) as conn:
         entry = accepted.get(conn, entry_id)
-        applies = entry is not None and entry["context"] in (None, context)
+        applies = entry is not None and entry["cluster"] in (None, context)
         if not applies or not accepted.revoke(conn, entry_id, request.app.state.clock()):
             message = "There is no such acceptance for this cluster, or it was revoked already."
             return render(request, "error.html", {"title": "Not found", "message": message}, 404)

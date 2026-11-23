@@ -39,9 +39,19 @@ def _add(
     repo.add_result(run_id, item, ImageResult(image=image, platform=platform, status="ok", findings=findings))
 
 
-def _accept(conn, vuln_id="CVE-1", *, context="ctx", expires=TODAY + timedelta(days=30), now=NOW, **narrow):
+def _accept(
+    conn, vuln_id="CVE-1", *, cluster="ctx", context="ctx", expires=TODAY + timedelta(days=30), now=NOW, **narrow
+):
     return accepted.add(
-        conn, vuln_id=vuln_id, reason="not reachable", owner="me", expires=expires, context=context, now=now, **narrow
+        conn,
+        vuln_id=vuln_id,
+        reason="not reachable",
+        owner="me",
+        expires=expires,
+        cluster=cluster,
+        context=context,
+        now=now,
+        **narrow,
     )
 
 
@@ -57,8 +67,28 @@ def test_an_entry_matches_its_cve_in_its_cluster_only(db):
     _accept(conn)
     assert _keys(conn, mine) == {("a", "CVE-1")}
     assert _keys(conn, theirs) == set()
-    _accept(conn, "CVE-2", context=None)  # all clusters
+    _accept(conn, "CVE-2", cluster=None, context=None)  # all clusters
     assert _keys(conn, theirs) == {("a", "CVE-2")}
+
+
+def test_an_acceptance_made_via_one_context_covers_the_other(db):
+    conn, repo = db
+    run_id = repo.start_run("cluster-k", "prod-admin", "ui", "0.76.1", scan_level="library,os", scope=CLUSTER)
+    repo.finish_run(run_id, "ok")
+    _add(repo, run_id, "a", ["web"], ["CVE-1"])
+    _accept(conn, cluster="cluster-k", context="prod")
+    assert _keys(conn, run_id) == {("a", "CVE-1")}
+    assert [e.context for e in accepted.register(conn, "cluster-k", run_id, TODAY)] == ["prod"]
+    assert accepted.register(conn, "cluster-k", run_id, TODAY)[0].cluster == "cluster-k"
+    assert accepted.register(conn, "other-k", run_id, TODAY) == []
+
+
+def test_register_lists_entries_of_the_cluster_and_all_clusters(db):
+    conn, _repo = db
+    mine = _accept(conn, cluster="k1", context="a")
+    _accept(conn, cluster="k2", context="b")
+    everywhere = _accept(conn, cluster=None, context=None)
+    assert {e.id for e in accepted.register(conn, "k1", None, TODAY)} == {mine, everywhere}
 
 
 def test_package_and_image_narrow_the_match(db):
@@ -115,12 +145,12 @@ def test_register_lists_this_cluster_and_all_clusters_with_state_and_cover(db):
     _add(repo, run_id, "a", ["web", "api"], ["CVE-1", "CVE-2"])
     _add(repo, run_id, "b", ["web"], ["CVE-1"])
     soon = _accept(conn, expires=TODAY + timedelta(days=3))
-    later = _accept(conn, "CVE-2", context=None, namespace="web")
+    later = _accept(conn, "CVE-2", cluster=None, context=None, namespace="web")
     nothing = _accept(conn, "CVE-404", expires=TODAY + timedelta(days=1))
     expired = _accept(conn, expires=TODAY - timedelta(days=1), now=NOW - timedelta(days=9))  # made back then
     revoked = _accept(conn)
     accepted.revoke(conn, revoked, NOW)
-    _accept(conn, context="other")  # another cluster's: not listed
+    _accept(conn, cluster="other", context="other")  # another cluster's: not listed
     entries = accepted.register(conn, "ctx", run_id, TODAY)
     assert [e.id for e in entries] == [nothing, soon, later, expired, revoked]
     by_id = {e.id: e for e in entries}
@@ -139,11 +169,20 @@ def test_add_rejects_what_the_form_must_not_store(db):
     with pytest.raises(ValueError, match="CVE"):
         _accept(conn, " ")
     with pytest.raises(ValueError, match="reason"):
-        accepted.add(conn, vuln_id="CVE-1", reason="", owner="me", expires=TODAY, context=None, now=NOW)
+        accepted.add(conn, vuln_id="CVE-1", reason="", owner="me", expires=TODAY, cluster=None, context=None, now=NOW)
     with pytest.raises(ValueError, match="owner"):
-        accepted.add(conn, vuln_id="CVE-1", reason="r", owner=" ", expires=TODAY, context=None, now=NOW)
+        accepted.add(conn, vuln_id="CVE-1", reason="r", owner=" ", expires=TODAY, cluster=None, context=None, now=NOW)
     with pytest.raises(ValueError, match="past"):
-        accepted.add(conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 2, 28), context=None, now=NOW)
+        accepted.add(
+            conn,
+            vuln_id="CVE-1",
+            reason="r",
+            owner="me",
+            expires=date(2026, 2, 28),
+            cluster=None,
+            context=None,
+            now=NOW,
+        )
     blank = _accept(conn, namespace="", repo=" ", pkg_name="")
     assert accepted.register(conn, "ctx", None, TODAY)[0].id == blank
     entry = accepted.register(conn, "ctx", None, TODAY)[0]

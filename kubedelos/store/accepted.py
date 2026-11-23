@@ -23,7 +23,7 @@ ACCEPTED_CTES = """
 acc_active AS MATERIALIZED (
   SELECT a.vuln_id, a.namespace, a.repo, a.pkg_name FROM acceptance a
   WHERE a.revoked_at IS NULL AND a.expires_at >= :today
-    AND (a.context IS NULL OR a.context = (SELECT context FROM scan_run WHERE id = :run))),
+    AND (a.cluster IS NULL OR a.cluster = (SELECT cluster FROM scan_run WHERE id = :run))),
 acc_cand AS MATERIALIZED (
   SELECT DISTINCT r.ref, f.vuln_id, f.pkg_name, f.installed_version, e.namespace AS e_ns
   FROM image_result r CROSS JOIN acc_active e CROSS JOIN finding f
@@ -58,10 +58,12 @@ State = Literal["active", "expired", "revoked"]
 
 @dataclass(frozen=True)
 class Entry:
-    """One register row. ``context`` None means all clusters; a None namespace, repo or package means anywhere."""
+    """One register row. ``cluster`` None means all clusters (``context`` is only the one it was made from, for
+    display); a None namespace, repo or package means anywhere."""
 
     id: int
     vuln_id: str
+    cluster: str | None
     context: str | None
     namespace: str | None
     repo: str | None
@@ -88,6 +90,7 @@ def add(
     reason: str,
     owner: str,
     expires: date,
+    cluster: str | None,
     context: str | None,
     now: datetime,
     namespace: str | None = None,
@@ -105,10 +108,11 @@ def add(
         raise ValueError("the expiry date is in the past")
     with conn:
         cursor = conn.execute(
-            "INSERT INTO acceptance (vuln_id, context, namespace, repo, pkg_name, reason, owner, expires_at, created_at)"
-            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO acceptance (vuln_id, cluster, context, namespace, repo, pkg_name, reason, owner, expires_at, created_at)"
+            " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 vuln_id,
+                cluster,
                 context,
                 _blank_none(namespace),
                 _blank_none(repo),
@@ -151,17 +155,17 @@ def _state(row: sqlite3.Row, today: date) -> State:
 
 
 def register(
-    conn: sqlite3.Connection, context: str, run_id: int | None, today: date, vuln_id: str | None = None
+    conn: sqlite3.Connection, cluster: str, run_id: int | None, today: date, vuln_id: str | None = None
 ) -> list[Entry]:
-    """The entries that apply to ``context`` (its own and all-cluster ones), optionally of one CVE.
+    """The entries that apply to ``cluster`` (its own and all-cluster ones), optionally of one CVE.
 
     Active first, soonest to expire first; then expired, most recent first; then revoked, most recent first. ``covers``
     counts in ``run_id``.
     """
     rows = conn.execute(
-        "SELECT * FROM acceptance WHERE (context IS NULL OR context = :context)"
+        "SELECT * FROM acceptance WHERE (cluster IS NULL OR cluster = :cluster)"
         " AND (:vuln IS NULL OR vuln_id = :vuln) ORDER BY id",
-        {"context": context, "vuln": vuln_id},
+        {"cluster": cluster, "vuln": vuln_id},
     ).fetchall()
     covers: dict[int, int] = {}
     if run_id is not None and rows:
@@ -176,6 +180,7 @@ def register(
         Entry(
             id=row["id"],
             vuln_id=row["vuln_id"],
+            cluster=row["cluster"],
             context=row["context"],
             namespace=row["namespace"],
             repo=row["repo"],

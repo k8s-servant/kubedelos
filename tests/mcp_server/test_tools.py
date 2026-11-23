@@ -289,9 +289,9 @@ def test_find_vulnerability_includes_facts_and_acceptance(world):
     conn, repo, db = world
     _cve_world(repo)
     soon = date(2026, 2, 10)
-    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, context="my-cluster",
+    live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=soon, cluster="my-cluster", context="my-cluster",
                         now=NOW, namespace="web")  # fmt: skip
-    gone = accepted.add(conn, vuln_id="CVE-1", reason="old", owner="me", expires=date(2026, 2, 1), context="my-cluster",
+    gone = accepted.add(conn, vuln_id="CVE-1", reason="old", owner="me", expires=date(2026, 2, 1), cluster="my-cluster", context="my-cluster",
                         now=NOW)  # fmt: skip
     accepted.revoke(conn, gone, NOW)
     result = tools.find_vulnerability(conn, db, NOW, " CVE-1 ")
@@ -451,7 +451,16 @@ def test_list_findings_filters_and_paging(world):
 def test_list_findings_accepted_modes(world):
     conn, repo, db = world
     _findings_world(repo)
-    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="o", expires=date(2026, 3, 1), context="my-cluster", now=NOW)
+    accepted.add(
+        conn,
+        vuln_id="CVE-1",
+        reason="r",
+        owner="o",
+        expires=date(2026, 3, 1),
+        cluster="my-cluster",
+        context="my-cluster",
+        now=NOW,
+    )
     hidden = tools.list_findings(conn, db, NOW)
     assert [i["vuln_id"] for i in hidden["items"]] == ["CVE-2", "CVE-3"] and hidden["accepted_left_out"] == 1
     only = tools.list_findings(conn, db, NOW, accepted="only")
@@ -681,10 +690,10 @@ def test_accepted_risks_active_and_all(world):
     run_id = new_run(repo, "my-cluster")
     add_image(repo, run_id, "img-a", [finding("CVE-1", "HIGH")])
     live = accepted.add(conn, vuln_id="CVE-1", reason="risk", owner="me", expires=date(2026, 3, 1),
-                        context="my-cluster", now=NOW)  # fmt: skip
-    old = accepted.add(conn, vuln_id="CVE-2", reason="old", owner="me", expires=date(2026, 2, 1), context=None,
+                        cluster="my-cluster", context="my-cluster", now=NOW)  # fmt: skip
+    old = accepted.add(conn, vuln_id="CVE-2", reason="old", owner="me", expires=date(2026, 2, 1), cluster=None, context=None,
                        now=NOW)  # fmt: skip
-    gone = accepted.add(conn, vuln_id="CVE-3", reason="x", owner="me", expires=date(2026, 3, 1), context="my-cluster",
+    gone = accepted.add(conn, vuln_id="CVE-3", reason="x", owner="me", expires=date(2026, 3, 1), cluster="my-cluster", context="my-cluster",
                         now=NOW)  # fmt: skip
     accepted.revoke(conn, gone, NOW)
     later = NOW.replace(day=5)
@@ -702,7 +711,9 @@ def test_accepted_risks_active_and_all(world):
 def test_accepted_risks_without_a_run(world):
     conn, repo, db = world
     new_run(repo, "my-cluster", "running")
-    accepted.add(conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), context=None, now=NOW)
+    accepted.add(
+        conn, vuln_id="CVE-1", reason="r", owner="me", expires=date(2026, 3, 1), cluster=None, context=None, now=NOW
+    )
     result = tools.accepted_risks(conn, db, NOW)
     assert [e["covers"] for e in result["entries"]] == [None]
 
