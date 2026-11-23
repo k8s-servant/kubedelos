@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.2.0](https://github.com/k8s-servant/kubedelos/compare/v0.1.1...v0.2.0) (2026-11-23)
+
+
+### Features
+
+* describe kubedelos mcp for the mcp registry ([#91](https://github.com/k8s-servant/kubedelos/issues/91)) ([7365359](https://github.com/k8s-servant/kubedelos/commit/73653591d06585e5133279cc40bb61bf6e2abc9a))
+
+
+### Documentation
+
+* add the artifact hub badge and link the chart's package page ([#90](https://github.com/k8s-servant/kubedelos/issues/90)) ([9d17408](https://github.com/k8s-servant/kubedelos/commit/9d17408e887b24090a296096d7c2ecfd2d1a1d8a))
+* prepare the chart for artifact hub and add pypi and release badges ([#88](https://github.com/k8s-servant/kubedelos/issues/88)) ([859b54e](https://github.com/k8s-servant/kubedelos/commit/859b54e75f1ea39dbe6509e2552943352c5f8e31))
+
 ## [0.1.1](https://github.com/k8s-servant/kubedelos/compare/v0.1.0...v0.1.1) (2026-11-22)
 
 
