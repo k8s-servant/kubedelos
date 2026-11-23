@@ -743,3 +743,14 @@ def test_notes_warn_when_feeds_meet_restricted_egress(notes):
     assert {"www.cisa.gov", "epss.empiricalsecurity.com"} <= hosts
     assert FEEDS_EGRESS not in notes({"threatFeeds": {"enabled": True}})
     assert FEEDS_EGRESS not in notes(EGRESS)
+
+
+def test_artifacthub_annotations_are_yaml_lists_of_links():
+    # Artifact Hub reads these annotations as YAML inside a string; release-please rewrites Chart.yaml on every release,
+    # so this checks they still parse and point at this repository.
+    annotations = yaml.safe_load((CHART / "Chart.yaml").read_text())["annotations"]
+    assert annotations["artifacthub.io/category"] == "security"
+    for key in ("artifacthub.io/links", "artifacthub.io/screenshots"):
+        entries = yaml.safe_load(annotations[key])
+        assert entries and all(e["url"].startswith("https://") for e in entries), key
+        assert all("k8s-servant/kubedelos" in e["url"] for e in entries), key

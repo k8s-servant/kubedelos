@@ -59,3 +59,8 @@ reaches a model holding a write token.
 
 Maintainers merge the release PR that release-please keeps open. That tags the release
 and publishes the package.
+
+The chart is listed on [Artifact Hub](https://artifacthub.io), which reads each new chart version from GHCR, along with
+the `artifacthub.io/*` annotations in `charts/kubedelos/Chart.yaml` and the chart's `README.md`. After the repository is
+added on Artifact Hub, `scripts/artifacthub-metadata.sh REPOSITORY_ID` pushes the repository metadata once, which marks
+it as a verified publisher.
