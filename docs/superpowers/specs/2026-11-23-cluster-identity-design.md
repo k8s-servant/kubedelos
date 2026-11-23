@@ -44,9 +44,18 @@ The maintainer wants one cluster with one shared history, whichever context scan
 
 **The key.** For a laptop scan the cluster key is the `server` of the kubeconfig cluster entry that the context
 names, normalised: scheme and host lower-cased, a default port (`:443` for https) dropped, a trailing `/` dropped.
-It is read from the same parsed kubeconfig as `list_contexts`, with no credentials loaded. When a context's cluster
-has no `server` (a broken entry), the key falls back to the context name. For `kubedelos serve` the key is
-`clusterName`, as today; the in-cluster fallback keeps its existing name.
+After it come `#sni=<tls-server-name>` when the entry sets `tls-server-name`, and `#ca=<fingerprint>` when its CA can
+be read: the first 12 hex digits of the SHA-256 of the DER of the first certificate in `certificate-authority-data`,
+else in the `certificate-authority` file (a relative path resolved against the kubeconfig that defines the entry, as
+kubectl does). For example `https://127.0.0.1:6443#sni=api.example.com#ca=1a2b3c4d5e6f`. The fingerprint is taken
+over the DER, so the same CA inline or as a file, with other line breaks, gives the same key; a CA that cannot be read
+or parsed leaves the part out. The server alone would merge distinct clusters behind one URL (SSH tunnels to
+`https://127.0.0.1:6443`, k3s and Rancher Desktop defaults, access proxies that pick the cluster by TLS server name)
+on the first `kubedelos ui` start; the SNI and CA parts were the maintainer's decision after the final branch review.
+The CA is public cluster data, not a credential. It is read from the same parsed kubeconfig as `list_contexts`, with no
+credentials loaded, no login plugin run and no call to the cluster. When a context's cluster entry is missing or has
+no `server` (a broken entry), the key falls back to the context name. For `kubedelos serve` the key is `clusterName`,
+as today; the in-cluster fallback keeps its existing name.
 
 **Storage.** A migration adds `scan_run.cluster` (the key) and keeps `scan_run.context` as the context the run went
 through. Run numbers, the unique indexes on numbers, retention's grouping, `previous_comparable`, `newest_run` and the
@@ -69,7 +78,8 @@ column, so the MCP server still needs no kubeconfig.
 
 ## Left to the builder
 
-- The exact normalisation function and its edge cases (IPv6 hosts, explicit `:443`), covered by tests.
+- The exact normalisation function and its edge cases (IPv6 hosts, explicit `:443`), covered by tests, and the CA
+  fingerprint's edge cases (no CA, an unreadable file, a bundle).
 - Whether the renumbering on merge happens in SQL or Python, as long as numbers stay unique and ordered by id.
 - The wording of the "via" note and where the Scans page shows it.
 - Tests first, one test file per module, as AGENTS.md asks; a test that two contexts with one server share runs, and one

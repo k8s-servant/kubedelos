@@ -6,7 +6,8 @@
 retention, accepted risks), and each run still records the context it was scanned through (issue #92).
 
 **Architecture:** A new `scan_run.cluster` column holds the cluster key: the normalised `server` of the context's
-kubeconfig cluster entry (laptop) or `clusterName` (serve). Every per-cluster query keys on it; `scan_run.context` stays
+kubeconfig cluster entry, with its TLS server name and CA fingerprint (laptop; amended after the final review, see
+Task 1), or `clusterName` (serve). Every per-cluster query keys on it; `scan_run.context` stays
 as provenance. The web layer resolves the shown context to its key once per request. `kubedelos ui` merges the
 history of each kubeconfig context into its key on start.
 
@@ -87,6 +88,12 @@ http, drop a trailing `/` from the path, keep any other path. `cluster_keys` rea
 (share a private `_kubeconfig_docs(settings)` generator so both parse files the same way), collects `clusters` and
 `contexts` with first-definition-wins, and maps each context to `normalise_server(server)` or to its own name.
 `list_contexts` keeps its behaviour.
+
+> **Amended after the final review (maintainer's decision):** the server alone merges distinct clusters behind one URL
+> (SSH tunnels, k3s defaults, access proxies), so the key is `normalise_server(server)`, then `#sni=<tls-server-name>`
+> when the entry sets one, then `#ca=<first 12 hex of the SHA-256 of the first CA certificate's DER>` when the CA
+> (`certificate-authority-data`, else the `certificate-authority` file, resolved against its kubeconfig's directory)
+> can be read. See the spec's "The key".
 
 - [ ] **Step 4: Run the tests** — `.venv/bin/pytest tests/kube/test_client.py -v` — all pass.
 

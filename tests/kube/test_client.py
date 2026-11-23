@@ -1,7 +1,11 @@
+import base64
+import hashlib
 import os
+import ssl
 from types import SimpleNamespace
 
 import pytest
+import yaml
 from kubernetes import config
 
 from kubedelos.config import Settings
@@ -289,3 +293,127 @@ def test_cluster_keys_skip_an_unreadable_file(monkeypatch, tmp_path):
     monkeypatch.setattr(kube_client.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", f"{bad}{os.pathsep}{good}")
     assert kube_client.cluster_keys(Settings()) == {"a": "https://c.example.com"}
     assert kube_client.cluster_keys(Settings(kubeconfig=tmp_path / "missing")) == {}
+
+
+# Two throwaway self-signed test CAs (subjects ca-a.example.com and ca-b.example.com), made for these tests only.
+CA_A = """-----BEGIN CERTIFICATE-----
+MIIBbDCCARKgAwIBAgIURbn8oX3tYUbIKAijboq2rtiVj54wCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQY2EtYS5leGFtcGxlLmNvbTAgFw0yNjExMjMyMTA0MTRaGA8y
+MTI2MTAzMDIxMDQxNFowGzEZMBcGA1UEAwwQY2EtYS5leGFtcGxlLmNvbTBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABNBMtOEDtdH4Q2El4T6Lsc/yvbUy/++BRvTV
+J9Y8jWPQAlc11lzs5ilKiXQnc6Y5IBAeFPA+cvi0NcHqswSyMZKjMjAwMB0GA1Ud
+DgQWBBRTBH7H/8zGDJAvPjX5y92xJaoXzjAPBgNVHRMBAf8EBTADAQH/MAoGCCqG
+SM49BAMCA0gAMEUCIAJbSOECk+2dFZsaPDtZ6IOe1bJQf8sNMKNcDrNFsmTNAiEA
+zFY2Z/KpsY3Zz7MVj+cboGggJAluK1z615zYL/SlKFM=
+-----END CERTIFICATE-----
+"""
+CA_B = """-----BEGIN CERTIFICATE-----
+MIIBbDCCARKgAwIBAgIUatGP1a3Me5tK6/NELoJKQL36ZF4wCgYIKoZIzj0EAwIw
+GzEZMBcGA1UEAwwQY2EtYi5leGFtcGxlLmNvbTAgFw0yNjExMjMyMTA0MTRaGA8y
+MTI2MTAzMDIxMDQxNFowGzEZMBcGA1UEAwwQY2EtYi5leGFtcGxlLmNvbTBZMBMG
+ByqGSM49AgEGCCqGSM49AwEHA0IABB9cZWwuVFeZI5KfY1RggMhco25Tq3uFyLiT
+lvezjLFYw7L9YBWokPTkzLkyj9J1MKoICyZlIIfMamXxcfWGCnajMjAwMB0GA1Ud
+DgQWBBQVDngi5XYrz0DF8er55sfvD4BiiDAPBgNVHRMBAf8EBTADAQH/MAoGCCqG
+SM49BAMCA0gAMEUCIBN2ht/z3re2aTmv2dwEoFhw6a48LDzfu4qKAXvkN5UlAiEA
+5GIORBxo75FheK3qwL9qYnBor+FTspg9qpw5BBP75T4=
+-----END CERTIFICATE-----
+"""
+
+
+def _b64(pem):
+    return base64.b64encode(pem.encode()).decode()
+
+
+def _fingerprint(pem):
+    return hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()[:12]
+
+
+def _write_yaml(path, clusters, contexts):
+    """clusters maps name -> the cluster entry's fields; contexts maps name -> cluster name."""
+    doc = {
+        "clusters": [{"name": name, "cluster": fields} for name, fields in clusters.items()],
+        "contexts": [
+            {"name": name, "context": {"cluster": cluster, "user": "u"}} for name, cluster in contexts.items()
+        ],
+    }
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+SERVER = "https://127.0.0.1:6443"
+
+
+def test_cluster_keys_join_a_user_and_an_admin_context_of_one_server_and_ca(tmp_path):
+    entry = {"server": SERVER, "certificate-authority-data": _b64(CA_A)}
+    kubeconfig = _write_yaml(
+        tmp_path / "config", {"aks": entry, "aks-admin": dict(entry)}, {"aks": "aks", "aks-admin": "aks-admin"}
+    )
+    key = f"{SERVER}#ca={_fingerprint(CA_A)}"
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {"aks": key, "aks-admin": key}
+
+
+def test_cluster_keys_tell_two_cas_behind_one_server_apart(tmp_path):
+    clusters = {
+        "tunnel-a": {"server": SERVER, "certificate-authority-data": _b64(CA_A)},
+        "tunnel-b": {"server": SERVER, "certificate-authority-data": _b64(CA_B)},
+    }
+    kubeconfig = _write_yaml(tmp_path / "config", clusters, {"a": "tunnel-a", "b": "tunnel-b"})
+    keys = kube_client.cluster_keys(Settings(kubeconfig=kubeconfig))
+    assert keys == {"a": f"{SERVER}#ca={_fingerprint(CA_A)}", "b": f"{SERVER}#ca={_fingerprint(CA_B)}"}
+    assert keys["a"] != keys["b"]
+
+
+def test_cluster_keys_give_one_ca_as_data_or_as_a_relative_file_the_same_key(monkeypatch, tmp_path):
+    (tmp_path / "certs").mkdir()
+    # The same certificate with other line breaks and a comment line before it, as a file: the same DER, the same key.
+    (tmp_path / "certs" / "ca.crt").write_bytes(b"# my-cluster CA\r\n" + CA_A.replace("\n", "\r\n").encode())
+    one = _write_yaml(tmp_path / "one", {"c": {"server": SERVER, "certificate-authority-data": _b64(CA_A)}}, {"x": "c"})
+    two = _write_yaml(tmp_path / "two", {"d": {"server": SERVER, "certificate-authority": "certs/ca.crt"}}, {"y": "d"})
+    monkeypatch.chdir(tmp_path / "certs")  # the path resolves against the kubeconfig's directory, not the cwd
+    monkeypatch.setattr(kube_client.kube_config, "KUBE_CONFIG_DEFAULT_LOCATION", f"{one}{os.pathsep}{two}")
+    keys = kube_client.cluster_keys(Settings())
+    assert keys["x"] == keys["y"] == f"{SERVER}#ca={_fingerprint(CA_A)}"
+
+
+def test_cluster_keys_add_the_tls_server_name(tmp_path):
+    clusters = {
+        "one": {"server": SERVER, "tls-server-name": "one.example.com", "certificate-authority-data": _b64(CA_A)},
+        "two": {"server": SERVER, "tls-server-name": "two.example.com", "certificate-authority-data": _b64(CA_A)},
+    }
+    kubeconfig = _write_yaml(tmp_path / "config", clusters, {"one": "one", "two": "two"})
+    fp = _fingerprint(CA_A)
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {
+        "one": f"{SERVER}#sni=one.example.com#ca={fp}",
+        "two": f"{SERVER}#sni=two.example.com#ca={fp}",
+    }
+
+
+def test_cluster_keys_without_a_ca_are_the_server_alone(tmp_path):
+    kubeconfig = _write_yaml(tmp_path / "config", {"c": {"server": "https://API.example.com:443/"}}, {"x": "c"})
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {"x": "https://api.example.com"}
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"certificate-authority": "missing.crt"},
+        {"certificate-authority": "."},  # a directory
+        {"certificate-authority-data": "not base64!"},
+        {"certificate-authority-data": _b64("no certificate here")},
+        {"certificate-authority-data": _b64("-----BEGIN CERTIFICATE-----\n!!!\n-----END CERTIFICATE-----\n")},
+        {"certificate-authority-data": 42},
+    ],
+)
+def test_cluster_keys_skip_a_ca_that_cannot_be_read(tmp_path, fields):
+    kubeconfig = _write_yaml(tmp_path / "config", {"c": {"server": SERVER, **fields}}, {"x": "c"})
+    assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {"x": SERVER}
+
+
+def test_cluster_keys_fingerprint_the_first_certificate_of_a_bundle(tmp_path):
+    clusters = {
+        "bundle": {"server": SERVER, "certificate-authority-data": _b64(CA_A + CA_B)},
+        "single": {"server": SERVER, "certificate-authority-data": _b64(CA_A)},
+    }
+    kubeconfig = _write_yaml(tmp_path / "config", clusters, {"x": "bundle", "y": "single"})
+    keys = kube_client.cluster_keys(Settings(kubeconfig=kubeconfig))
+    assert keys["x"] == keys["y"]

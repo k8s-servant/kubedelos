@@ -3,8 +3,14 @@
 The attack-surface lists (services, ingresses, network policies, RBAC) are reads too, and no Secret is listed.
 """
 
+import base64
+import binascii
+import hashlib
 import os
+import re
+import ssl
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import urlsplit
 
@@ -166,18 +172,19 @@ def load(settings: Settings) -> KubeApi:
     return _RealKubeApi(settings.context or active["name"])
 
 
-def _kubeconfig_docs(settings: Settings) -> Iterator[dict]:
-    """The parsed YAML of every kubeconfig path (as kubectl reads ``KUBECONFIG``), in order. Data only: nothing is
+def _kubeconfig_docs(settings: Settings) -> Iterator[tuple[Path, dict]]:
+    """Each kubeconfig path (as kubectl reads ``KUBECONFIG``), in order, with its parsed YAML. Data only: nothing is
     loaded, so no login plugin runs. A file that is missing, half-written or not a mapping is skipped."""
     paths = str(settings.kubeconfig) if settings.kubeconfig else kube_config.KUBE_CONFIG_DEFAULT_LOCATION
     for path in filter(None, paths.split(kube_config.ENV_KUBECONFIG_PATH_SEPARATOR)):
+        file = Path(os.path.expanduser(path))
         try:
-            with open(os.path.expanduser(path)) as f:
+            with open(file) as f:
                 data = yaml.safe_load(f)
         except (OSError, ValueError, yaml.YAMLError):
             continue
         if isinstance(data, dict):
-            yield data
+            yield file, data
 
 
 def _named_entries(doc: dict, key: str) -> Iterator[tuple[str, dict]]:
@@ -192,7 +199,7 @@ def _named_entries(doc: dict, key: str) -> Iterator[tuple[str, dict]]:
 def list_contexts(settings: Settings) -> list[str]:
     """The context names in the kubeconfig (every ``KUBECONFIG`` path), sorted, or none when it can't be read.
     Parsing only: no context is loaded, so no login plugin runs, and no current context is needed."""
-    names = {name for doc in _kubeconfig_docs(settings) for name, _ in _named_entries(doc, "contexts")}
+    names = {name for _, doc in _kubeconfig_docs(settings) for name, _ in _named_entries(doc, "contexts")}
     return sorted(names, key=str.casefold)
 
 
@@ -213,21 +220,80 @@ def normalise_server(url: str) -> str:
     return f"{scheme}://{host}{parts.path.rstrip('/')}"
 
 
+_PEM_CERT = re.compile(r"-----BEGIN CERTIFICATE-----.+?-----END CERTIFICATE-----", re.DOTALL)
+CA_FILE_LIMIT = 1 << 20  # a CA bundle is a few kilobytes; a larger file is not one
+
+
+def ca_fingerprint(pem: str) -> str | None:
+    """The first 12 hex digits of the SHA-256 of the first certificate in ``pem``, taken over its DER, so the same CA
+    with other line breaks (or as a file rather than inline data) gives the same fingerprint. None when ``pem`` holds
+    no certificate that decodes."""
+    match = _PEM_CERT.search(pem)
+    if match is None:
+        return None
+    try:
+        der = ssl.PEM_cert_to_DER_cert(match.group())
+    except ValueError:
+        return None
+    return hashlib.sha256(der).hexdigest()[:12] if der else None
+
+
+def _cluster_ca(fields: dict, kubeconfig: Path) -> str | None:
+    """The PEM of a cluster entry's CA: ``certificate-authority-data`` (base64), else the ``certificate-authority``
+    file, a relative path resolved against the directory of the kubeconfig that defines the entry, as in kubectl.
+    The CA is public cluster data, not a credential; None when there is none or it cannot be read."""
+    data = fields.get("certificate-authority-data")
+    if isinstance(data, str) and data.strip():
+        try:
+            return base64.b64decode(data, validate=False).decode("ascii", errors="ignore")
+        except (binascii.Error, ValueError):
+            return None
+    path = fields.get("certificate-authority")
+    if isinstance(path, str) and path.strip():
+        try:
+            with open(kubeconfig.parent / path, "rb") as f:
+                return f.read(CA_FILE_LIMIT).decode("ascii", errors="ignore")
+        except OSError:
+            return None
+    return None
+
+
+def _cluster_key(fields: dict, kubeconfig: Path) -> str | None:
+    """A cluster entry's key (see :func:`cluster_keys`), or None when the entry has no server."""
+    server = fields.get("server")
+    if not isinstance(server, str) or not server.strip():
+        return None
+    key = normalise_server(server)
+    sni = fields.get("tls-server-name")
+    if isinstance(sni, str) and sni.strip():
+        key += f"#sni={sni.strip().lower()}"
+    ca = _cluster_ca(fields, kubeconfig)
+    fingerprint = ca_fingerprint(ca) if ca else None
+    if fingerprint:
+        key += f"#ca={fingerprint}"
+    return key
+
+
 def cluster_keys(settings: Settings) -> dict[str, str]:
-    """Each kubeconfig context name mapped to its cluster key: the normalised API server of the cluster it names, so
-    two logins to one server (a user and an ``--admin`` context) share a key. A context whose cluster entry is
-    missing or has no server is keyed by its own name. As in kubectl, the first definition of a name wins."""
-    servers: dict[str, str] = {}
+    """Each kubeconfig context name mapped to its cluster key, so two logins to one cluster (a user and an ``--admin``
+    context) share a key while two clusters behind one URL (SSH tunnels to ``https://127.0.0.1:6443``, an access
+    proxy that picks the cluster by TLS server name) do not.
+
+    The key is the cluster entry's normalised API server (:func:`normalise_server`), then ``#sni=<tls-server-name>``
+    when the entry sets one, then ``#ca=<fingerprint>`` (:func:`ca_fingerprint`) when its CA can be read, as in
+    ``https://127.0.0.1:6443#sni=api.example.com#ca=1a2b3c4d5e6f``. A normalised server holds no ``#``, so the parts
+    split back apart on it. Only the cluster entry is read: no user credential, no login plugin, no call to the
+    cluster. A context whose cluster entry is missing or has no server is keyed by its own name. As in kubectl, the
+    first definition of a name wins."""
+    keys: dict[str, str | None] = {}
     cluster_of: dict[str, str | None] = {}
-    for doc in _kubeconfig_docs(settings):
+    for path, doc in _kubeconfig_docs(settings):
         for name, entry in _named_entries(doc, "clusters"):
-            server = (entry.get("cluster") or {}).get("server") if isinstance(entry.get("cluster"), dict) else None
-            if isinstance(server, str) and server.strip():
-                servers.setdefault(name, server)
+            if name not in keys:
+                fields = entry.get("cluster")
+                keys[name] = _cluster_key(fields, path) if isinstance(fields, dict) else None
         for name, entry in _named_entries(doc, "contexts"):
             ctx = entry.get("context")
             cluster = ctx.get("cluster") if isinstance(ctx, dict) else None
             cluster_of.setdefault(name, cluster if isinstance(cluster, str) else None)
-    return {
-        name: normalise_server(servers[cluster]) if cluster in servers else name for name, cluster in cluster_of.items()
-    }
+    return {name: keys.get(cluster) or name for name, cluster in cluster_of.items()}

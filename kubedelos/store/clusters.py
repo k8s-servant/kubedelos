@@ -1,7 +1,8 @@
 """Fold the history a kube-context made before its cluster was known into that cluster.
 
-Runs and accepted risks recorded earlier are keyed by the context name. Once the API server behind a context is known
-(``kube.client.cluster_keys``), they belong to that cluster, so contexts that point at one server share one history.
+Runs and accepted risks recorded earlier are keyed by the context name. Once the cluster behind a context is known
+(``kube.client.cluster_keys``: its API server, TLS server name and CA), they belong to that cluster, so contexts that
+point at one cluster share one history.
 ``merge_contexts`` moves them over and renumbers each touched cluster 1..n by id, in one transaction.
 """
 
