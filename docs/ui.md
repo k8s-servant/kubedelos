@@ -34,7 +34,9 @@ adds) are one cluster and share one history: the same runs, run numbers, accepte
 known by its key: the kubeconfig cluster entry's API server URL (lower-cased, without a default port or trailing `/`),
 its `tls-server-name` if set, and a fingerprint of its CA certificate, as in
 `https://127.0.0.1:6443#sni=api.example.com#ca=1a2b3c4d5e6f`. So two clusters behind one URL, such as SSH tunnels to
-`127.0.0.1:6443`, stay apart while their CAs differ. Only the cluster entry is read: no credentials, no login plugin.
+`127.0.0.1:6443`, stay apart while their CAs differ. Rotating a cluster's CA (for example `az aks rotate-certs`)
+changes its key, so its scans start a new history; the earlier runs stay viewable under the old key. Only the cluster
+entry is read: no credentials, no login plugin.
 A run made through another context than the one shown says so, as "via prod-admin" in the run line and in the Scans
 history. Runs recorded before this are merged into their cluster the next time `kubedelos ui` starts, which prints one
 line per merged context; the merged runs are renumbered in the order they ran.

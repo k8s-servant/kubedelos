@@ -251,7 +251,10 @@ def _cluster_ca(fields: dict, kubeconfig: Path) -> str | None:
     path = fields.get("certificate-authority")
     if isinstance(path, str) and path.strip():
         try:
-            with open(kubeconfig.parent / path, "rb") as f:
+            ca = kubeconfig.parent / path
+            if not ca.is_file():  # a FIFO or device would block or never end
+                return None
+            with open(ca, "rb") as f:
                 return f.read(CA_FILE_LIMIT).decode("ascii", errors="ignore")
         except (OSError, ValueError):  # ValueError: a path with a NUL byte
             return None

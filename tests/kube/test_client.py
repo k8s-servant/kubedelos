@@ -2,6 +2,7 @@ import base64
 import hashlib
 import os
 import ssl
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -408,6 +409,21 @@ def test_cluster_keys_without_a_ca_are_the_server_alone(tmp_path):
 def test_cluster_keys_skip_a_ca_that_cannot_be_read(tmp_path, fields):
     kubeconfig = _write_yaml(tmp_path / "config", {"c": {"server": SERVER, **fields}}, {"x": "c"})
     assert kube_client.cluster_keys(Settings(kubeconfig=kubeconfig)) == {"x": SERVER}
+
+
+def test_cluster_keys_do_not_open_a_ca_path_that_is_not_a_regular_file(tmp_path):
+    # Opening a FIFO blocks until a writer appears, which would hang `kubedelos ui` on start.
+    os.mkfifo(tmp_path / "ca.crt")
+    kubeconfig = _write_yaml(
+        tmp_path / "config", {"c": {"server": SERVER, "certificate-authority": "ca.crt"}}, {"x": "c"}
+    )
+    keys: dict = {}
+    worker = threading.Thread(target=lambda: keys.update(kube_client.cluster_keys(Settings(kubeconfig=kubeconfig))))
+    worker.daemon = True
+    worker.start()
+    worker.join(timeout=5)
+    assert not worker.is_alive(), "cluster_keys blocked on a FIFO"
+    assert keys == {"x": SERVER}
 
 
 def test_cluster_keys_fingerprint_the_first_certificate_of_a_bundle(tmp_path):
