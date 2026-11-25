@@ -369,6 +369,46 @@ def test_exclude_image_digest_only_ref():
     assert collect(api, Settings(exclude_images=["registry.example/team/*"]))[0] == []
 
 
+APP_ID = f"docker-pullable://registry.example/team/app@{DIGEST}"
+
+
+@pytest.mark.parametrize("stable_first", [True, False])
+def test_exclude_image_matches_each_containers_own_tag_of_a_shared_digest(stable_first):
+    pods = [
+        pod("stable", "a", image="registry.example/team/app:stable", image_id=APP_ID),
+        pod("pinned", "a", image="registry.example/team/app:1", image_id=APP_ID),
+    ]
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": pods if stable_first else pods[::-1]})
+    items, warnings = collect(api, Settings(exclude_images=["registry.example/team/app:stable"]))
+    # The digest still runs under an unexcluded tag, so it is scanned, for that workload only, in either pod order.
+    assert [(i.image.digest, i.image.tag) for i in items] == [(DIGEST, "1")]
+    assert [w.name for w in items[0].workloads] == ["pinned"]
+    assert not any("excluded" in w.text for w in warnings)
+
+
+@pytest.mark.parametrize("stable_first", [True, False])
+def test_exclude_image_drops_a_shared_digest_when_every_tag_matches(stable_first):
+    pods = [
+        pod("stable", "a", image="registry.example/team/app:stable", image_id=APP_ID),
+        pod("pinned", "a", image="registry.example/team/app:1", image_id=APP_ID),
+    ]
+    api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": pods if stable_first else pods[::-1]})
+    items, warnings = collect(api, Settings(exclude_images=["registry.example/team/app:*"]))
+    assert items == []
+    assert InventoryWarning("excluded 1 image(s) matching the image exclusions", coverage=False) in warnings
+
+
+def test_excluded_template_image_is_not_kept():
+    api = FakeKubeApi(
+        namespaces=[namespace("a")],
+        deployments={"a": [deployment("idle", "a", "registry.k8s.io/pause:3.9", 0)]},
+        cronjobs={"a": [cronjob("nightly", "a", "registry.k8s.io/pause:3.9")]},
+    )
+    items, warnings = collect(api, Settings(exclude_images=["registry.k8s.io/*"]))
+    assert items == []
+    assert InventoryWarning("excluded 1 image(s) matching the image exclusions", coverage=False) in warnings
+
+
 def test_no_exclusion_no_warning():
     api = FakeKubeApi(namespaces=[namespace("a")], pods={"a": [pod("p", "a")]})
     _, warnings = collect(api, Settings())
