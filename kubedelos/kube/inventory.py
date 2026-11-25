@@ -473,9 +473,13 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             )
         )
 
-    # An image is reported excluded only when no container kept it under another, unexcluded ref.
+    # An image is excluded only when no container kept it under another, unexcluded ref; one that was kept still says
+    # that some of its containers were left out, so they don't vanish from the run without a word.
     if dropped := len(excluded - items.keys()):
         warnings.append(InventoryWarning(f"excluded {dropped} image(s) matching the image exclusions", coverage=False))
+    if shared := len(excluded & items.keys()):
+        text = f"left out the excluded containers of {shared} image(s) still scanned for containers that run them under"
+        warnings.append(InventoryWarning(f"{text} another ref", coverage=False))
     return Inventory(list(items.values()), warnings, fact_sources, len(namespaces), len(scanned))
 
 

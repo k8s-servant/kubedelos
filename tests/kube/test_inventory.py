@@ -383,7 +383,12 @@ def test_exclude_image_matches_each_containers_own_tag_of_a_shared_digest(stable
     # The digest still runs under an unexcluded tag, so it is scanned, for that workload only, in either pod order.
     assert [(i.image.digest, i.image.tag) for i in items] == [(DIGEST, "1")]
     assert [w.name for w in items[0].workloads] == ["pinned"]
-    assert not any("excluded" in w.text for w in warnings)
+    assert warnings == [
+        InventoryWarning(
+            "left out the excluded containers of 1 image(s) still scanned for containers that run them under another ref",
+            coverage=False,
+        )
+    ]
 
 
 @pytest.mark.parametrize("stable_first", [True, False])
