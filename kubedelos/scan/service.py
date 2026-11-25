@@ -307,18 +307,25 @@ def _scan(
 
 
 def _record_trivy_db(repo: Repo, run_id: int, settings: Settings, *, updated: bool) -> None:
-    """Record when the vulnerability DB this run scans with was built and, when it is out of date, a note saying why
-    (and log it). An old DB never fails the scan: findings from it are still findings, only maybe not all of them."""
+    """Record when the vulnerability DB this run scans with was built and, when it or the Java DB the run reads for
+    library packages is out of date, one note saying which and why (and log it). An old DB never fails the scan:
+    findings from it are still findings, only maybe not all of them."""
+    now = datetime.now(UTC)
     info = db_info(settings.cache_dir, "db")
+    dbs = [("", info)]
+    if "library" in settings.pkg_types:
+        dbs.append(("for Java libraries ", db_info(settings.cache_dir, "java-db")))
+    stale = [
+        f"{label}built {db.updated_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC" for label, db in dbs if db_is_stale(db, now)
+    ]
     note = None
-    if info is not None and db_is_stale(info, datetime.now(UTC)):
+    if stale:
         cause = (
             "the download did not bring a newer one"
             if updated
             else "another kubedelos run was using the DB cache, so this run did not update it"
         )
-        note = (
-            f"{TRIVY_DB_NOTE_PREFIX}built {info.updated_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC is out of date: {cause}"
-        )
+        verb = "is" if len(stale) == 1 else "are"
+        note = f"{TRIVY_DB_NOTE_PREFIX}{' and Trivy DB '.join(stale)} {verb} out of date: {cause}"
         logger.warning("%s", note)
     repo.set_trivy_db(run_id, info.updated_at if info else None, note)

@@ -755,8 +755,8 @@ def test_an_api_error_while_listing_records_only_its_status(env, monkeypatch):
     ]
 
 
-def _write_db_metadata(settings, updated_at, next_update):
-    meta = settings.cache_dir / "trivy-cache" / "db" / "metadata.json"
+def _write_db_metadata(settings, updated_at, next_update, name="db"):
+    meta = settings.cache_dir / "trivy-cache" / name / "metadata.json"
     meta.parent.mkdir(parents=True, exist_ok=True)
     meta.write_text(
         json.dumps(
@@ -809,4 +809,30 @@ def test_scan_without_db_metadata_records_no_date(env, monkeypatch):
     monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
     out = service.run_scan(settings, api=_api(), repo=repo)
     assert repo.get_run(out.run_id)["trivy_db_built_at"] is None
+    assert _db_notes(repo, out.run_id) == []
+
+
+def test_scan_of_library_packages_warns_about_an_out_of_date_java_db_too(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    fresh = datetime.now(UTC) - timedelta(hours=2)
+    _write_db_metadata(settings, fresh, fresh + timedelta(days=1))
+    old = datetime(2026, 11, 19, 1, 0, tzinfo=UTC)
+    _write_db_metadata(settings, old, old + timedelta(days=1), name="java-db")
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert _db_notes(repo, out.run_id) == [
+        f"{TRIVY_DB_NOTE_PREFIX}for Java libraries built 2026-11-19 01:00 UTC is out of date: another kubedelos run "
+        "was using the DB cache, so this run did not update it"
+    ]
+    # Both out of date: one note names both.
+    _write_db_metadata(settings, old, old + timedelta(days=1))
+    out = service.run_scan(settings, api=_api(), repo=repo, rescan=True)  # the images are cached by now
+    assert _db_notes(repo, out.run_id) == [
+        f"{TRIVY_DB_NOTE_PREFIX}built 2026-11-19 01:00 UTC and Trivy DB for Java libraries built 2026-11-19 01:00 UTC "
+        "are out of date: another kubedelos run was using the DB cache, so this run did not update it"
+    ]
+    # An OS-packages-only scan never reads the Java DB, so its age is not this run's concern.
+    _write_db_metadata(settings, fresh, fresh + timedelta(days=1))
+    os_only = settings.model_copy(update={"pkg_types": ("os",)})
+    out = service.run_scan(os_only, api=_api(), repo=repo, rescan=True)
     assert _db_notes(repo, out.run_id) == []
