@@ -33,6 +33,7 @@ from kubedelos.store.queries import (
 from kubedelos.web.pages import (
     MAX_ID,
     context_param,
+    feed_view,
     link,
     open_db,
     plural,
@@ -232,7 +233,7 @@ def dashboard(
         previous = previous_comparable(conn, run)
         before = (previous, kpis(conn, previous.id)) if previous else None
         today = now.date()
-        risk = risk_view(conn, run.id)
+        risk = risk_view(conn, run.id) | feed_view(request, conn)
         shown = risk["risk_shown"]
         fixes = (
             fix_by_fix(conn, run.id, today=today, scored=shown)

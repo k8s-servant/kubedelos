@@ -1,7 +1,7 @@
 import re
 import sqlite3
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 
@@ -888,3 +888,20 @@ def test_run_line_of_a_run_without_a_trivy_db_date_names_none(client, seed):
 
 def _chips_html(html):
     return html.split('<ul class="chips">', 1)[1].split("</ul>", 1)[0]
+
+
+def test_fix_first_says_when_a_threat_feed_copy_is_old(client, seed, add_feeds):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    add_feeds()  # fetched 2026-11-15
+    seed.clock.now, seed.clock.step = datetime(2026, 11, 25, tzinfo=UTC), timedelta(0)
+    html = unescape(client.get("/").text)
+    assert '<p class="notice feed-note">The CISA KEV copy is from 2026-11-15 (10 days old)' in html
+
+
+def test_fix_first_says_nothing_of_fresh_feed_copies(client, seed, add_feeds):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    add_feeds()
+    seed.clock.now, seed.clock.step = datetime(2026, 11, 16, tzinfo=UTC), timedelta(0)
+    assert "feed-note" not in client.get("/").text

@@ -1,6 +1,6 @@
 import contextlib
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import Request
@@ -8,7 +8,16 @@ from fastapi.responses import PlainTextResponse
 
 from kubedelos.mcp_server import tools
 from kubedelos.store.db import connect_readonly
-from kubedelos.web.pages import open_db, open_db_rw, render, seconds_text, short_image, short_name, shown_context
+from kubedelos.web.pages import (
+    open_db,
+    open_db_rw,
+    render,
+    seconds_text,
+    short_image,
+    short_name,
+    shown_context,
+    stale_feed_note,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -206,3 +215,32 @@ def test_the_ui_and_the_mcp_server_resolve_a_reused_context_name_alike(client, s
     finally:
         conn.close()
     assert listed == {old: old, new: "prod"}
+
+
+_NOW = datetime(2026, 11, 25, 12, 0, tzinfo=UTC)
+
+
+@pytest.mark.parametrize(
+    ("fetched", "enabled", "expected"),
+    [
+        ({}, True, None),  # no copy: the risk note already says so
+        ({"kev": _NOW - timedelta(days=2), "epss": _NOW - timedelta(days=2)}, True, None),
+        (
+            {"kev": datetime(2026, 11, 20, 6, tzinfo=UTC), "epss": _NOW - timedelta(hours=3)},
+            True,
+            "The CISA KEV copy is from 2026-11-20 (5 days old), so a CVE added to KEV since then gets no KEV points. "
+            "kubedelos refreshes the feeds once a day when a scan or the UI starts; if scans ran since, the downloads "
+            "are failing (see the log).",
+        ),
+        (
+            {"kev": datetime(2026, 11, 20, 6, tzinfo=UTC), "epss": datetime(2026, 11, 18, tzinfo=UTC)},
+            False,
+            "The CISA KEV copy is from 2026-11-20 (5 days old), so a CVE added to KEV since then gets no KEV points. "
+            "The EPSS copy is from 2026-11-18 (7 days old), so its exploitation scores are from that day. "
+            "Threat feed downloads are turned off (KUBEDELOS_THREAT_FEEDS=false).",
+        ),
+        ({"kev": _NOW + timedelta(days=5)}, True, None),  # from the future (the clock went back): not old
+    ],
+)
+def test_stale_feed_note(fetched, enabled, expected):
+    assert stale_feed_note(fetched, _NOW, enabled=enabled) == expected

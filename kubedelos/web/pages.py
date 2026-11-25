@@ -14,7 +14,7 @@ import contextlib
 import sqlite3
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import urlencode
 
@@ -183,6 +183,44 @@ def risk_view(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
     else:
         note = None
     return {"risk_shown": shown, "risk_note": note}
+
+
+FEED_STALE_AFTER = timedelta(
+    days=3
+)  # a feed is refreshed once a day, so a copy this old means refreshes are not running
+_FEED_EFFECT = {
+    "kev": ("CISA KEV", "a CVE added to KEV since then gets no KEV points"),
+    "epss": ("EPSS", "its exploitation scores are from that day"),
+}
+
+
+def stale_feed_note(fetched: dict[str, datetime], now: datetime, *, enabled: bool) -> str | None:
+    """The note for the threat feed copies older than ``FEED_STALE_AFTER``, with what that costs the score and why the
+    copy may be old; None when every stored copy is recent. A missing copy is the risk note's to mention."""
+    old = [name for name in _FEED_EFFECT if name in fetched and now - fetched[name] > FEED_STALE_AFTER]
+    if not old:
+        return None
+    parts = []
+    for name in old:
+        label, effect = _FEED_EFFECT[name]
+        days = (now - fetched[name]).days
+        parts.append(
+            f"The {label} copy is from {fetched[name].astimezone(UTC):%Y-%m-%d} ({days} days old), so {effect}."
+        )
+    if enabled:
+        parts.append(
+            "kubedelos refreshes the feeds once a day when a scan or the UI starts; if scans ran since, the downloads "
+            "are failing (see the log)."
+        )
+    else:
+        parts.append("Threat feed downloads are turned off (KUBEDELOS_THREAT_FEEDS=false).")
+    return " ".join(parts)
+
+
+def feed_view(request: Request, conn: sqlite3.Connection) -> dict[str, Any]:
+    """The template context for the stale threat feed note."""
+    enabled = request.app.state.settings.threat_feeds
+    return {"feed_note": stale_feed_note(intel.feeds(conn), request.app.state.clock(), enabled=enabled)}
 
 
 def scannable_contexts(request: Request) -> set[str]:

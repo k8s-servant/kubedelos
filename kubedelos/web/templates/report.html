@@ -38,6 +38,7 @@
   <section aria-labelledby="fix-title">
     <h2 id="fix-title">Fix first</h2>
     {% if risk_note %}<p class="risk-note">{{ risk_note }}</p>{% endif %}
+    {% if feed_note %}<p class="feed-note">{{ feed_note }}</p>{% endif %}
     {% if not fixes.rows %}
     <p>No Critical or High findings have a released fix.</p>
     {% else %}

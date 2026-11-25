@@ -23,7 +23,17 @@ from kubedelos.store.queries import (
     newest_run,
     run_namespaces,
 )
-from kubedelos.web.pages import MAX_ID, context_param, link, open_db, render, risk_view, short_name, shown_context
+from kubedelos.web.pages import (
+    MAX_ID,
+    context_param,
+    feed_view,
+    link,
+    open_db,
+    render,
+    risk_view,
+    short_name,
+    shown_context,
+)
 
 router = APIRouter()
 
@@ -127,7 +137,7 @@ def findings(
             run = newest_run(conn, cluster, cluster_scope=False)
         if run is None:
             return render(request, "findings.html", ctx)
-        risk = risk_view(conn, run.id)
+        risk = risk_view(conn, run.id) | feed_view(request, conn)
         flt = replace(
             view_filter(severity, namespace, cve, package, has_fix, pkg, q, sort, accepted, direction),
             scored=risk["risk_shown"],

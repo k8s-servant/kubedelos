@@ -795,7 +795,8 @@ tbody tr:hover td {
   padding-left: 0;
 }
 
-.risk-note {
+.risk-note,
+.feed-note {
   color: var(--muted);
 }
 
