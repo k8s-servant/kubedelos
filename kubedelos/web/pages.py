@@ -185,9 +185,8 @@ def risk_view(conn: sqlite3.Connection, run_id: int) -> dict[str, Any]:
     return {"risk_shown": shown, "risk_note": note}
 
 
-FEED_STALE_AFTER = timedelta(
-    days=3
-)  # a feed is refreshed once a day, so a copy this old means refreshes are not running
+# A feed is refreshed once a day, so a copy this old means the refreshes are not running.
+FEED_STALE_AFTER = timedelta(days=3)
 _FEED_EFFECT = {
     "kev": ("CISA KEV", "a CVE added to KEV since then gets no KEV points"),
     "epss": ("EPSS", "its exploitation scores are from that day"),
