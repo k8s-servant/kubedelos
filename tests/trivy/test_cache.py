@@ -312,3 +312,15 @@ def test_db_info_of_an_unreadable_file_is_none(tmp_path, text):
     meta.parent.mkdir(parents=True)
     meta.write_text(text)
     assert db_info(tmp_path, "db") is None
+
+
+def test_db_is_stale_only_a_day_past_its_next_update():
+    from datetime import UTC, datetime, timedelta
+
+    from kubedelos.trivy.cache import DbInfo, db_is_stale
+
+    next_update = datetime(2026, 11, 18, 6, 0, tzinfo=UTC)
+    info = DbInfo(updated_at=next_update - timedelta(days=1), next_update=next_update, downloaded_at=next_update)
+    assert not db_is_stale(info, next_update + timedelta(hours=23))  # a newer DB is out, but within the grace
+    assert db_is_stale(info, next_update + timedelta(hours=25))
+    assert not db_is_stale(None, next_update + timedelta(days=30))  # never downloaded: nothing scanned with it

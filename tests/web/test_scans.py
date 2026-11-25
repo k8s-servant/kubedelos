@@ -1018,3 +1018,14 @@ def test_the_history_says_which_context_a_run_went_through(client, seed, kube_co
     assert len(rows) == 2
     assert '<div class="hint">via prod-admin</div>' in rows[0]
     assert "via " not in rows[1]
+
+
+def test_history_flags_a_run_scanned_with_an_out_of_date_trivy_db(client, seed):
+    old = _run(seed)
+    note = "Trivy DB built 2026-11-20 06:00 UTC is out of date: another kubedelos run was using the DB cache"
+    seed.repo.set_trivy_db(old, datetime(2026, 11, 20, 6, tzinfo=UTC), note)
+    current = _run(seed)
+    seed.repo.set_trivy_db(current, datetime.now(UTC), None)
+    rows = _rows(client.get("/scans").text)
+    assert f'<div class="hint caution">⚠ {note}</div>' in unescape(next(r for r in rows if f"Run {old}<" in r))
+    assert "Trivy DB" not in next(r for r in rows if f"Run {current}<" in r)

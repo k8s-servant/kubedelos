@@ -1,4 +1,5 @@
-{#- The page head: the page title and, when there is a run, chips that name it, then the gaps and attack-surface callouts.
+{#- The page head: the page title and, when there is a run, chips that name it (with the Trivy DB it scanned with), then
+    the gaps, out-of-date Trivy DB and attack-surface callouts.
     Needs: page_title, run (or None), pinned, now, and the shown context, which a run made through another context of
     its cluster names ("via"). -#}
 <div class="page-head">
@@ -12,6 +13,9 @@
     <li class="chip">{{ describe_scope(run.scope) }}</li>
     <li class="chip">{{ describe_pkg_types(run.pkg_types) }}</li>
     <li class="chip">finished {{ finished_text(run, now) }}</li>
+    {%- if run.trivy_db_built_at %}
+    <li class="chip{{ ' chip-stale' if run.db_note }}">Trivy DB built {{ ago(run.trivy_db_built_at, now) }}</li>
+    {%- endif %}
     <li class="chip {{ 'chip-bad' if run.images_failed else 'chip-ok' }}">{{ run.images }} {{ run.images | plural("image") }} · {{ run.images_failed }} failed</li>
     {%- if pinned %}
     <li class="chip chip-pinned">pinned</li>
@@ -30,6 +34,12 @@
     <li>{{ text }}</li>
     {%- endfor %}
   </ul>
+</details>
+{% endif %}
+{% if run and run.db_note %}
+<details class="callout">
+  <summary><span class="caution" aria-hidden="true">⚠</span> Trivy DB out of date: findings published since it was built are missing</summary>
+  <p>{{ run.db_note }}</p>
 </details>
 {% endif %}
 {% if run %}

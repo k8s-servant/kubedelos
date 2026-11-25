@@ -17,7 +17,7 @@ import logging
 import threading
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 from kubernetes.client.exceptions import ApiException
 
@@ -29,9 +29,9 @@ from kubedelos.kube.inventory import Inventory, InventoryWarning, collect_invent
 from kubedelos.models import ImageRef, ImageResult, InventoryItem, is_valid_ref
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.store import db, runlock
-from kubedelos.store.repo import NOTHING_SCANNED, Repo
+from kubedelos.store.repo import NOTHING_SCANNED, TRIVY_DB_NOTE_PREFIX, Repo
 from kubedelos.trivy.binary import ensure_trivy
-from kubedelos.trivy.cache import TrivyCache
+from kubedelos.trivy.cache import TrivyCache, db_info, db_is_stale
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import scan_many
 
@@ -291,6 +291,7 @@ def _scan(
         trivy = ensure_trivy(settings)
         if not cancel.is_set():  # a shutdown during the binary download: no DB download either
             with TrivyCache(trivy, settings.cache_dir, java_db="library" in settings.pkg_types) as cache:
+                _record_trivy_db(repo, run_id, settings, updated=cache.updated)
                 emit("scanning")
                 scan_many(
                     todo,
@@ -303,3 +304,21 @@ def _scan(
                 )
     emit("saving")
     return errors
+
+
+def _record_trivy_db(repo: Repo, run_id: int, settings: Settings, *, updated: bool) -> None:
+    """Record when the vulnerability DB this run scans with was built and, when it is out of date, a note saying why
+    (and log it). An old DB never fails the scan: findings from it are still findings, only maybe not all of them."""
+    info = db_info(settings.cache_dir, "db")
+    note = None
+    if info is not None and db_is_stale(info, datetime.now(UTC)):
+        cause = (
+            "the download did not bring a newer one"
+            if updated
+            else "another kubedelos run was using the DB cache, so this run did not update it"
+        )
+        note = (
+            f"{TRIVY_DB_NOTE_PREFIX}built {info.updated_at.astimezone(UTC):%Y-%m-%d %H:%M} UTC is out of date: {cause}"
+        )
+        logger.warning("%s", note)
+    repo.set_trivy_db(run_id, info.updated_at if info else None, note)

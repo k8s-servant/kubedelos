@@ -52,7 +52,7 @@ from kubedelos.store.queries import (
     scan_times,
     worst_images,
 )
-from kubedelos.store.repo import NOTHING_SCANNED, STALE_NOTE, Repo
+from kubedelos.store.repo import NOTHING_SCANNED, STALE_NOTE, TRIVY_DB_NOTE_PREFIX, Repo
 
 _OPEN: list[sqlite3.Connection] = []
 CLUSTER = Settings().scope
@@ -1286,3 +1286,30 @@ def test_export_always_has_score(db):
     assert [r["score"] for r in scored] == [risk.score("CRITICAL", risk.NO_INTEL, EXPOSED).points]
     rows, _, _ = findings_page(conn, run_id, FindingFilter(), 1)
     assert rows[0]["score"] is None
+
+
+def test_runs_carry_their_trivy_db_date_and_note(db):
+    conn, repo = db
+    built = datetime(2026, 11, 20, 6, 0, tzinfo=UTC)
+    stale = _run(repo)
+    repo.set_trivy_db(stale, built, f"{TRIVY_DB_NOTE_PREFIX}built 2026-11-20 06:00 UTC is out of date: x")
+    fresh = _run(repo)
+    repo.set_trivy_db(fresh, built, None)
+    unknown = _run(repo)  # nothing was scanned, or a run from before the date was recorded
+    shown = {r: queries.get_run(conn, "ctx", r) for r in (stale, fresh, unknown)}
+    assert [(shown[r].trivy_db_built_at, shown[r].db_note) for r in (stale, fresh, unknown)] == [
+        (built, f"{TRIVY_DB_NOTE_PREFIX}built 2026-11-20 06:00 UTC is out of date: x"),
+        (built, None),
+        (None, None),
+    ]
+    notes = {r.id: r.db_note for r in run_history(conn, "ctx", 1)[0]}
+    assert notes == {stale: shown[stale].db_note, fresh: None, unknown: None}
+
+
+def test_a_retry_keeps_the_runs_first_trivy_db_date(db):
+    conn, repo = db
+    run = _run(repo)
+    first = datetime(2026, 11, 20, 6, 0, tzinfo=UTC)
+    repo.set_trivy_db(run, first, None)
+    repo.set_trivy_db(run, first + timedelta(days=1), None)
+    assert queries.get_run(conn, "ctx", run).trivy_db_built_at == first

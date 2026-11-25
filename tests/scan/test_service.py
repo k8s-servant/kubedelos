@@ -1,6 +1,6 @@
 import json
 import threading
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import ClassVar
 
@@ -14,7 +14,7 @@ from kubedelos.models import Finding, ImageRef, ImageResult, InventoryItem, Seve
 from kubedelos.scan import service
 from kubedelos.store import runlock
 from kubedelos.store.db import connect
-from kubedelos.store.repo import Repo
+from kubedelos.store.repo import TRIVY_DB_NOTE_PREFIX, Repo
 from tests.kube.fakes import FakeKubeApi, pod
 
 D1 = "sha256:" + "a" * 64
@@ -35,6 +35,7 @@ def _settings(tmp_path):
 
 class FakeCache:
     started = 0
+    updated = False  # whether this run downloaded the DBs; False when another run held the cache
 
     java_db: ClassVar[list[bool]] = []
 
@@ -53,6 +54,7 @@ class FakeCache:
 @pytest.fixture
 def env(tmp_path, monkeypatch):
     FakeCache.started = 0
+    FakeCache.updated = False
     FakeCache.java_db = []
     calls: list[list] = []
     monkeypatch.setattr(service, "TrivyCache", FakeCache)
@@ -751,3 +753,60 @@ def test_an_api_error_while_listing_records_only_its_status(env, monkeypatch):
     assert _texts(repo, repo.latest_run_id()) == [
         "listing the cluster failed: HTTP 400 Bad Request; nothing was scanned"
     ]
+
+
+def _write_db_metadata(settings, updated_at, next_update):
+    meta = settings.cache_dir / "trivy-cache" / "db" / "metadata.json"
+    meta.parent.mkdir(parents=True, exist_ok=True)
+    meta.write_text(
+        json.dumps(
+            {
+                "UpdatedAt": updated_at.isoformat(),
+                "NextUpdate": next_update.isoformat(),
+                "DownloadedAt": updated_at.isoformat(),
+            }
+        )
+    )
+
+
+def _db_notes(repo, run_id):
+    rows = repo.run_warnings(run_id)
+    return [r["text"] for r in rows if r["text"].startswith(TRIVY_DB_NOTE_PREFIX)]
+
+
+def test_scan_records_the_trivy_db_it_used(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    built = datetime.now(UTC) - timedelta(hours=3)
+    _write_db_metadata(settings, built, built + timedelta(days=1))
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert datetime.fromisoformat(repo.get_run(out.run_id)["trivy_db_built_at"]) == built
+    assert _db_notes(repo, out.run_id) == []
+
+
+@pytest.mark.parametrize(
+    ("updated", "cause"),
+    [
+        (False, "another kubedelos run was using the DB cache, so this run did not update it"),
+        (True, "the download did not bring a newer one"),
+    ],
+)
+def test_scan_warns_when_the_trivy_db_is_past_its_next_update(env, monkeypatch, caplog, updated, cause):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    FakeCache.updated = updated
+    built = datetime(2026, 11, 20, 6, 0, tzinfo=UTC)
+    _write_db_metadata(settings, built, built + timedelta(days=1))
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    note = f"{TRIVY_DB_NOTE_PREFIX}built 2026-11-20 06:00 UTC is out of date: {cause}"
+    assert _db_notes(repo, out.run_id) == [note]
+    assert note in caplog.text
+    assert out.status == "ok"  # an old DB never fails the scan
+
+
+def test_scan_without_db_metadata_records_no_date(env, monkeypatch):
+    settings, repo, calls = env
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    out = service.run_scan(settings, api=_api(), repo=repo)
+    assert repo.get_run(out.run_id)["trivy_db_built_at"] is None
+    assert _db_notes(repo, out.run_id) == []

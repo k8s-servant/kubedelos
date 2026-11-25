@@ -26,6 +26,7 @@ RETRY_NOTE_PREFIX = "retried "  # starts the run note a retry of failed images l
 # NOTHING_SCANNED, and a run no live process owned is closed with STALE_NOTE.
 NOTHING_SCANNED = "; nothing was scanned"
 STALE_NOTE = "closed by kubedelos: no live process owned this run"
+TRIVY_DB_NOTE_PREFIX = "Trivy DB "  # starts the run note a scan with an out-of-date vulnerability DB leaves
 _FINAL_STATUSES = frozenset({"ok", "partial", "cancelled", "failed"})
 
 _FINISH_RUN_SQL = (
@@ -83,6 +84,18 @@ class Repo:
         """Record the status of each fact source (e.g. services, rbac) for the run."""
         with self._conn:
             self._conn.execute("UPDATE scan_run SET fact_sources = ? WHERE id = ?", (json.dumps(sources), run_id))
+
+    def set_trivy_db(self, run_id: int, built_at: datetime | None, note: str | None) -> None:
+        """Record when the vulnerability DB the run scanned with was built, and ``note`` when it was out of date. A retry
+        of the run's failed images keeps the date the run first recorded."""
+        with self._conn:
+            if built_at is not None:
+                self._conn.execute(
+                    "UPDATE scan_run SET trivy_db_built_at = COALESCE(trivy_db_built_at, ?) WHERE id = ?",
+                    (built_at.isoformat(), run_id),
+                )
+            if note is not None:
+                self._conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, ?, 0)", (run_id, note))
 
     def add_warnings(self, run_id: int, warnings: Sequence[InventoryWarning]) -> None:
         with self._conn:

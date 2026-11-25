@@ -103,10 +103,14 @@ and downloads nothing; after it, the scan downloads the new DB first. The first 
 few minutes. An OS-packages-only scan never needs the Java DB.
 
 **Shared and locked:** all parallel scans, and scans from several `kubedelos ui` processes, read the same DBs. A file
-lock makes sure no scan replaces a DB while another scan is reading it.
+lock makes sure no scan replaces a DB while another scan is reading it. A scan that starts while another one is reading
+the DBs scans with them as they are, rather than wait for that scan to finish.
 
 **How fresh is mine?** The About page shows when the DBs in use were built and downloaded, and whether a newer one is
-out.
+out. Each run records when the vulnerability DB it scanned with was built, and its pages show it ("Trivy DB built 5 h
+ago"). When that DB was more than a day past its next update, usually because another scan was reading the DBs so this
+one could not update them, the run line and the Scans history say so. The scan still finishes: the findings are real,
+but CVEs published since the DB was built are missing.
 
 ## 5. Scanning: one Trivy per image, in parallel
 
