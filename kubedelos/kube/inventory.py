@@ -356,6 +356,15 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
 
     seen: set[tuple[str, str, str]] = set()  # every workload whose facts were derived
     failed: set[tuple[str, str, str]] = set()  # (namespace, kind, name) of the workloads whose facts failed
+    # Image exclusions match the ref each container names, before images are deduped by digest: two tags of one digest
+    # are excluded or kept container by container, whatever order the pods are listed in.
+    excluded: set[tuple[str, str]] = set()  # (image key, platform) of the containers an exclusion matched
+
+    def skip(image: ImageRef, platform: str) -> bool:
+        if is_excluded(image, settings.exclude_images):
+            excluded.add((image.key, platform))
+            return True
+        return False
 
     def add(
         image: ImageRef,
@@ -423,6 +432,8 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             platform = (node_platform.get(pod.spec.node_name) if pod.spec else None) or fallback
             for c in _spec_containers(pod.spec):
                 image = parse_image_id(c.image, ids.get(c.name, ""))
+                if skip(image, platform):
+                    continue
                 workload = Workload(
                     namespace=name, kind=kind, name=workload_name, container=c.name, owner=owner, team=team
                 )
@@ -433,10 +444,10 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
         templates += [("StatefulSet", s) for s in statefulsets if s.spec and s.spec.replicas == 0]
         for kind, obj in templates:
             template = obj.spec.template
-            _add_template(add, facts_for, name, kind, obj.metadata.name, template, owner, team, fallback)
+            _add_template(add, skip, facts_for, name, kind, obj.metadata.name, template, owner, team, fallback)
         for cj in cronjobs:
             template = cj.spec.job_template.spec.template
-            _add_template(add, facts_for, name, "CronJob", cj.metadata.name, template, owner, team, fallback)
+            _add_template(add, skip, facts_for, name, "CronJob", cj.metadata.name, template, owner, team, fallback)
 
     pod_security = "ok" if not failed else "error" if failed >= seen else "partial"
     fact_sources = {"pod_security": pod_security}
@@ -462,10 +473,14 @@ def collect_inventory(api: KubeApi, settings: Settings) -> Inventory:
             )
         )
 
-    kept = [item for item in items.values() if not is_excluded(item.image, settings.exclude_images)]
-    if excluded := len(items) - len(kept):
-        warnings.append(InventoryWarning(f"excluded {excluded} image(s) matching the image exclusions", coverage=False))
-    return Inventory(kept, warnings, fact_sources, len(namespaces), len(scanned))
+    # An image is excluded only when no container kept it under another, unexcluded ref; one that was kept still says
+    # that some of its containers were left out, so they don't vanish from the run without a word.
+    if dropped := len(excluded - items.keys()):
+        warnings.append(InventoryWarning(f"excluded {dropped} image(s) matching the image exclusions", coverage=False))
+    if shared := len(excluded & items.keys()):
+        text = f"left out the excluded containers of {shared} image(s) still scanned for containers that run them under"
+        warnings.append(InventoryWarning(f"{text} another ref", coverage=False))
+    return Inventory(list(items.values()), warnings, fact_sources, len(namespaces), len(scanned))
 
 
 def _record(tally: _Tally, listed: tuple[list | None, str]) -> list | None:
@@ -480,11 +495,15 @@ def _pull_secret_names(spec) -> list[str]:
     return [ref.name for ref in (spec.image_pull_secrets if spec else None) or [] if ref.name]
 
 
-def _add_template(add, facts_for, ns: str, kind: str, name: str, template, owner, team, platform: str) -> None:
-    """Add a workload that has no pod right now (scaled to zero, or a CronJob) from its pod template."""
+def _add_template(add, skip, facts_for, ns: str, kind: str, name: str, template, owner, team, platform: str) -> None:
+    """Add a workload that has no pod right now (scaled to zero, or a CronJob) from its pod template, leaving out the
+    containers whose image ``skip`` excludes."""
     pod_spec = template.spec
     labels = (template.metadata.labels if template.metadata else None) or {}
     pull_secrets = _pull_secret_names(pod_spec)
     for c in _spec_containers(pod_spec):
+        image = parse_image_id(c.image, "")
+        if skip(image, platform):
+            continue
         workload = Workload(namespace=ns, kind=kind, name=name, container=c.name, owner=owner, team=team)
-        add(parse_image_id(c.image, ""), platform, workload, pull_secrets, facts_for(workload, pod_spec, c, labels))
+        add(image, platform, workload, pull_secrets, facts_for(workload, pod_spec, c, labels))

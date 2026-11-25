@@ -44,6 +44,10 @@ Selectors use kubectl syntax (`team=payments,env!=dev`) and are applied by the A
 CronJobs that are scanned as templates match the label selector on their own labels, which can differ from their pod
 template labels. Image exclusions are globs matched against the normalised image name and the short Docker Hub forms,
 so `nginx:*` skips `nginx:1.19` and `docker.io/library/nginx:1.19` alike, and excluded images are never scanned. A
+pattern is matched against the image each container names. When one digest runs under two tags
+(`registry.example/team/app:1` and `registry.example/team/app:stable`), excluding `app:stable` leaves out only the
+containers that run `app:stable`; the digest is still scanned for the containers that run `app:1`, and the run's warnings say that some containers of
+an image were left out. A
 pattern's registry host is matched case-insensitively, and `index.docker.io` counts as `docker.io`. Anchor
 patterns on the registry and repository (`registry.example/vendor/*`, not `*vendor*`), because `*` also matches across
 `/` and `:`, and a broad pattern could match an image someone named to fit it. Each run records its scope, so runs that
