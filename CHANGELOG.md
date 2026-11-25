@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/k8s-servant/kubedelos/compare/v0.3.0...v0.3.1) (2026-11-25)
+
+
+### Bug fixes
+
+* match image exclusions per container so a shared digest no longer depends on pod order ([#97](https://github.com/k8s-servant/kubedelos/issues/97)) ([56983af](https://github.com/k8s-servant/kubedelos/commit/56983afef1117bff9ff6bd37a69e474a0003589a))
+
 ## [0.3.0](https://github.com/k8s-servant/kubedelos/compare/v0.2.0...v0.3.0) (2026-11-23)
 
 
