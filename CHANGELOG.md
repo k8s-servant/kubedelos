@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.0](https://github.com/k8s-servant/kubedelos/compare/v0.3.1...v0.4.0) (2026-11-25)
+
+
+### Features
+
+* record the trivy db each run scanned with and warn when it was out of date ([#99](https://github.com/k8s-servant/kubedelos/issues/99)) ([8d46952](https://github.com/k8s-servant/kubedelos/commit/8d46952bbc5fe4cf2241c63e5176d7f6c6c6002b))
+* say when a threat feed copy is more than three days old ([#100](https://github.com/k8s-servant/kubedelos/issues/100)) ([89234eb](https://github.com/k8s-servant/kubedelos/commit/89234ebb3f4ff9090b80512f9c31ff9e781bd048))
+
 ## [0.3.1](https://github.com/k8s-servant/kubedelos/compare/v0.3.0...v0.3.1) (2026-11-25)
 
 
