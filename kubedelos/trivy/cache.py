@@ -10,7 +10,8 @@ download failed or was killed leaves no usable DB, so the next run to get the lo
 without.
 
 :func:`db_info` reads when a DB was built and downloaded, from the ``metadata.json`` Trivy writes next to it, for the
-UI's About page.
+UI's About page and for the date each run records. :func:`db_is_stale` says when a DB is more than ``STALE_GRACE``
+past its next update, which a run that skipped the update (the cache was busy) notes on itself.
 """
 
 import contextlib
@@ -20,7 +21,7 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from types import TracebackType
 from typing import Literal, Self
@@ -31,6 +32,7 @@ _DB_DOWNLOAD_TIMEOUT_S = 1800
 _LOCK_FILE = ".kubedelos.lock"
 _DB_METADATA = "db/metadata.json"  # written by Trivy once a download finished
 _JAVA_DB_METADATA = "java-db/metadata.json"
+STALE_GRACE = timedelta(hours=24)  # a DB this long past its next update is out of date, not just due for one
 
 
 @dataclass(frozen=True)
@@ -48,6 +50,11 @@ def db_info(cache_dir: Path, name: Literal["db", "java-db"]) -> DbInfo | None:
     except (OSError, ValueError, TypeError, KeyError):
         return None
     return DbInfo(*dates) if all(d.tzinfo for d in dates) else None  # Trivy writes UTC; a naive date can't compare
+
+
+def db_is_stale(info: DbInfo | None, now: datetime) -> bool:
+    """Whether ``info``'s DB is more than ``STALE_GRACE`` past its next update; a missing DB is not stale."""
+    return info is not None and now - info.next_update > STALE_GRACE
 
 
 class TrivyCache:

@@ -47,7 +47,7 @@ def test_migration_13_backfills_risk_points(tmp_path):
     old.close()
     conn = connect(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 15
         points = [r[0] for r in conn.execute("SELECT risk_points FROM workload ORDER BY id")]
         assert points == [workload_points(_FACTS), NO_FACTS_POINTS, NO_FACTS_POINTS]
         assert NO_FACTS_POINTS == 18
@@ -102,7 +102,7 @@ def test_migration_14_keys_existing_runs_by_their_context(tmp_path):
     old.close()
     conn = connect(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS)
         assert _rows(conn, "SELECT cluster, context, number FROM scan_run ORDER BY id") == [
             ("a", "a", 1),
             ("b", "b", 1),
@@ -130,5 +130,18 @@ def test_run_numbers_are_unique_per_cluster_after_migration_14(tmp_path):
         conn.execute(insert, (None, None))
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute(insert, (None, "other"))
+    finally:
+        conn.close()
+
+
+def test_migration_15_leaves_existing_runs_without_a_trivy_db_date(tmp_path):
+    path = tmp_path / "k.db"
+    old = _old_database(path, 14)
+    old.execute("INSERT INTO scan_run (started_at, status, context, cluster, number) VALUES ('now', 'ok', 'a', 'a', 1)")
+    old.commit()
+    old.close()
+    conn = connect(path)
+    try:
+        assert _rows(conn, "SELECT trivy_db_built_at FROM scan_run") == [(None,)]
     finally:
         conn.close()

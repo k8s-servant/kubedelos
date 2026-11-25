@@ -17,7 +17,7 @@ from typing import Literal, get_args
 from kubedelos import risk
 from kubedelos.store.accepted import ACCEPTED_CTES
 from kubedelos.store.intel import intel_for, top_workload_facts
-from kubedelos.store.repo import NOTHING_SCANNED, RETRY_NOTE_PREFIX, STALE_NOTE
+from kubedelos.store.repo import NOTHING_SCANNED, RETRY_NOTE_PREFIX, STALE_NOTE, TRIVY_DB_NOTE_PREFIX
 from kubedelos.trivy.runner import ErrorKind
 
 RESULT_STATUSES = ("ok", "partial")
@@ -29,12 +29,14 @@ CLUSTER_SCOPE_SQL = (
     " AND json_extract(scope, '$.namespace_selector') IS NULL AND json_extract(scope, '$.selector') IS NULL"
 )
 
-_RUN_SQL = """
-SELECT id, number, cluster, context, status, finished_at, pkg_types, scope, trivy_version, fact_sources,
+_RUN_SQL = f"""
+SELECT id, number, cluster, context, status, finished_at, pkg_types, scope, trivy_version, fact_sources, trivy_db_built_at,
+       (SELECT text FROM run_warning WHERE run_id = scan_run.id AND coverage = 0 AND text LIKE '{TRIVY_DB_NOTE_PREFIX}%'
+        ORDER BY id DESC LIMIT 1) AS db_note,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,
        (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS images_failed
 FROM scan_run
-"""
+"""  # noqa: S608 - only a module constant is interpolated
 
 
 class RunNotShown(Exception):
@@ -60,6 +62,8 @@ class Run:
     trivy_version: str | None = None
     gaps: list[str] = field(default_factory=list)
     fact_sources: dict | None = None
+    trivy_db_built_at: datetime | None = None  # when Trivy built the vulnerability DB the run scanned with
+    db_note: str | None = None  # why that DB was out of date, when it was
 
 
 def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
@@ -78,6 +82,8 @@ def _build(conn: sqlite3.Connection, row: sqlite3.Row) -> Run:
         trivy_version=row["trivy_version"],
         gaps=[r["text"] for r in gaps.fetchall()],
         fact_sources=json.loads(row["fact_sources"]) if row["fact_sources"] else None,
+        trivy_db_built_at=datetime.fromisoformat(row["trivy_db_built_at"]) if row["trivy_db_built_at"] else None,
+        db_note=row["db_note"],
     )
 
 
@@ -1015,6 +1021,7 @@ class HistoryRow:
     requested_by: str | None  # who asked for the run in ``serve``; None for a sweep and for laptop runs
     reason: str | None = None  # why a failed run holds nothing, when its note says so
     context: str | None = None  # the context the run went through, for a "via" note
+    db_note: str | None = None  # why the vulnerability DB the run scanned with was out of date, when it was
 
 
 def run_history(conn: sqlite3.Connection, cluster: str, page: int, per_page: int = 25) -> tuple[list[HistoryRow], int]:
@@ -1025,7 +1032,9 @@ def run_history(conn: sqlite3.Connection, cluster: str, page: int, per_page: int
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id) AS images,"
         " (SELECT COUNT(DISTINCT ref) FROM image_result WHERE run_id = scan_run.id AND status = 'error') AS failed,"
         " (SELECT text FROM run_warning WHERE run_id = scan_run.id AND scan_run.status = 'failed' AND coverage = 0"
-        "  AND (text LIKE '%' || :nothing OR text = :stale) ORDER BY id DESC LIMIT 1) AS reason"
+        "  AND (text LIKE '%' || :nothing OR text = :stale) ORDER BY id DESC LIMIT 1) AS reason,"
+        " (SELECT text FROM run_warning WHERE run_id = scan_run.id AND coverage = 0 AND text LIKE :db_note || '%'"
+        "  ORDER BY id DESC LIMIT 1) AS db_note"
         " FROM scan_run WHERE cluster = :cluster ORDER BY id DESC LIMIT :limit OFFSET :offset",
         {
             "cluster": cluster,
@@ -1033,6 +1042,7 @@ def run_history(conn: sqlite3.Connection, cluster: str, page: int, per_page: int
             "offset": (page - 1) * per_page,
             "nothing": NOTHING_SCANNED,
             "stale": STALE_NOTE,
+            "db_note": TRIVY_DB_NOTE_PREFIX,
         },
     ).fetchall()
     history = [
@@ -1051,6 +1061,7 @@ def run_history(conn: sqlite3.Connection, cluster: str, page: int, per_page: int
             requested_by=r["requested_by"],
             reason=r["reason"],
             context=r["context"],
+            db_note=r["db_note"],
         )
         for r in rows
     ]

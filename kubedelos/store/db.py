@@ -257,6 +257,11 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     ALTER TABLE acceptance ADD COLUMN cluster TEXT;
     UPDATE acceptance SET cluster = context;
     """,
+    # 15: when Trivy built the vulnerability DB a run scanned with (its metadata.json UpdatedAt), NULL when nothing was
+    # scanned or the run is older than this column.
+    """
+    ALTER TABLE scan_run ADD COLUMN trivy_db_built_at TEXT;
+    """,
 ]
 
 

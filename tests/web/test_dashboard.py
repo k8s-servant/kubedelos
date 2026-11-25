@@ -858,3 +858,33 @@ def test_the_switcher_shows_each_context_with_its_clusters_last_scan(client, see
     assert "never scanned" in entries[0]
     assert "ago" in entries[1] and "ago" in entries[2]  # prod shares prod-admin's run
     assert "view only" not in switcher
+
+
+def test_run_line_names_the_trivy_db_and_says_when_it_was_out_of_date(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    built = seed.clock() - timedelta(days=3)
+    note = "Trivy DB built 2026-11-20 06:00 UTC is out of date: another kubedelos run was using the DB cache"
+    seed.repo.set_trivy_db(run_id, built, note)
+    html = unescape(client.get("/").text)
+    assert '<li class="chip chip-stale">Trivy DB built 3 days ago</li>' in _chips_html(html)
+    assert "Trivy DB out of date" in html and note in html
+
+
+def test_run_line_names_a_current_trivy_db_without_a_warning(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    seed.repo.set_trivy_db(run_id, seed.clock() - timedelta(hours=5), None)
+    html = unescape(client.get("/").text)
+    assert '<li class="chip">Trivy DB built 5 h ago</li>' in _chips_html(html)
+    assert "Trivy DB out of date" not in html
+
+
+def test_run_line_of_a_run_without_a_trivy_db_date_names_none(client, seed):
+    run_id = _run(seed)
+    _add(seed, run_id, "a", ["CRITICAL"])
+    assert "Trivy DB" not in client.get("/").text
+
+
+def _chips_html(html):
+    return html.split('<ul class="chips">', 1)[1].split("</ul>", 1)[0]
