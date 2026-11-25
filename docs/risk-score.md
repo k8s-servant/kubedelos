@@ -128,7 +128,9 @@ follows the redirect.
 
 Each feed is downloaded at most once every 24 hours. kubedelos checks before each scan (from the UI, the `serve` queue
 or a scheduled sweep) and when `kubedelos ui` starts, on a background thread so the UI does not wait for it. A page
-request never downloads anything. The Settings page shows when each feed was last fetched.
+request never downloads anything. The Settings page shows when each feed was last fetched. When a stored copy is more
+than 3 days old, because the downloads keep failing or are turned off, the dashboard, the findings page and the report
+say so next to the scores, with the copy's date and what it costs: a CVE added to KEV since then gets no KEV points.
 
 ### What the requests carry
 

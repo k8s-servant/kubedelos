@@ -1,4 +1,5 @@
 import re
+from datetime import UTC, datetime, timedelta
 from html import unescape
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
@@ -316,3 +317,11 @@ def test_facts_without_feeds_show_the_column_and_the_feeds_note(client, risk_run
     run_id, _, _ = risk_run
     html = client.get("/findings", params={"run_id": run_id}).text
     assert "risk-cell" in html and "No threat feed has been downloaded yet" in html
+
+
+def test_findings_say_when_a_threat_feed_copy_is_old(client, risk_run, add_feeds, seed):
+    run_id, _, _ = risk_run
+    add_feeds()
+    seed.clock.now, seed.clock.step = datetime(2026, 11, 25, tzinfo=UTC), timedelta(0)
+    html = unescape(client.get("/findings", params={"run_id": run_id}).text)
+    assert '<p class="notice feed-note">The CISA KEV copy is from 2026-11-15 (10 days old)' in html

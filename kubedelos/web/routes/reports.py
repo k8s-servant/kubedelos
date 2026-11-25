@@ -37,7 +37,7 @@ from kubedelos.store.queries import (
     run_namespaces,
 )
 from kubedelos.trivy.runner import error_cause
-from kubedelos.web.pages import MAX_ID, open_db, render, risk_view, shown_context
+from kubedelos.web.pages import MAX_ID, feed_view, open_db, render, risk_view, shown_context
 from kubedelos.web.routes.findings import view_filter
 
 router = APIRouter()
@@ -138,7 +138,7 @@ def report(request: Request, run_id: int | None = Query(None, ge=1, le=MAX_ID)) 
         if run is None:
             return render(request, "report.html", ctx)
         counts = kpis(conn, run.id)
-        risk = risk_view(conn, run.id)
+        risk = risk_view(conn, run.id) | feed_view(request, conn)
         fixes = fix_by_fix(conn, run.id, REPORT_FIXES, today=now.date(), scored=risk["risk_shown"])
         failed, failed_total = failed_images(conn, run.id, REPORT_FAILED) if counts.images_failed else ([], 0)
     ctx.update(
