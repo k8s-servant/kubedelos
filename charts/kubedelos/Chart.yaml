@@ -4,8 +4,8 @@ description: >-
   Kubernetes image vulnerability scanner with a web UI and scheduled sweeps
   (kubedelos serve)
 type: application
-version: 0.3.1
-appVersion: 0.3.1
+version: 0.4.0
+appVersion: 0.4.0
 kubeVersion: '>=1.29.0-0'
 home: https://github.com/k8s-servant/kubedelos
 icon: >-

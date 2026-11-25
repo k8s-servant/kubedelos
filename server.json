@@ -8,13 +8,13 @@
     "source": "github"
   },
   "websiteUrl": "https://github.com/k8s-servant/kubedelos/blob/main/docs/mcp.md",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "packages": [
     {
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "kubedelos",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
