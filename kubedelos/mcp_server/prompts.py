@@ -84,8 +84,19 @@ Explain {vuln_id} for {scope}.
    workloads that have it, and any active risk acceptance.
 2. For the most exposed workload (external or unknown exposure first), call workload(namespace, name{cluster_kw}).
 
-Report what the CVE allows an attacker to do, where it runs, how exposed those workloads are (a fact of null means not
-collected, so treat it as possibly exposed), whether a fixed version exists, and whether the risk is accepted.
+Known exploitation comes first. If kev is true, lead with it: CISA lists the CVE as exploited in the wild (since
+kev_added). A kev of null means no KEV copy has been downloaded yet, so whether it is exploited is unknown: say so, and
+never read it as not exploited. Give epss as the probability of exploitation in the next 30 days and epss_percentile as
+its rank among all CVEs; a null epss means EPSS has no score for it, or no EPSS copy was downloaded. risk.feeds says
+when each copy was fetched: mention an old copy.
+
+Each workload has a risk score and its factors (severity, exploited, exposure, host, rights, with points and a reason).
+Explain which factors drove the score of the riskiest workloads. The score is kubedelos's own 0-100 ranking, not a CVE
+severity: never present it as one. If risk.shown is false, there is no score; say so plainly.
+
+Report what the CVE allows an attacker to do, whether it is known to be exploited, where it runs, how exposed those
+workloads are (a fact of null means not collected, so treat it as possibly exposed), whether a fixed version exists,
+and whether the risk is accepted.
 
 """
     + CLOSING
@@ -131,7 +142,8 @@ def attack_paths(workload: str | None = None, cluster: str | None = None) -> str
 
 
 def explain_cve(vuln_id: str, cluster: str | None = None) -> str:
-    """Explain one CVE: what it allows, where it runs, whether a fix exists and whether the risk is accepted."""
+    """Explain one CVE: what it allows, whether it is exploited, where it runs, what drove its score, whether a fix
+    exists and whether the risk is accepted."""
     if not vuln_id or not _VULN_ID.fullmatch(vuln_id):  # required, so empty is invalid, not omitted
         raise ValueError("invalid vuln_id")
     return EXPLAIN_CVE.format(vuln_id=vuln_id, **_cluster_parts(cluster))
