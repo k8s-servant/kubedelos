@@ -157,8 +157,7 @@ at once and leaves the download to finish on its own. A
 failure outside a single feed's download (an unexpected error in the refresh itself) is logged as `threat feeds not
 updated: <reason>`.
 
-A scan checks the feeds before it lists the cluster, and a cancel is not checked during the download. A slow feed can
-therefore delay a cancel that arrives at that point by up to the timeouts above.
+A scan checks the feeds before it lists the cluster.
 
 ### The switch
 
