@@ -197,13 +197,15 @@ def _backing_off(conn: sqlite3.Connection, name: str, now: datetime) -> bool:
 
 def _record_failure(conn: sqlite3.Connection, name: str, now: datetime) -> int:
     """Count one more failed download of ``name`` at ``now``; returns the failures in a row."""
+    # One transaction: the write lock the upsert takes is held until the read, so the count is this upsert's, not one
+    # another process wrote after it. (No RETURNING: older SQLite builds that Python 3.12 may ship lack it.)
     with conn:
         conn.execute(
             "INSERT INTO threat_feed_failure (name, failed_at, failures) VALUES (?, ?, 1)"
             " ON CONFLICT (name) DO UPDATE SET failed_at = excluded.failed_at, failures = failures + 1",
             (name, now.isoformat()),
         )
-    return conn.execute("SELECT failures FROM threat_feed_failure WHERE name = ?", (name,)).fetchone()[0]
+        return conn.execute("SELECT failures FROM threat_feed_failure WHERE name = ?", (name,)).fetchone()[0]
 
 
 def _clear_failures(conn: sqlite3.Connection, name: str) -> None:
@@ -284,7 +286,6 @@ def refresh(conn: sqlite3.Connection, client: httpx.Client, now: datetime) -> di
             url, parse, _ = _FETCH[name]
             version, rows = parse(_download(client, url))
             results[name] = "updated" if _store(conn, name, version, rows, now) else "fresh"
-            _clear_failures(conn, name)
         except Exception as exc:  # a feed never fails its caller; the old copy stays
             try:
                 wait = backoff(_record_failure(conn, name, now))
@@ -292,6 +293,11 @@ def refresh(conn: sqlite3.Connection, client: httpx.Client, now: datetime) -> di
             except Exception:  # the database itself is the trouble: log the download's error alone
                 logger.warning("threat feed %s not updated: %s", name, exc)
             results[name] = "failed"
+            continue
+        try:  # the copy is stored: a failure to clear the back-off must not count as a failed download
+            _clear_failures(conn, name)
+        except Exception as exc:
+            logger.warning("threat feed %s updated, but its failure count was not reset: %s", name, exc)
     return results
 
 

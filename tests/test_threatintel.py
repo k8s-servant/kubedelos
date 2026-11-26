@@ -442,3 +442,18 @@ def test_a_successful_download_clears_the_backoff(conn):
 def test_a_failure_from_the_future_does_not_back_off(conn):
     threatintel.refresh(conn, Feeds(status=503).client(), NOW + timedelta(days=2))  # the clock went back since
     assert threatintel.refresh(conn, Feeds().client(), NOW)["kev"] == "updated"
+
+
+def test_a_stored_copy_is_updated_even_if_its_failure_count_cannot_be_reset(conn, monkeypatch, caplog):
+    threatintel.refresh(conn, Feeds(status=503).client(), NOW)
+
+    def locked(conn, name):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(threatintel, "_clear_failures", locked)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, Feeds().client(), NOW + timedelta(hours=1)) == {
+            "kev": "updated",
+            "epss": "updated",
+        }
+    assert "threat feed kev updated, but its failure count was not reset: database is locked" in caplog.text
