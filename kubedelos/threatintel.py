@@ -7,7 +7,9 @@ cluster. ``KUBEDELOS_THREAT_FEEDS=false`` turns them off.
 
 A feed never fails a scan or the UI start. A download that is too large, an HTTP error, or a body that is not the
 feed (no valid row, too many rows, a wrong header, broken JSON or gzip, or fewer than half the rows of a stored
-copy younger than ``SHRINK_GRACE``) is logged as one warning and the last stored copy is kept.
+copy younger than ``SHRINK_GRACE``) is logged as one warning and the last stored copy is kept. A failure is recorded in
+``threat_feed_failure``, and the feed is not tried again for ``BACKOFF_FIRST``, doubling with each further failure up to
+``MAX_AGE``, so a network that drops packets costs one wait per back-off window instead of one before every scan.
 Storing is one ``BEGIN IMMEDIATE`` transaction that checks freshness again under the lock, so two processes that
 refresh at once store the feed once.
 """
@@ -35,6 +37,7 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 # EPSS moved from epss.cyentia.com in 2025 (the old host 301-redirects here); this URL 302s to the dated file.
 EPSS_URL = "https://epss.empiricalsecurity.com/epss_scores-current.csv.gz"
 MAX_AGE = timedelta(hours=24)
+BACKOFF_FIRST = timedelta(hours=1)  # the wait after a first failed download; it doubles with each further one
 # How long a sharply smaller copy is refused: after that the old copy is replaced anyway, so a feed that really did
 # lose half its rows heals itself instead of being refused for ever.
 SHRINK_GRACE = 7 * MAX_AGE
@@ -179,6 +182,35 @@ def _is_fresh(conn: sqlite3.Connection, name: str, now: datetime) -> bool:
     return timedelta(0) <= now - datetime.fromisoformat(row[0]) < MAX_AGE
 
 
+def backoff(failures: int) -> timedelta:
+    """How long a feed is left alone after its ``failures``-th failed download in a row."""
+    return min(BACKOFF_FIRST * 2 ** max(failures - 1, 0), MAX_AGE)
+
+
+def _backing_off(conn: sqlite3.Connection, name: str, now: datetime) -> bool:
+    row = conn.execute("SELECT failed_at, failures FROM threat_feed_failure WHERE name = ?", (name,)).fetchone()
+    if row is None:
+        return False
+    # A failure from the future (the clock went back) does not hold the feed back.
+    return timedelta(0) <= now - datetime.fromisoformat(row[0]) < backoff(row[1])
+
+
+def _record_failure(conn: sqlite3.Connection, name: str, now: datetime) -> int:
+    """Count one more failed download of ``name`` at ``now``; returns the failures in a row."""
+    with conn:
+        conn.execute(
+            "INSERT INTO threat_feed_failure (name, failed_at, failures) VALUES (?, ?, 1)"
+            " ON CONFLICT (name) DO UPDATE SET failed_at = excluded.failed_at, failures = failures + 1",
+            (name, now.isoformat()),
+        )
+    return conn.execute("SELECT failures FROM threat_feed_failure WHERE name = ?", (name,)).fetchone()[0]
+
+
+def _clear_failures(conn: sqlite3.Connection, name: str) -> None:
+    with conn:
+        conn.execute("DELETE FROM threat_feed_failure WHERE name = ?", (name,))
+
+
 def _store_kev(conn: sqlite3.Connection, rows: dict[str, date | None]) -> None:
     conn.execute("UPDATE threat_intel SET kev = 0, kev_added = NULL WHERE kev != 0 OR kev_added IS NOT NULL")
     conn.executemany(
@@ -238,20 +270,33 @@ def _store(conn: sqlite3.Connection, name: str, version: str | None, rows: dict,
 
 
 def refresh(conn: sqlite3.Connection, client: httpx.Client, now: datetime) -> dict[str, str]:
-    """Download each stale feed and store it: per feed ``"fresh"`` (skipped), ``"updated"`` or ``"failed"``."""
+    """Download each stale feed and store it: per feed ``"fresh"`` (skipped), ``"backoff"`` (skipped after a recent
+    failure), ``"updated"`` or ``"failed"``."""
     results: dict[str, str] = {}
     for name in FEEDS:
         try:
             if _is_fresh(conn, name, now):
                 results[name] = "fresh"
                 continue
+            if _backing_off(conn, name, now):
+                results[name] = "backoff"  # logged when it failed, with the time of the next attempt
+                continue
             url, parse, _ = _FETCH[name]
             version, rows = parse(_download(client, url))
             results[name] = "updated" if _store(conn, name, version, rows, now) else "fresh"
+            _clear_failures(conn, name)
         except Exception as exc:  # a feed never fails its caller; the old copy stays
-            logger.warning("threat feed %s not updated: %s", name, exc)
+            try:
+                wait = backoff(_record_failure(conn, name, now))
+                logger.warning("threat feed %s not updated: %s; next attempt in %s", name, exc, _hours(wait))
+            except Exception:  # the database itself is the trouble: log the download's error alone
+                logger.warning("threat feed %s not updated: %s", name, exc)
             results[name] = "failed"
     return results
+
+
+def _hours(wait: timedelta) -> str:
+    return f"{int(wait.total_seconds() // 3600)} h"
 
 
 def refresh_feeds(
