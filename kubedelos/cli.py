@@ -178,17 +178,25 @@ def data_reset(
     would keep using the deleted file.
     """
     settings = _load_settings()
-    if runlock.any_live_run(settings.data_dir):
-        typer.echo("error: a scan is running on this data directory; wait for it or cancel it first", err=True)
-        raise typer.Exit(2)
+    if not settings.data_dir.exists() and not (cache and settings.cache_dir.exists()):
+        typer.echo("nothing to delete")  # and no lock file left behind on a machine that never ran kubedelos
+        return
     try:
         with runlock.hold_serve(settings.data_dir):  # held while deleting, so serve can't start meanwhile
+            _refuse_while_scanning(settings)
             deleted = _reset(settings, cache=cache, yes=yes)
     except runlock.AlreadyServing as exc:
         typer.echo("error: kubedelos serve is running on this data directory; stop it first", err=True)
         raise typer.Exit(2) from exc
     if deleted:
         typer.echo(f"deleted {deleted} {plural(deleted, 'item')}; the next start creates an empty database")
+
+
+def _refuse_while_scanning(settings: Settings) -> None:
+    """Exit 2 when a scan holds a run lock: a scan an open kubedelos ui starts takes no serve lock."""
+    if runlock.any_live_run(settings.data_dir):
+        typer.echo("error: a scan is running on this data directory; wait for it or cancel it first", err=True)
+        raise typer.Exit(2)
 
 
 def _reset(settings: Settings, *, cache: bool, yes: bool) -> int:
@@ -214,6 +222,7 @@ def _reset(settings: Settings, *, cache: bool, yes: bool) -> int:
     if not yes and not typer.confirm("Delete them?", default=False):
         typer.echo("nothing was deleted")
         raise typer.Exit(1)
+    _refuse_while_scanning(settings)  # again: one may have started while the question was open
     for path in targets:
         if path.is_dir() and not path.is_symlink():
             shutil.rmtree(path)

@@ -815,3 +815,20 @@ def test_data_reset_refuses_while_serve_runs(fake_env):
         r = CliRunner().invoke(app, ["data", "reset", "--yes"])
     assert r.exit_code == 2 and "kubedelos serve is running" in r.output
     assert (data / "kubedelos.db").exists()
+
+
+def test_data_reset_on_a_clean_machine_creates_nothing(fake_env):
+    r = CliRunner().invoke(app, ["data", "reset", "--cache", "--yes"])
+    assert r.exit_code == 0 and "nothing to delete" in r.output
+    assert not (fake_env / "data").exists()
+
+
+def test_data_reset_checks_for_a_scan_again_after_the_question(fake_env, monkeypatch):
+    from kubedelos import cli
+
+    data, _ = _data_files(fake_env)
+    answers = iter([False, True])  # no scan when it lists, one by the time it is confirmed
+    monkeypatch.setattr(cli.runlock, "any_live_run", lambda data_dir: next(answers))
+    r = CliRunner().invoke(app, ["data", "reset"], input="y\n")
+    assert r.exit_code == 2 and "a scan is running" in r.output
+    assert (data / "kubedelos.db").exists()
