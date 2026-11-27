@@ -535,3 +535,13 @@ def test_deleting_needs_the_csrf_token(client, seed):
 def test_serve_offers_no_delete(serve_client):
     assert "Delete this cluster's history" not in serve_client.get("/settings").text
     assert signed_post(serve_client, "/settings/forget", {"confirm": "my-cluster"}).status_code == 404
+
+
+def test_deleting_is_refused_while_the_uis_own_scan_is_starting(client, seed, monkeypatch):
+    from kubedelos.web.jobs import JobView
+
+    _seed_history(seed)
+    starting = JobView("starting", None, None, None, None, None, "my-cluster")  # no run row yet
+    monkeypatch.setattr(client.app.state.scans, "view", lambda: starting)
+    assert _forget(client, confirm="my-cluster").status_code == 409
+    assert _counts(seed) == (2, 1)

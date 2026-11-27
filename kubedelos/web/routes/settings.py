@@ -208,11 +208,13 @@ def settings(request: Request) -> HTMLResponse:
 
 
 def _counted(runs: int, accepted: int) -> str:
+    """What was deleted: the acceptances only when there were any, since they go only when ticked."""
     text = f"{runs} {plural(runs, 'run')}"
     return text + (f" and {accepted} risk {plural(accepted, 'acceptance')}" if accepted else "")
 
 
 def _history_text(runs: int, accepted: int) -> str:
+    """What the cluster holds, both counts always, so "0 risk acceptances" says the box would delete nothing."""
     return f"{runs} {plural(runs, 'run')} and {accepted} risk {plural(accepted, 'acceptance')}"
 
 
@@ -247,6 +249,9 @@ def _forget(request: Request, body: bytes) -> Response:
     if fields.get("confirm", [""])[0].strip() != context:
         message = f"Type {context} to confirm: nothing was deleted."
         return render(request, "error.html", {"title": "Not confirmed", "message": message}, 400)
+    # The UI's own job counts before it has a run row. A scan that starts after this check can't hurt the history:
+    # its run row needs the write lock forget_cluster holds, so it lands after the delete, as the first run of a fresh
+    # history. One that wrote its row first is "running", and forget_cluster refuses then.
     job = request.app.state.scans.view()
     busy = "a scan of this cluster is running: wait for it to finish or cancel it, then try again"
     if job is not None and job.state in ACTIVE:
