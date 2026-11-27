@@ -31,7 +31,7 @@ from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.scheduler import Sweeper, cron_error
-from kubedelos.store import queue, runlock
+from kubedelos.store import queue, retention, runlock
 from kubedelos.store.clusters import merge_contexts
 from kubedelos.store.db import connect
 from kubedelos.trivy.binary import TrivyVerificationError, ensure_trivy
@@ -252,6 +252,8 @@ def ui(
             # Runs recorded before a context's API server was known are keyed by its name; fold them into its cluster,
             # so contexts of one cluster share one history. An unreadable kubeconfig maps nothing, so nothing moves.
             merged = merge_contexts(conn, kube_client.cluster_keys(settings))
+            # The same retention as serve's sweep, once per start, so a laptop database doesn't grow for ever.
+            pruned = retention.prune(conn, now=datetime.now(UTC), retention_days=settings.retention_days)
         finally:
             conn.close()
     except Exception as exc:
@@ -259,6 +261,9 @@ def ui(
         raise typer.Exit(2) from exc
     if stale:
         typer.echo(f"note: closed {len(stale)} interrupted {plural(len(stale), 'run')}")
+    if pruned:
+        older = f"older than {settings.retention_days} {plural(settings.retention_days, 'day')}"
+        typer.echo(f"note: deleted {len(pruned)} {plural(len(pruned), 'run')} {older}")
     for merged_context, key in merged:
         typer.echo(f"note: merged the runs of context {_one_line(merged_context)} into its cluster {_one_line(key)}")
     token = secrets.token_urlsafe(32)

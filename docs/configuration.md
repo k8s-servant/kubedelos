@@ -27,6 +27,7 @@ Settings page shows every setting in use, its value and where the value came fro
 | `KUBEDELOS_TEAM_LABEL` | `kubedelos.io/team` |
 | `KUBEDELOS_ATTACK_SURFACE` | `true`: record the [attack-surface facts](attack-surface.md) with each scan |
 | `KUBEDELOS_THREAT_FEEDS` | `true`: download CISA KEV and EPSS at most once a day for the [risk score](risk-score.md) |
+| `KUBEDELOS_RETENTION_DAYS` | `180`: runs older than this are deleted when `kubedelos ui` starts and after each `serve` sweep, except the newest run of each comparable scan; `0` keeps every run |
 
 List variables take a JSON list, not a comma-separated string (`KUBEDELOS_PKG_TYPES` is the exception: `os,library`):
 
@@ -50,7 +51,6 @@ These only matter to the in-cluster mode.
 | `KUBEDELOS_SWEEP_SCHEDULE` | `0 3 * * *` (5-field cron) |
 | `KUBEDELOS_SWEEP_TIMEZONE` | `UTC` (an IANA name such as `Europe/Vilnius`) |
 | `KUBEDELOS_SWEEP_ENABLED` | `true`; `false` turns the schedule off |
-| `KUBEDELOS_RETENTION_DAYS` | `180`; `0` keeps every run |
 | `KUBEDELOS_READ_ONLY` | `false`; `true` refuses every write |
 | `KUBEDELOS_TRUST_PROXY_HEADERS` | `false`; `true` reads the user's name from the identity header |
 | `KUBEDELOS_IDENTITY_HEADER` | `X-Auth-Request-Email` |

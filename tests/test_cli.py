@@ -682,3 +682,51 @@ def test_ui_refreshes_the_threat_feeds_in_the_background_before_serving(ui_env, 
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output
     assert order == ["feeds", "serve"]
+
+
+def _old_runs(count, days_ago):
+    from datetime import UTC, datetime, timedelta
+
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+    from kubedelos.store.repo import Repo
+
+    then = datetime.now(UTC) - timedelta(days=days_ago)
+    conn = connect(Settings().db_path)
+    try:
+        repo = Repo(conn, clock=lambda: then)
+        ids = []
+        for _ in range(count):
+            run_id = repo.start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="os", scope=Settings().scope)
+            repo.finish_run(run_id, "ok")
+            ids.append(run_id)
+        return ids
+    finally:
+        conn.close()
+
+
+def _run_ids():
+    from kubedelos.config import Settings
+    from kubedelos.store.db import connect
+
+    conn = connect(Settings().db_path)
+    try:
+        return [r[0] for r in conn.execute("SELECT id FROM scan_run ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_ui_applies_the_retention_at_startup(ui_env):
+    _, newest = _old_runs(2, days_ago=200)
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "note: deleted 1 run older than 180 days\n" in r.output
+    assert _run_ids() == [newest]  # the newest run of a comparable scan always stays
+
+
+def test_ui_retention_of_zero_keeps_every_run(ui_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_RETENTION_DAYS", "0")
+    ids = _old_runs(2, days_ago=200)
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "older than" not in r.output and _run_ids() == ids
