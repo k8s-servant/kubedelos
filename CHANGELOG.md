@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.6.0](https://github.com/k8s-servant/kubedelos/compare/v0.5.0...v0.6.0) (2026-11-27)
+
+
+### Features
+
+* add kubedelos data reset to delete the local database and cache ([#108](https://github.com/k8s-servant/kubedelos/issues/108)) ([d3af3dc](https://github.com/k8s-servant/kubedelos/commit/d3af3dce43ffba227d9762bd6968dcc0940fd241))
+* delete a cluster's scan history from the local ui settings page ([#107](https://github.com/k8s-servant/kubedelos/issues/107)) ([f4e2343](https://github.com/k8s-servant/kubedelos/commit/f4e2343d7afb281bcb591e33ab9cfa7ed25c5cd0))
+* delete runs past the retention period when kubedelos ui starts ([#106](https://github.com/k8s-servant/kubedelos/issues/106)) ([802c27c](https://github.com/k8s-servant/kubedelos/commit/802c27c9f65cbda0bae023bd76391ab37ed026c4))
+
 ## [0.5.0](https://github.com/k8s-servant/kubedelos/compare/v0.4.0...v0.5.0) (2026-11-27)
 
 
