@@ -12,6 +12,10 @@ scans one image with the cloud identity and the mounted Docker configs, one test
 pod pull secrets are not used: an image only a pod pull secret can open fails here and works in a scan.
 No token is shown or read for display: ``Settings`` holds none (a test keeps it that way), and a failed test
 shows Trivy's redacted cause only.
+
+In ``kubedelos ui`` the page ends with "Delete this cluster's history": ``POST /settings/forget`` deletes the shown
+cluster's runs (and, when ticked, its risk acceptances) once its name is typed to confirm, and refuses while a scan of
+it runs. ``serve`` has no such form: there the history is shared, and anyone who can write could wipe it.
 """
 
 import logging
@@ -23,7 +27,7 @@ from pathlib import Path
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from starlette.concurrency import run_in_threadpool
 
 from kubedelos.config import Settings, setting_sources
@@ -33,12 +37,14 @@ from kubedelos.models import InventoryItem, registry_host
 from kubedelos.registry import dockerconfig
 from kubedelos.registry.access import RegistryAccess
 from kubedelos.store import intel
+from kubedelos.store.clusters import ClusterBusy, forget_cluster, history_counts
 from kubedelos.store.queries import newest_run, run_registry_hosts
 from kubedelos.trivy.binary import ensure_trivy
 from kubedelos.trivy.cache import TrivyCache
 from kubedelos.trivy.pins import TRIVY_VERSION
 from kubedelos.trivy.runner import error_cause, scan_image
-from kubedelos.web.pages import cluster_of, open_db, render, shown_context
+from kubedelos.web.jobs import ACTIVE
+from kubedelos.web.pages import cluster_of, link, open_db, open_db_rw, plural, render, scannable_contexts, shown_context
 
 router = APIRouter()
 logger = logging.getLogger("kubedelos.web")
@@ -179,6 +185,7 @@ def settings(request: Request) -> HTMLResponse:
         cluster = request.state.cluster
         newest = newest_run(conn, cluster, cluster_scope=False)  # the sidebar's "scanned N ago"
         fetched = intel.feeds(conn)
+        runs, accepted = history_counts(conn, cluster)
     trivy = f"custom: {Path(current.trivy_path)}" if current.trivy_path else f"v{TRIVY_VERSION} (pinned)"
     ctx = {
         "now": request.app.state.clock(),
@@ -194,8 +201,68 @@ def settings(request: Request) -> HTMLResponse:
             ("CISA KEV last fetched", fetched_text(fetched.get("kev"))),
             ("EPSS last fetched", fetched_text(fetched.get("epss"))),
         ],
+        "history": None if request.app.state.serve else _history_text(runs, accepted),
+        "deleted": _deleted_text(request),
     }
     return render(request, "settings.html", ctx)
+
+
+def _counted(runs: int, accepted: int) -> str:
+    text = f"{runs} {plural(runs, 'run')}"
+    return text + (f" and {accepted} risk {plural(accepted, 'acceptance')}" if accepted else "")
+
+
+def _history_text(runs: int, accepted: int) -> str:
+    return f"{runs} {plural(runs, 'run')} and {accepted} risk {plural(accepted, 'acceptance')}"
+
+
+def _deleted_text(request: Request) -> str | None:
+    """The notice after a delete, from the redirect's ``deleted`` and ``acceptances`` counts."""
+    params = request.query_params
+    try:
+        runs, accepted = int(params["deleted"]), int(params.get("acceptances", "0"))
+    except (KeyError, ValueError):
+        return None
+    if runs < 0 or accepted < 0:
+        return None
+    return f"Deleted {_counted(runs, accepted)} of this cluster."
+
+
+@router.post("/settings/forget")
+async def forget(request: Request) -> Response:
+    if request.app.state.serve:
+        return Response(status_code=404)
+    body = await request.body()  # the CSRF guard has read it already
+    return await run_in_threadpool(_forget, request, body)
+
+
+def _forget(request: Request, body: bytes) -> Response:
+    try:
+        fields = parse_qs(body[:_MAX_BODY].decode(), keep_blank_values=True, max_num_fields=100, errors="strict")
+    except ValueError:
+        return render(request, "error.html", {"title": "Bad request", "message": "the form could not be read"}, 400)
+    with open_db(request) as conn:
+        context = shown_context(request, conn, wanted=fields.get("context", [""])[0] or request.app.state.context)
+    cluster = request.state.cluster
+    if fields.get("confirm", [""])[0].strip() != context:
+        message = f"Type {context} to confirm: nothing was deleted."
+        return render(request, "error.html", {"title": "Not confirmed", "message": message}, 400)
+    job = request.app.state.scans.view()
+    busy = "a scan of this cluster is running: wait for it to finish or cancel it, then try again"
+    if job is not None and job.state in ACTIVE:
+        with open_db(request) as conn:
+            if cluster_of(request, conn, job.context) == cluster:
+                return render(request, "error.html", {"title": "Not now", "message": busy}, 409)
+    try:
+        with open_db_rw(request) as conn:
+            done = forget_cluster(conn, cluster, acceptances=fields.get("acceptances", [""])[0] == "on")
+    except ClusterBusy:  # a scan from another kubedelos process
+        return render(request, "error.html", {"title": "Not now", "message": busy}, 409)
+    # A cluster known only from its history is gone with it: go back to the startup context then.
+    request.state.context = context if context in scannable_contexts(request) else request.app.state.context
+    return RedirectResponse(
+        link(request, "/settings", deleted=done.runs, acceptances=done.acceptances), status_code=303
+    )
 
 
 def _result(request: Request, text: str, **extra: object) -> HTMLResponse:

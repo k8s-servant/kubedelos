@@ -4,9 +4,49 @@ Runs and accepted risks recorded earlier are keyed by the context name. Once the
 (``kube.client.cluster_keys``: its API server, TLS server name and CA), they belong to that cluster, so contexts that
 point at one cluster share one history.
 ``merge_contexts`` moves them over and renumbers each touched cluster 1..n by id, in one transaction.
+
+``forget_cluster`` deletes one cluster's history (its runs and all they hold, and its acceptances when asked), for the
+local UI's "start fresh" on a cluster that is gone or was only a test. Acceptances for all clusters are never touched.
 """
 
 import sqlite3
+from dataclasses import dataclass
+
+from kubedelos.store.queue import write_lock
+from kubedelos.store.retention import delete_runs
+
+
+class ClusterBusy(Exception):
+    """A run of the cluster is still running, so its history can't be deleted now."""
+
+
+@dataclass(frozen=True)
+class Forgotten:
+    runs: int
+    acceptances: int
+
+
+def history_counts(conn: sqlite3.Connection, cluster: str) -> tuple[int, int]:
+    """How many runs, and how many acceptances scoped to it, ``cluster`` has."""
+    runs = conn.execute("SELECT COUNT(*) FROM scan_run WHERE cluster = ?", (cluster,)).fetchone()[0]
+    accepted = conn.execute("SELECT COUNT(*) FROM acceptance WHERE cluster = ?", (cluster,)).fetchone()[0]
+    return runs, accepted
+
+
+def forget_cluster(conn: sqlite3.Connection, cluster: str, *, acceptances: bool) -> Forgotten:
+    """Delete every run of ``cluster`` and, with ``acceptances``, the acceptances scoped to it, in one transaction.
+
+    Raises :class:`ClusterBusy` when one of its runs is ``running``; then nothing is deleted.
+    """
+    with write_lock(conn):
+        if conn.execute(
+            "SELECT 1 FROM scan_run WHERE cluster = ? AND status = 'running' LIMIT 1", (cluster,)
+        ).fetchone():
+            raise ClusterBusy("a scan of this cluster is running")
+        ids = [row[0] for row in conn.execute("SELECT id FROM scan_run WHERE cluster = ? ORDER BY id", (cluster,))]
+        delete_runs(conn, ids)
+        dropped = conn.execute("DELETE FROM acceptance WHERE cluster = ?", (cluster,)).rowcount if acceptances else 0
+    return Forgotten(runs=len(ids), acceptances=dropped)
 
 
 def merge_contexts(conn: sqlite3.Connection, keys: dict[str, str]) -> list[tuple[str, str]]:

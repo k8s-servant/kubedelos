@@ -144,7 +144,11 @@ follows the system light or dark theme.
 - **Settings (`/settings`)**: every setting this `kubedelos ui` started with, read-only, with its `KUBEDELOS_*`
   variable (or flag), its value and where the value came from (flag, environment or default), then the database file,
   the data and cache directories, the Trivy in use and the log level. No credentials are listed: kubedelos holds none,
-  and registry logins stay in Docker's own config.
+  and registry logins stay in Docker's own config. At the bottom, **Delete this cluster's history** deletes every run
+  of the shown cluster (all its contexts) once you type its name; tick the box to delete its risk acceptances too
+  (acceptances for all clusters always stay). It is refused while a scan of that cluster runs, cannot be undone, and
+  is not offered in `kubedelos serve`. A cluster no kubeconfig context points at any more leaves the switcher with its
+  history.
 - **About (`/about`)**: how fresh the data is (when Trivy built the vulnerability and Java DBs in use, whether a
   newer one is out, and the shown context's newest scan), the kubedelos, Trivy and Python versions, the license, the
   project links including the security policy, and what kubedelos never does.
