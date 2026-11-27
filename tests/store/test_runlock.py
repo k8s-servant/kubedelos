@@ -184,3 +184,12 @@ def test_serve_lock_held_by_another_process(tmp_path):
         proc.wait(timeout=10)
     with runlock.hold_serve(tmp_path):  # the OS freed the lock with the process
         pass
+
+
+def test_any_live_run_sees_a_held_lock_only(tmp_path):
+    assert not runlock.any_live_run(tmp_path)  # no runs directory at all
+    with runlock.hold(tmp_path):
+        assert runlock.any_live_run(tmp_path)
+    assert not runlock.any_live_run(tmp_path)
+    (tmp_path / "runs" / "deadbeef.lock").write_text("")  # left by a process that died
+    assert not runlock.any_live_run(tmp_path)

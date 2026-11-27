@@ -171,6 +171,20 @@ requests past the same age and result-cache entries older than 24 hours go too (
 acceptances are never deleted. If the database is busy, the start prints `note: old runs were not deleted: ...` and
 carries on.
 
+## Starting fresh
+
+To delete one cluster's history, use **Delete this cluster's history** on its Settings page. To delete everything:
+
+```bash
+kubedelos data reset            # the database: every run, finding and risk acceptance
+kubedelos data reset --cache    # and the Trivy binary, DBs and layer cache (about 1.5 GB with the Java DB)
+```
+
+It lists what it deletes, with sizes, and asks first (`--yes` skips the question). It is refused while a scan or
+`kubedelos serve` uses the data directory; stop every `kubedelos ui` first too. `--cache` deletes only kubedelos's own
+entries in the cache directory (`trivy`, `trivy-cache`, `trivy-layers`), so a shared `KUBEDELOS_CACHE_DIR` keeps the
+rest. The next start creates an empty database, and the next scan downloads Trivy and its DBs again.
+
 ## Related
 
 - [How a scan works](how-scans-work.md): what a scan started from the Scans page does.

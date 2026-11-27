@@ -126,6 +126,16 @@ def is_owned(data_dir: Path, owner: str) -> bool:
         os.close(fd)
 
 
+def any_live_run(data_dir: Path) -> bool:
+    """True when a scan in any process holds one of ``data_dir``'s run locks (``kubedelos data reset`` checks it)."""
+    runs = Path(data_dir) / "runs"
+    try:
+        owners = [path.stem for path in runs.glob("*.lock")]
+    except OSError:
+        return False
+    return any(is_owned(data_dir, owner) for owner in owners)
+
+
 def close_stale_runs(conn: sqlite3.Connection, data_dir: Path) -> list[int]:
     """Mark ``failed`` every running run no live process owns, note why, and return their ids."""
     repo = Repo(conn)
