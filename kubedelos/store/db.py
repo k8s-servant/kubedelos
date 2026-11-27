@@ -262,6 +262,15 @@ MIGRATIONS: list[str | Callable[[sqlite3.Connection], None]] = [
     """
     ALTER TABLE scan_run ADD COLUMN trivy_db_built_at TEXT;
     """,
+    # 16: each threat feed's failed downloads since its last good one, so a refresh backs off instead of waiting out
+    # the connect timeouts before every scan. A good download deletes the row.
+    """
+    CREATE TABLE threat_feed_failure (
+        name TEXT PRIMARY KEY CHECK (name IN ('kev', 'epss')),
+        failed_at TEXT NOT NULL,
+        failures INTEGER NOT NULL
+    );
+    """,
 ]
 
 

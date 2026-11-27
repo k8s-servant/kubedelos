@@ -159,7 +159,8 @@ helm upgrade kubedelos oci://ghcr.io/k8s-servant/charts/kubedelos -n kubedelos -
 or set `threatFeeds.enabled: true` in your values file.
 
 The feeds are fetched before the next scan. Without egress each try times out (10 s to connect), logs
-`threat feed <name> not updated: ...` and lets the scan go on. The Settings page shows when each feed was last fetched.
+`threat feed <name> not updated: ...; next attempt in 1 h` and lets the scan go on; it backs off, doubling up to 24 h,
+before trying that feed again. The Settings page shows when each feed was last fetched.
 
 ## Storage
 

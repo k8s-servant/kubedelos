@@ -150,12 +150,14 @@ stored copy is kept:
 - a copy with fewer than half the rows of the stored one, while the stored copy is younger than 7 days. After that the
   smaller copy is taken as the feed's real new size, so a feed that really shrank is not refused for ever.
 
-Each failure is logged once per feed as `threat feed <name> not updated: <reason>`, and the next scan tries again. A
+Each failure is logged once per feed as `threat feed <name> not updated: <reason>; next attempt in 1 h`. Until then no
+scan tries that feed again, so a network that drops the requests costs one wait, not one before every scan. Each
+further failure doubles the wait, up to 24 h; a good download resets it. A scan cancelled while a download hangs stops
+at once and leaves the download to finish on its own. A
 failure outside a single feed's download (an unexpected error in the refresh itself) is logged as `threat feeds not
 updated: <reason>`.
 
-A scan checks the feeds before it lists the cluster, and a cancel is not checked during the download. A slow feed can
-therefore delay a cancel that arrives at that point by up to the timeouts above.
+A scan checks the feeds before it lists the cluster.
 
 ### The switch
 

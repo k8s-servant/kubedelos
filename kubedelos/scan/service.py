@@ -103,10 +103,7 @@ def run_scan(
 
     if settings.threat_feeds:
         on_progress(Progress(total=0, done=0, errors=0, current=None, phase="threat-feeds"))
-        try:
-            threatintel.refresh_feeds(settings)  # at most once a day; logs and keeps the old copy on failure
-        except Exception as exc:  # a feed never fails a scan
-            logger.warning("threat feeds not updated: %s", exc)
+        _refresh_feeds(settings, cancel)
     # The lock exists before the run row, so the stale-run sweep never sees this run without a live owner.
     with runlock.hold(settings.data_dir) as owner:
         # A user-supplied Trivy may be any version: record it as such and keep it away from the shared cache.
@@ -149,6 +146,26 @@ def run_scan(
         status = "cancelled" if cancel.is_set() else "partial" if errors else "ok"
         repo.finish_run(run_id, status)
     return ScanOutcome(run_id=run_id, warnings=inventory.warnings, status=status)
+
+
+_CANCEL_POLL_S = 0.2
+
+
+def _refresh_feeds(settings: Settings, cancel: threading.Event) -> None:
+    """Refresh the threat feeds (at most once a day, backing off after a failure) on a daemon thread, and wait for it
+    unless the scan is cancelled meanwhile: a download on a network that drops packets waits out its timeouts, and a
+    cancel must not wait with it. A refresh left running finishes or fails on its own; it never fails the scan."""
+
+    def refresh() -> None:
+        try:
+            threatintel.refresh_feeds(settings)  # logs and keeps the old copy on failure
+        except Exception as exc:
+            logger.warning("threat feeds not updated: %s", exc)
+
+    thread = threading.Thread(target=refresh, name="kubedelos-threat-feeds", daemon=True)
+    thread.start()
+    while thread.is_alive() and not cancel.wait(_CANCEL_POLL_S):
+        thread.join(_CANCEL_POLL_S)
 
 
 class RetryRefused(Exception):

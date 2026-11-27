@@ -47,7 +47,7 @@ def test_migration_13_backfills_risk_points(tmp_path):
     old.close()
     conn = connect(path)
     try:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(MIGRATIONS) == 16
         points = [r[0] for r in conn.execute("SELECT risk_points FROM workload ORDER BY id")]
         assert points == [workload_points(_FACTS), NO_FACTS_POINTS, NO_FACTS_POINTS]
         assert NO_FACTS_POINTS == 18

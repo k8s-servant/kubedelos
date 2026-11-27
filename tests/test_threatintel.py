@@ -321,8 +321,9 @@ def test_a_feed_that_shrank_sharply_is_refused(conn, caplog):
     warnings = [r.getMessage() for r in caplog.records if r.levelno == logging.WARNING]
     assert len(warnings) == 1 and warnings[0].startswith("threat feed kev not updated: ")
     assert _intel(conn) == before_intel and _feeds(conn)["kev"] == before_feeds["kev"]
-    assert threatintel.refresh(conn, Feeds(kev=_kev(3)).client(), later)["kev"] == "updated"  # at least half
-    assert _feeds(conn)["kev"] == (later.isoformat(), "2026.11.19", 3)
+    retry = later + threatintel.BACKOFF_FIRST  # the refusal counts as a failed download
+    assert threatintel.refresh(conn, Feeds(kev=_kev(3)).client(), retry)["kev"] == "updated"  # at least half
+    assert _feeds(conn)["kev"] == (retry.isoformat(), "2026.11.19", 3)
 
 
 def test_a_first_copy_has_no_floor(conn):
@@ -352,7 +353,7 @@ def test_a_shrunk_feed_is_accepted_once_the_old_copy_is_a_week_old(conn):
     within = NOW + timedelta(days=7) - timedelta(minutes=1)
     assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), within)["kev"] == "failed"
     assert _feeds(conn)["kev"] == (NOW.isoformat(), "2026.11.19", 4)
-    after = NOW + timedelta(days=7, minutes=1)
+    after = within + threatintel.BACKOFF_FIRST  # past the grace, and past the back-off the refusal started
     assert threatintel.refresh(conn, Feeds(kev=_kev(1)).client(), after)["kev"] == "updated"
     assert _feeds(conn)["kev"] == (after.isoformat(), "2026.11.19", 1)
 
@@ -393,3 +394,66 @@ def test_a_redirect_that_leaves_https_is_refused(conn, caplog):
     kev_warnings = [r.getMessage() for r in caplog.records if r.getMessage().startswith("threat feed kev ")]
     assert len(kev_warnings) == 1 and "https" in kev_warnings[0]
     assert _intel(conn) == before_intel and _feeds(conn)["kev"] == before_feeds["kev"]
+
+
+def _failures(conn):
+    return {r[0]: (r[1], r[2]) for r in conn.execute("SELECT name, failed_at, failures FROM threat_feed_failure")}
+
+
+def test_a_failed_download_backs_off_doubling_up_to_a_day(conn, caplog):
+    down = Feeds(status=503)
+    assert threatintel.refresh(conn, down.client(), NOW) == {"kev": "failed", "epss": "failed"}
+    assert _failures(conn) == {"kev": (NOW.isoformat(), 1), "epss": (NOW.isoformat(), 1)}
+    # Within the first hour no request is made and nothing more is logged.
+    down.requests.clear()
+    caplog.clear()
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, down.client(), NOW + timedelta(minutes=59)) == {
+            "kev": "backoff",
+            "epss": "backoff",
+        }
+    assert down.requests == [] and caplog.records == []
+    # Each further failure doubles the wait: 1 h, 2 h, 4 h ... and never more than the 24 h refresh interval.
+    at = NOW + timedelta(hours=1)
+    for failures, wait in ((2, 2), (3, 4), (4, 8), (5, 16), (6, 24), (7, 24)):
+        assert threatintel.refresh(conn, down.client(), at)["kev"] == "failed"
+        assert _failures(conn)["kev"] == (at.isoformat(), failures)
+        assert threatintel.refresh(conn, down.client(), at + timedelta(hours=wait) - timedelta(seconds=1))["kev"] == (
+            "backoff"
+        )
+        at += timedelta(hours=wait)
+
+
+def test_a_failure_logs_when_the_next_attempt_is(conn, caplog):
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        threatintel.refresh(conn, Feeds(status=503).client(), NOW)
+    assert [r.getMessage().endswith("; next attempt in 1 h") for r in caplog.records] == [True, True]
+
+
+def test_a_successful_download_clears_the_backoff(conn):
+    threatintel.refresh(conn, Feeds(status=503).client(), NOW)
+    assert threatintel.refresh(conn, Feeds().client(), NOW + timedelta(hours=1)) == {
+        "kev": "updated",
+        "epss": "updated",
+    }
+    assert _failures(conn) == {}
+
+
+def test_a_failure_from_the_future_does_not_back_off(conn):
+    threatintel.refresh(conn, Feeds(status=503).client(), NOW + timedelta(days=2))  # the clock went back since
+    assert threatintel.refresh(conn, Feeds().client(), NOW)["kev"] == "updated"
+
+
+def test_a_stored_copy_is_updated_even_if_its_failure_count_cannot_be_reset(conn, monkeypatch, caplog):
+    threatintel.refresh(conn, Feeds(status=503).client(), NOW)
+
+    def locked(conn, name):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(threatintel, "_clear_failures", locked)
+    with caplog.at_level(logging.WARNING, logger="kubedelos.threatintel"):
+        assert threatintel.refresh(conn, Feeds().client(), NOW + timedelta(hours=1)) == {
+            "kev": "updated",
+            "epss": "updated",
+        }
+    assert "threat feed kev updated, but its failure count was not reset: database is locked" in caplog.text

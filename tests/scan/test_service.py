@@ -667,6 +667,32 @@ def test_run_scan_refreshes_feeds_first_and_survives_failure(env, monkeypatch):
     assert _phases(progress)[:2] == ["threat-feeds", "inventory"]
 
 
+def test_a_cancel_stops_waiting_for_the_feeds(env, monkeypatch):
+    settings, repo, calls = env
+    settings = settings.model_copy(update={"threat_feeds": True})
+    started, release, gave_up = threading.Event(), threading.Event(), threading.Event()
+    cancel = threading.Event()
+
+    def refresh_feeds(given):  # a download stuck on a network that drops packets
+        started.set()
+        release.wait(3)
+        gave_up.set()
+
+    def on_progress(progress):
+        if progress.phase == "threat-feeds":
+            threading.Thread(target=lambda: started.wait(5) and cancel.set(), daemon=True).start()
+
+    monkeypatch.setattr(service.threatintel, "refresh_feeds", refresh_feeds)
+    monkeypatch.setattr(service, "scan_many", _fake_scan(calls))
+    try:
+        out = service.run_scan(settings, api=_api(), repo=repo, cancel=cancel, on_progress=on_progress)
+        still_stuck = not gave_up.is_set()
+    finally:
+        release.set()
+    assert still_stuck  # the scan did not wait for the download to give up
+    assert out.status == "cancelled" and calls == []
+
+
 def test_run_scan_skips_the_feeds_when_they_are_off(env, monkeypatch):
     settings, repo, calls = env
     monkeypatch.setattr(service.threatintel, "refresh_feeds", lambda s: pytest.fail("the feeds are off"))
