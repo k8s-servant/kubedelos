@@ -29,7 +29,7 @@ def test_scanning_lives_in_the_ui_not_the_cli():
     # Scans start from the UI and the in-cluster schedule; CI gating is left to plain Trivy.
     commands = {c.name or c.callback.__name__ for c in app.registered_commands}
     groups = {g.name for g in app.registered_groups}
-    assert commands | groups == {"version", "ui", "serve", "mcp", "trivy", "registry"}
+    assert commands | groups == {"version", "ui", "serve", "mcp", "trivy", "registry", "data"}
     r = CliRunner().invoke(app, ["scan"])
     assert r.exit_code == 2 and "No such command" in r.output
 
@@ -751,3 +751,67 @@ def test_ui_retention_note_says_day_for_one(ui_env, monkeypatch):
     _old_runs(3, days_ago=2)
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert "note: deleted 2 runs older than 1 day\n" in r.output
+
+
+def _data_files(fake_env):
+    from kubedelos.store.db import connect
+
+    data, cache = fake_env / "data", fake_env / "cache"
+    connect(data / "kubedelos.db").close()
+    for name in ("trivy/0.76.1/trivy", "trivy-cache/db/trivy.db", "trivy-layers/0/blob"):
+        (cache / name).parent.mkdir(parents=True, exist_ok=True)
+        (cache / name).write_bytes(b"x" * 10)
+    (cache / "keep.txt").write_text("not ours")  # a cache dir may be shared: only kubedelos's own entries go
+    return data, cache
+
+
+def test_data_reset_lists_what_it_deletes_and_asks(fake_env):
+    data, cache = _data_files(fake_env)
+    r = CliRunner().invoke(app, ["data", "reset", "--cache"], input="n\n")
+    assert r.exit_code == 1, r.output
+    assert f"{data / 'kubedelos.db'}" in r.output and "every run, finding and risk acceptance" in r.output
+    assert f"{cache / 'trivy-cache'}" in r.output and "Stop every kubedelos ui" in r.output
+    assert "nothing was deleted" in r.output
+    assert (data / "kubedelos.db").exists() and (cache / "trivy-cache").exists()
+
+
+def test_data_reset_deletes_the_database_but_keeps_the_cache_by_default(fake_env):
+    data, cache = _data_files(fake_env)
+    r = CliRunner().invoke(app, ["data", "reset"], input="y\n")
+    assert r.exit_code == 0, r.output
+    assert not any(data.glob("kubedelos.db*"))
+    assert (cache / "trivy-cache").exists() and "trivy-cache" not in r.output
+
+
+def test_data_reset_with_cache_deletes_only_kubedelos_entries(fake_env):
+    data, cache = _data_files(fake_env)
+    r = CliRunner().invoke(app, ["data", "reset", "--cache", "--yes"])
+    assert r.exit_code == 0, r.output
+    assert sorted(p.name for p in cache.iterdir()) == ["keep.txt"]
+    assert not (data / "kubedelos.db").exists()
+    assert "deleted" in r.output
+
+
+def test_data_reset_with_nothing_to_delete(fake_env):
+    r = CliRunner().invoke(app, ["data", "reset", "--yes"])
+    assert r.exit_code == 0 and "nothing to delete" in r.output
+
+
+def test_data_reset_refuses_while_a_scan_runs(fake_env):
+    from kubedelos.store import runlock
+
+    data, _ = _data_files(fake_env)
+    with runlock.hold(data):
+        r = CliRunner().invoke(app, ["data", "reset", "--yes"])
+    assert r.exit_code == 2 and "a scan is running" in r.output
+    assert (data / "kubedelos.db").exists()
+
+
+def test_data_reset_refuses_while_serve_runs(fake_env):
+    from kubedelos.store import runlock
+
+    data, _ = _data_files(fake_env)
+    with runlock.hold_serve(data):
+        r = CliRunner().invoke(app, ["data", "reset", "--yes"])
+    assert r.exit_code == 2 and "kubedelos serve is running" in r.output
+    assert (data / "kubedelos.db").exists()

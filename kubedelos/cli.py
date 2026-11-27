@@ -9,6 +9,7 @@ import logging
 import os
 import re
 import secrets
+import shutil
 import signal
 import sqlite3
 import sys
@@ -66,6 +67,8 @@ trivy_app = typer.Typer(help="Manage the pinned Trivy binary.", no_args_is_help=
 app.add_typer(trivy_app, name="trivy")
 registry_app = typer.Typer(help="Check access to container registries.", no_args_is_help=True)
 app.add_typer(registry_app, name="registry")
+data_app = typer.Typer(help="Manage the local scan database and cache.", no_args_is_help=True)
+app.add_typer(data_app, name="data")
 
 
 def _load_settings(**flags: Any) -> Settings:
@@ -140,6 +143,83 @@ def _one_line(text: str | None, limit: int = _ERROR_LINE_CHARS) -> str:
     """First line of ``text``, cut to ``limit`` characters, with control characters replaced."""
     first = (text or "").strip().splitlines()[:1]
     return "".join(ch if ch.isprintable() else "?" for ch in (first[0] if first else ""))[:limit]
+
+
+# What --cache deletes: kubedelos's own entries only, since KUBEDELOS_CACHE_DIR may point at a directory others use too.
+_CACHE_ENTRIES = (
+    ("trivy", "the pinned Trivy binary"),
+    ("trivy-cache", "Trivy's vulnerability and Java DBs"),
+    ("trivy-layers", "the layer cache"),
+)
+
+
+def _size(path: Path) -> int:
+    if path.is_file() or path.is_symlink():
+        return path.lstat().st_size
+    return sum(p.lstat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink())
+
+
+def _human(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size} B"  # unreachable
+
+
+@data_app.command("reset")
+def data_reset(
+    cache: Annotated[bool, typer.Option("--cache", help="Also delete the Trivy binary, DBs and layer cache.")] = False,
+    yes: Annotated[bool, typer.Option("--yes", help="Do not ask for confirmation.")] = False,
+) -> None:
+    """Delete the local scan database (every run, finding and risk acceptance) and start fresh.
+
+    Refused while a scan or kubedelos serve uses the data directory. Stop every kubedelos ui first: one left running
+    would keep using the deleted file.
+    """
+    settings = _load_settings()
+    if runlock.any_live_run(settings.data_dir):
+        typer.echo("error: a scan is running on this data directory; wait for it or cancel it first", err=True)
+        raise typer.Exit(2)
+    try:
+        with runlock.hold_serve(settings.data_dir):  # held while deleting, so serve can't start meanwhile
+            deleted = _reset(settings, cache=cache, yes=yes)
+    except runlock.AlreadyServing as exc:
+        typer.echo("error: kubedelos serve is running on this data directory; stop it first", err=True)
+        raise typer.Exit(2) from exc
+    if deleted:
+        typer.echo(f"deleted {deleted} {plural(deleted, 'item')}; the next start creates an empty database")
+
+
+def _reset(settings: Settings, *, cache: bool, yes: bool) -> int:
+    """List what ``data reset`` deletes, ask unless ``yes``, delete it, and return how many paths went."""
+    db = settings.db_path
+    targets = [p for p in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")) if p.exists()]
+    lines = []
+    if targets:
+        lines.append(f"  {db} ({_human(sum(_size(p) for p in targets))}): every run, finding and risk acceptance")
+    if cache:
+        for name, what in _CACHE_ENTRIES:
+            path = settings.cache_dir / name
+            if path.exists():
+                targets.append(path)
+                lines.append(f"  {path} ({_human(_size(path))}): {what}, downloaded again by the next scan")
+    if not targets:
+        typer.echo("nothing to delete")
+        return 0
+    typer.echo("This deletes, and it cannot be undone:")
+    for line in lines:
+        typer.echo(line)
+    typer.echo("Stop every kubedelos ui that uses this data directory first.")
+    if not yes and not typer.confirm("Delete them?", default=False):
+        typer.echo("nothing was deleted")
+        raise typer.Exit(1)
+    for path in targets:
+        if path.is_dir() and not path.is_symlink():
+            shutil.rmtree(path)
+        else:
+            path.unlink(missing_ok=True)
+    return len(targets)
 
 
 @registry_app.command("test")
