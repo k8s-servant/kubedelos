@@ -12,7 +12,7 @@ kubedelos runs in two ways:
 | | |
 |---|---|
 | Python | 3.12, 3.13 or 3.14 |
-| OS | Linux or macOS, amd64 or arm64 (Windows is not supported) |
+| OS | Linux or macOS, amd64 or arm64; on Windows, inside [WSL2](#on-windows) |
 | Disk | about 160 MB for Trivy, about 1.6 GB for its vulnerability DB, and 1.5 GB more for its Java DB when application libraries are scanned (the default) |
 | Network | GitHub (the Trivy download), the registries Trivy fetches its DBs from, your image registries, and `www.cisa.gov` and `epss.empiricalsecurity.com` for the [threat feeds](risk-score.md#the-threat-feeds) |
 | Cluster | a kubeconfig context that may `list` the resources below |
@@ -30,6 +30,23 @@ To run the latest `main` instead of a release: `pipx install git+https://github.
 
 To upgrade, run `pipx upgrade kubedelos` (or `uv tool upgrade kubedelos`). The database schema is migrated on the next
 start and is not migrated back, so keep a copy of `kubedelos.db` if you may want to downgrade.
+
+### On Windows
+
+kubedelos doesn't run natively on Windows yet ([#110](https://github.com/k8s-servant/kubedelos/issues/110)). Run it
+inside [WSL2](https://learn.microsoft.com/windows/wsl/install) instead, where it sees an ordinary Linux machine:
+
+1. Install a distribution with Python 3.12 or later, for example `wsl --install -d Ubuntu-24.04`.
+2. In the WSL2 shell, install kubedelos as above (`pipx install kubedelos`).
+3. Give WSL2 its own kubeconfig and logins. kubedelos reads `~/.kube/config` and `~/.docker/config.json` inside the
+   distribution, not the Windows ones. Copy the kubeconfig over, or point `KUBECONFIG` at it:
+   `export KUBECONFIG=/mnt/c/Users/<you>/.kube/config`. A context whose login runs a helper, such as `kubelogin`,
+   `aws` or `gke-gcloud-auth-plugin`, needs that helper installed inside WSL2 too.
+4. Run `kubedelos ui`. WSL2 forwards `localhost` to Windows, so the printed URL opens in your Windows browser. If no
+   browser opens, copy the URL from the terminal.
+
+Keep the data in the WSL2 file system (the default). A `KUBEDELOS_DATA_DIR` under `/mnt/c` is slow and SQLite's file
+locks are unreliable there.
 
 ### Trivy
 
