@@ -436,3 +436,112 @@ def test_shows_the_threat_feeds_switch_and_each_feeds_last_fetch(client, seed):
     html = unescape(client.get("/settings").text)
     assert "2026-11-20 08:00 UTC" in feed_row(html, "CISA KEV last fetched")
     assert "never fetched" in feed_row(html, "EPSS last fetched")
+
+
+ORIGIN = {"Origin": "http://127.0.0.1:9370"}
+
+
+def _csrf(client):
+    guard = client.app.state.guard
+    return guard.csrf_token(client.cookies[guard.cookie_name])
+
+
+def _forget(client, **fields):
+    data = {"csrf_token": _csrf(client), **fields}
+    return client.post("/settings/forget", data=data, headers=ORIGIN, follow_redirects=False)
+
+
+def _seed_history(seed, context="my-cluster"):
+    for _ in range(2):
+        run_id = seed.repo.start_run(context, context, "ui", "0.76.1", scan_level="os", scope=Settings().scope)
+        seed.repo.finish_run(run_id, "ok")
+    conn = seed.repo._conn
+    with conn:
+        conn.execute(
+            "INSERT INTO acceptance (vuln_id, cluster, context, reason, owner, expires_at, created_at)"
+            " VALUES ('CVE-1', ?, ?, 'r', 'o', '2027-01-01', '2026-11-01')",
+            (context, context),
+        )
+
+
+def _counts(seed):
+    conn = seed.repo._conn
+    return tuple(conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0] for t in ("scan_run", "acceptance"))  # noqa: S608
+
+
+def test_settings_offers_to_delete_the_shown_clusters_history(client, seed):
+    _seed_history(seed)
+    html = unescape(client.get("/settings").text)
+    assert "Delete this cluster's history" in html
+    assert "2 runs and 1 risk acceptance" in html
+    assert 'action="/settings/forget"' in html and 'name="confirm"' in html and 'name="acceptances"' in html
+
+
+def test_deleting_needs_the_typed_name(client, seed):
+    _seed_history(seed)
+    response = _forget(client, confirm="my-clustr")
+    assert response.status_code == 400 and "Type my-cluster to confirm" in unescape(response.text)
+    assert _counts(seed) == (2, 1)
+
+
+def test_deleting_the_history_keeps_the_acceptances_unless_asked(client, seed):
+    _seed_history(seed)
+    response = _forget(client, confirm="my-cluster")
+    assert response.status_code == 303 and response.headers["location"] == "/settings?deleted=2&acceptances=0"
+    assert _counts(seed) == (0, 1)
+    html = unescape(client.get(response.headers["location"]).text)
+    assert "Deleted 2 runs of this cluster" in html
+
+
+def test_deleting_the_history_and_its_acceptances(client, seed):
+    _seed_history(seed)
+    response = _forget(client, confirm="my-cluster", acceptances="on")
+    assert response.headers["location"] == "/settings?deleted=2&acceptances=1"
+    assert _counts(seed) == (0, 0)
+    assert "Deleted 2 runs and 1 risk acceptance of this cluster" in unescape(
+        client.get(response.headers["location"]).text
+    )
+
+
+def test_deleting_another_contexts_history_keeps_the_rest(client, seed, kube_contexts):
+    kube_contexts.append("kind-dev")
+    _seed_history(seed)
+    _seed_history(seed, "kind-dev")
+    response = _forget(client, context="kind-dev", confirm="kind-dev", acceptances="on")
+    assert response.headers["location"] == "/settings?context=kind-dev&deleted=2&acceptances=1"
+    assert _counts(seed) == (2, 1)
+
+
+def test_a_cluster_known_only_from_history_disappears_with_it(client, seed):
+    _seed_history(seed, "old-cluster")  # no kubeconfig context points at it any more
+    response = _forget(client, context="old-cluster", confirm="old-cluster")
+    assert response.headers["location"] == "/settings?deleted=2&acceptances=0"  # back to the startup context
+
+
+def test_deleting_is_refused_while_a_scan_runs(client, seed):
+    _seed_history(seed)
+    seed.repo.start_run("my-cluster", "my-cluster", "ui", "0.76.1", scan_level="os")  # still running
+    response = _forget(client, confirm="my-cluster")
+    assert response.status_code == 409 and "a scan of this cluster is running" in response.text
+    assert _counts(seed) == (3, 1)
+
+
+def test_deleting_needs_the_csrf_token(client, seed):
+    _seed_history(seed)
+    response = client.post("/settings/forget", data={"confirm": "my-cluster"}, headers=ORIGIN, follow_redirects=False)
+    assert response.status_code == 403 and _counts(seed) == (2, 1)
+
+
+def test_serve_offers_no_delete(serve_client):
+    assert "Delete this cluster's history" not in serve_client.get("/settings").text
+    assert signed_post(serve_client, "/settings/forget", {"confirm": "my-cluster"}).status_code == 404
+
+
+def test_deleting_is_refused_while_the_uis_own_scan_is_starting(client, seed, monkeypatch):
+    from kubedelos.web.jobs import JobView
+
+    _seed_history(seed)
+    starting = JobView("starting", None, None, None, None, None, "my-cluster")  # no run row yet
+    monkeypatch.setattr(client.app.state.scans, "view", lambda: starting)
+    assert _forget(client, confirm="my-cluster").status_code == 409
+    assert _counts(seed) == (2, 1)

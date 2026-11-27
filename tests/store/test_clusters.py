@@ -1,6 +1,6 @@
 import pytest
 
-from kubedelos.store.clusters import merge_contexts
+from kubedelos.store.clusters import ClusterBusy, Forgotten, forget_cluster, merge_contexts
 from kubedelos.store.db import connect
 
 K = "https://k.example.com"
@@ -100,3 +100,78 @@ def test_two_contexts_with_old_runs_merge_into_one_key_in_one_call(conn):
         (4, K, 4, "prod-admin"),
     ]
     assert [tuple(r) for r in conn.execute("SELECT cluster, context FROM acceptance")] == [(K, "prod-admin")]
+
+
+def _result(conn, run_id):
+    conn.execute(
+        "INSERT INTO image_result (run_id, image_key, ref, status) VALUES (?, 'sha256:a', 'registry.example/a', 'ok')",
+        (run_id,),
+    )
+    result_id = conn.execute("SELECT MAX(id) FROM image_result").fetchone()[0]
+    conn.execute(
+        "INSERT INTO workload (image_result_id, namespace, kind, name, container) VALUES (?, 'ns', 'Pod', 'p', 'c')",
+        (result_id,),
+    )
+    conn.execute(
+        "INSERT INTO finding (image_result_id, vuln_id, pkg_name, installed_version, severity, target, pkg_type)"
+        " VALUES (?, 'CVE-1', 'p', '1', 'HIGH', 't', 'os')",
+        (result_id,),
+    )
+    conn.execute("INSERT INTO run_warning (run_id, text, coverage) VALUES (?, 'w', 0)", (run_id,))
+    conn.commit()
+
+
+def _acceptance(conn, cluster):
+    conn.execute(
+        "INSERT INTO acceptance (vuln_id, cluster, context, reason, owner, expires_at, created_at)"
+        " VALUES ('CVE-1', ?, 'x', 'r', 'o', '2027-01-01', '2026-11-01')",
+        (cluster,),
+    )
+    conn.commit()
+
+
+def _count(conn, table):
+    return conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0]  # noqa: S608 - test table names
+
+
+def test_forget_deletes_one_clusters_runs_and_everything_they_hold(conn):
+    gone = [_run(conn, K, "prod", 1), _run(conn, K, "prod-admin", 2)]
+    kept = _run(conn, "kind-dev", "kind-dev", 1)
+    for run_id in [*gone, kept]:
+        _result(conn, run_id)
+    for cluster in (K, "kind-dev", None):
+        _acceptance(conn, cluster)
+    assert forget_cluster(conn, K, acceptances=False) == Forgotten(runs=2, acceptances=0)
+    assert [r[0] for r in _rows(conn)] == [kept]
+    assert (_count(conn, "image_result"), _count(conn, "workload"), _count(conn, "finding")) == (1, 1, 1)
+    assert _count(conn, "run_warning") == 1
+    assert _count(conn, "acceptance") == 3  # acceptances stay unless asked for
+
+
+def test_forget_can_delete_the_clusters_acceptances_but_never_all_cluster_ones(conn):
+    _run(conn, K, "prod", 1)
+    for cluster in (K, K, "kind-dev", None):
+        _acceptance(conn, cluster)
+    assert forget_cluster(conn, K, acceptances=True) == Forgotten(runs=1, acceptances=2)
+    assert sorted(r[0] or "" for r in conn.execute("SELECT cluster FROM acceptance")) == ["", "kind-dev"]
+
+
+def test_forget_refuses_while_a_run_of_the_cluster_is_running(conn):
+    done = _run(conn, K, "prod", 1)
+    conn.execute("UPDATE scan_run SET status = 'running' WHERE id = ?", (_run(conn, K, "prod", 2),))
+    conn.commit()
+    with pytest.raises(ClusterBusy):
+        forget_cluster(conn, K, acceptances=True)
+    assert _rows(conn)[0][0] == done and _count(conn, "scan_run") == 2
+
+
+def test_forget_clears_the_queues_links_to_its_runs(conn):
+    run_id = _run(conn, K, "prod", 1)
+    conn.execute(
+        "INSERT INTO scan_request (kind, trigger, requested_at, target_run_id, overrides, state, run_id)"
+        " VALUES ('retry', 'ui', 't', ?, '{}', 'started', ?)",
+        (run_id, run_id),
+    )
+    conn.commit()
+    forget_cluster(conn, K, acceptances=False)
+    assert tuple(conn.execute("SELECT target_run_id, run_id FROM scan_request").fetchone()) == (None, None)

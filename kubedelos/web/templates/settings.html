@@ -1,5 +1,6 @@
 {#- The Settings page: every setting in effect with its value and where it came from, then the files, the Trivy, the
-    log level and when each threat feed was last fetched. Read-only. -#}
+    log level and when each threat feed was last fetched. In kubedelos ui it ends with the form that deletes the shown
+    cluster's history. -#}
 {% extends "base.html" %}
 {% block title %}Settings · kubedelos{% endblock %}
 {% block head %}
@@ -10,6 +11,9 @@
 {%- endblock %}
 {% block run_line %}<div class="page-head"><h1>Settings</h1></div>{% endblock %}
 {% block content %}
+  {%- if deleted %}
+  <p class="notice" role="status">{{ deleted }}</p>
+  {%- endif %}
   <p class="notice">The settings this <code>kubedelos ui</code> started with. Change one with its <code>KUBEDELOS_*</code> variable (or flag) and restart the UI. The Scans form can still change the scope, parallel images and package types for one scan.</p>
   <section class="card settings-card" aria-labelledby="settings-title">
     <h2 class="card-title" id="settings-title">Settings in effect</h2>
@@ -90,4 +94,21 @@
       </table>
     </div>
   </section>
+  {%- if history is not none and can_write(request) %}
+  <section class="card settings-card" aria-labelledby="forget-title">
+    <h2 class="card-title" id="forget-title">Delete this cluster's history</h2>
+    <p>{{ context }} has {{ history }} stored here, shared by every context of the same cluster. Deleting them cannot be undone; the next scan starts the history again from Run 1.</p>
+    <form method="post" action="/settings/forget" class="filters">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token(request) }}">
+      <input type="hidden" name="context" value="{{ context }}">
+      <label>Type <code>{{ context }}</code> to confirm
+        <input type="text" name="confirm" autocomplete="off" required>
+      </label>
+      <label class="check"><input type="checkbox" name="acceptances"> Also delete its risk acceptances</label>
+      <div class="filter-actions">
+        <button type="submit" class="btn">Delete the history</button>
+      </div>
+    </form>
+  </section>
+  {%- endif %}
 {% endblock %}

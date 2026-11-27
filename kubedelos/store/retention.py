@@ -11,6 +11,23 @@ from datetime import datetime, timedelta
 from kubedelos.store.queue import write_lock
 
 
+def delete_runs(conn: sqlite3.Connection, run_ids: list[int]) -> None:
+    """Delete ``run_ids`` and every row that hangs off them, and clear the queue's links to them. The caller holds the
+    write transaction."""
+    for run_id in run_ids:
+        conn.execute(
+            "DELETE FROM finding WHERE image_result_id IN (SELECT id FROM image_result WHERE run_id = ?)", (run_id,)
+        )
+        conn.execute(
+            "DELETE FROM workload WHERE image_result_id IN (SELECT id FROM image_result WHERE run_id = ?)", (run_id,)
+        )
+        conn.execute("DELETE FROM image_result WHERE run_id = ?", (run_id,))
+        conn.execute("DELETE FROM run_warning WHERE run_id = ?", (run_id,))
+        conn.execute("UPDATE scan_request SET run_id = NULL WHERE run_id = ?", (run_id,))
+        conn.execute("UPDATE scan_request SET target_run_id = NULL WHERE target_run_id = ?", (run_id,))
+        conn.execute("DELETE FROM scan_run WHERE id = ?", (run_id,))
+
+
 def prune(
     conn: sqlite3.Connection, *, now: datetime, retention_days: int, cache_max_age: timedelta = timedelta(hours=24)
 ) -> list[int]:
@@ -39,18 +56,6 @@ def prune(
                 {"cutoff": cutoff},
             )
         ]
-        for run_id in doomed:
-            conn.execute(
-                "DELETE FROM finding WHERE image_result_id IN (SELECT id FROM image_result WHERE run_id = ?)", (run_id,)
-            )
-            conn.execute(
-                "DELETE FROM workload WHERE image_result_id IN (SELECT id FROM image_result WHERE run_id = ?)",
-                (run_id,),
-            )
-            conn.execute("DELETE FROM image_result WHERE run_id = ?", (run_id,))
-            conn.execute("DELETE FROM run_warning WHERE run_id = ?", (run_id,))
-            conn.execute("UPDATE scan_request SET run_id = NULL WHERE run_id = ?", (run_id,))
-            conn.execute("UPDATE scan_request SET target_run_id = NULL WHERE target_run_id = ?", (run_id,))
-            conn.execute("DELETE FROM scan_run WHERE id = ?", (run_id,))
+        delete_runs(conn, doomed)
         conn.execute("DELETE FROM scan_request WHERE state != 'queued' AND requested_at < ?", (cutoff,))
         return doomed
