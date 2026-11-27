@@ -158,6 +158,15 @@ Each scan run holds a lock file under the data directory for as long as it runs.
 `kubedelos ui` marks it `failed` at startup, printing a note such as `note: closed 2 interrupted runs`, and again before
 each UI scan starts. A scan still running in another process holds its lock and is never touched.
 
+## Old runs
+
+At startup `kubedelos ui` also deletes runs older than `KUBEDELOS_RETENTION_DAYS` (180 days; `0` keeps every run),
+printing a note such as `note: deleted 3 runs older than 180 days`. The newest run of each comparable scan (same
+cluster, scope and package types) always stays, however old, so every cluster keeps its latest result. Finished scan
+requests past the same age and result-cache entries older than 24 hours go too (the cache also with `0`). Risk
+acceptances are never deleted. If the database is busy, the start prints `note: old runs were not deleted: ...` and
+carries on.
+
 ## Related
 
 - [How a scan works](how-scans-work.md): what a scan started from the Scans page does.
