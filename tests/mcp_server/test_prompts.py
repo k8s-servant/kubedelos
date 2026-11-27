@@ -225,3 +225,12 @@ def test_fix_first_prompt_explains_the_score_from_its_factors():
     text = prompts.fix_first_briefing()
     assert "factors" in text and "risk.shown" in text
     assert "not a CVE severity" in text
+
+
+def test_explain_cve_uses_known_exploitation_and_the_risk_score():
+    text = " ".join(prompts.explain_cve("CVE-2024-1").split())
+    assert "If kev is true, lead with it: CISA lists the CVE as exploited in the wild" in text
+    assert "kev of null means no KEV copy has been downloaded yet" in text and "never read it as not exploited" in text
+    assert "epss" in text and "epss_percentile" in text and "probability" in text
+    assert "factors" in text and "not a CVE severity" in text
+    assert "risk.shown is false" in text and "risk.feeds" in text

@@ -131,7 +131,7 @@ Prompts are fixed instructions that tell the agent which tools to call and how t
 | --- | --- | --- |
 | `fix_first_briefing` | `cluster` | Brief me on what to fix first: the run's health, the top fixes, where each runs |
 | `attack_paths` | `workload`, `cluster` | Trace attack paths from reachable workloads, or one `namespace/name` |
-| `explain_cve` | `vuln_id`, `cluster` | What the CVE allows, where it runs, whether a fix exists and is accepted |
+| `explain_cve` | `vuln_id`, `cluster` | What the CVE allows, whether it is known to be exploited (KEV, EPSS), where it runs, what drove its risk score, whether a fix exists and is accepted |
 
 ## Example questions
 
