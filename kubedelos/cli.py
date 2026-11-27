@@ -10,6 +10,7 @@ import os
 import re
 import secrets
 import signal
+import sqlite3
 import sys
 import threading
 import webbrowser
@@ -252,8 +253,13 @@ def ui(
             # Runs recorded before a context's API server was known are keyed by its name; fold them into its cluster,
             # so contexts of one cluster share one history. An unreadable kubeconfig maps nothing, so nothing moves.
             merged = merge_contexts(conn, kube_client.cluster_keys(settings))
-            # The same retention as serve's sweep, once per start, so a laptop database doesn't grow for ever.
-            pruned = retention.prune(conn, now=datetime.now(UTC), retention_days=settings.retention_days)
+            # The same retention as serve's sweep, once per start, so a laptop database doesn't grow for ever. It is
+            # housekeeping: a failure (a database another process keeps locked, say) is a note, not a failed start.
+            try:
+                pruned = retention.prune(conn, now=datetime.now(UTC), retention_days=settings.retention_days)
+            except sqlite3.Error as exc:
+                pruned = []
+                typer.echo(f"note: old runs were not deleted: {_flat(exc)}")
         finally:
             conn.close()
     except Exception as exc:

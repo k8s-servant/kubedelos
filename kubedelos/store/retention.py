@@ -1,7 +1,7 @@
 """Retention: delete scan runs past the retention period, and expired image-cache rows.
 
 ``kubedelos serve`` runs on a schedule and would otherwise grow the database without bound. The newest ``ok`` or
-``partial`` run of each (cluster, scope, scan level) always stays, so the latest result of every comparable scan
+``partial`` run of each (cluster, scope, package types) always stays, so the latest result of every comparable scan
 survives however old it is, and a run a queued retry still names stays too. Acceptances are never touched.
 """
 

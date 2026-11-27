@@ -730,3 +730,24 @@ def test_ui_retention_of_zero_keeps_every_run(ui_env, monkeypatch):
     r = CliRunner().invoke(app, ["ui", "--no-browser"])
     assert r.exit_code == 0, r.output
     assert "older than" not in r.output and _run_ids() == ids
+
+
+def test_ui_starts_even_if_the_retention_fails(ui_env, monkeypatch):
+    import sqlite3
+
+    from kubedelos import cli
+
+    def locked(conn, **kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr(cli.retention, "prune", locked)
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert r.exit_code == 0, r.output
+    assert "note: old runs were not deleted: database is locked\n" in r.output
+
+
+def test_ui_retention_note_says_day_for_one(ui_env, monkeypatch):
+    monkeypatch.setenv("KUBEDELOS_RETENTION_DAYS", "1")
+    _old_runs(3, days_ago=2)
+    r = CliRunner().invoke(app, ["ui", "--no-browser"])
+    assert "note: deleted 2 runs older than 1 day\n" in r.output
