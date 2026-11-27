@@ -169,7 +169,7 @@ in use and where each value came from.
 | Area | Supported | Notes |
 |---|---|---|
 | Python | 3.12, 3.13, 3.14 | Each is tested in CI. |
-| Runs on | Linux and macOS, amd64 and arm64 | Windows is not supported. |
+| Runs on | Linux and macOS, amd64 and arm64 | On Windows, run it inside WSL2; see [On Windows](docs/install.md#on-windows). |
 | Trivy | v0.76.1, pinned and checksum-verified | `KUBEDELOS_TRIVY_PATH` runs your own binary; its results are not cached. |
 | Kubernetes | 1.35, tested on kind | Read-only `list` calls on stable APIs only: `v1` namespaces, pods and nodes, `apps/v1` Deployments and StatefulSets, `batch/v1` CronJobs. Secrets are not read, except the opt-in pod pull secrets of `serve` (`get` on `secrets` in the namespaces you list). |
 | Image platforms | Linux images | Tested on `linux/arm64` nodes. Windows nodes' images are scanned for their own platform but are untested. |
@@ -179,7 +179,7 @@ Managed clusters (AKS, EKS, GKE) are not yet verified; they come with the in-clu
 
 ## Trivy
 
-kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64); Windows is not supported. `kubedelos trivy install` downloads it
+kubedelos runs a pinned Trivy release (v0.76.1) as one standalone process per image, sharing one locked DB cache. It runs on Linux and macOS (amd64 and arm64), and on Windows inside WSL2. `kubedelos trivy install` downloads it
 and checks it against an embedded SHA-256. It never resolves "latest". Set `KUBEDELOS_TRIVY_PATH` to bring your own binary; it must be Trivy v0.54.0 or later, the first with
 `--pkg-types`, or every image fails. Results from your own binary are not cached and the run records its Trivy version as `custom`.
 
