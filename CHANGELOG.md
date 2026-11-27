@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.0](https://github.com/k8s-servant/kubedelos/compare/v0.4.0...v0.5.0) (2026-11-27)
+
+
+### Features
+
+* back off after a failed threat feed download ([#103](https://github.com/k8s-servant/kubedelos/issues/103)) ([dd7b676](https://github.com/k8s-servant/kubedelos/commit/dd7b676d1e574c63ea2daaa3bd32fa4b73ce0fad))
+* use kev, epss and the risk score in the explain_cve prompt ([#102](https://github.com/k8s-servant/kubedelos/issues/102)) ([0cc7075](https://github.com/k8s-servant/kubedelos/commit/0cc70752abeedb3c49ecdbef5f89dd88dbe5112c))
+
 ## [0.4.0](https://github.com/k8s-servant/kubedelos/compare/v0.3.1...v0.4.0) (2026-11-25)
 
 
